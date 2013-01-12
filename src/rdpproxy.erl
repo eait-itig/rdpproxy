@@ -30,6 +30,7 @@ init(_Args) ->
 	{ok, {
 		{one_for_one, 20, 60},
 		[
-			{webui, {spooky, start_link, [webui]}, permanent, 10, worker, [webui]}
+			{frontend_listener, {frontend_listener, start_link, [3389]}, permanent, 10, worker, [frontend, frontend_listener]},
+			{session_mgr, {session_mgr, start_link, []}, permanent, 10, worker, [session_mgr]}
 		]
 	}}.
