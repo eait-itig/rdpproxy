@@ -101,11 +101,11 @@ decode_svr_core(Bin) ->
 
 	case Rest of
 		<<Req:32/little, Caps:32/little>> ->
-			<<_:28, CredSSPEarly:1, _:1, CredSSP:1, Ssl:1>> = <<Req:32/big>>,
-			Prots = if CredSSPEarly == 1 -> [credssp_early]; true -> [] end ++ if CredSSP == 1 -> [credssp]; true -> [] end ++ if Ssl == 1 -> [ssl]; true -> [] end,
+			Prots = rdpp:decode_protocol_flags(Req),
 
 			<<_:30, DynamicDST:1, EdgeActions:1>> = <<Caps:32/big>>,
-			CapFlags = if DynamicDST == 1 -> [dynamic_dst]; true -> [] end ++ if EdgeActions == 1 -> [edge_actions]; true -> [] end,
+			CapFlags = if DynamicDST == 1 -> [dynamic_dst]; true -> [] end ++
+					   if EdgeActions == 1 -> [edge_actions]; true -> [] end,
 			#tsud_svr_core{version = [Major, Minor], requested=Prots, capabilities=CapFlags};
 		_ ->
 			#tsud_svr_core{version = [Major, Minor]}
@@ -114,10 +114,7 @@ decode_svr_core(Bin) ->
 encode_svr_core(#tsud_svr_core{version = [Major,Minor], requested=Prots, capabilities=CapFlags}) ->
 	<<Ver:32/big>> = <<Major:16/big, Minor:16/big>>,
 
-	CredSSPEarly = case lists:member(credssp_early, Prots) of true -> 1; _ -> 0 end,
-	CredSSP = case lists:member(credssp, Prots) of true -> 1; _ -> 0 end,
-	Ssl = case lists:member(ssl, Prots) of true -> 1; _ -> 0 end,
-	<<Requested:32/big>> = <<0:28, CredSSPEarly:1, 0:1, CredSSP:1, Ssl:1>>,
+	Requested = rdpp:encode_protocol_flags(Prots),
 
 	DynamicDST = case lists:member(dynamic_dst, CapFlags) of true -> 1; _ -> 0 end,
 	EdgeActions = case lists:member(edge_actions, CapFlags) of true -> 1; _ -> 0 end,
@@ -202,7 +199,14 @@ decode_net_channels(Bin) ->
 	<<Name:8/binary, Options:32/little, Rest/binary>> = Bin,
 	<<Init:1, EncryptRdp:1, EncryptSC:1, EncryptCS:1, HighPri:1, MedPri:1, LowPri:1, _:1, CompressRdp:1, Compress:1, ShowProtocol:1, Persistent:1, _/binary>> = <<Options:32/big>>,
 	Pri = if HighPri == 1 -> high; MedPri == 1 -> medium; true -> low end,
-	Flags = if Init == 1 -> [init]; true -> [] end ++ if EncryptRdp == 1 -> [encrypt_rdp]; true -> [] end ++ if EncryptSC == 1 -> [encrypt_sc]; true -> [] end ++ if EncryptCS == 1 -> [encrypt_cs]; true -> [] end ++ if CompressRdp == 1 -> [compress_rdp]; true -> [] end ++ if Compress == 1 -> [compress]; true -> [] end ++ if ShowProtocol == 1 -> [show_protocol]; true -> [] end ++ if Persistent == 1 -> [persistent]; true -> [] end,
+	Flags = if Init == 1 -> [init]; true -> [] end ++
+			if EncryptRdp == 1 -> [encrypt_rdp]; true -> [] end ++
+			if EncryptSC == 1 -> [encrypt_sc]; true -> [] end ++
+			if EncryptCS == 1 -> [encrypt_cs]; true -> [] end ++
+			if CompressRdp == 1 -> [compress_rdp]; true -> [] end ++
+			if Compress == 1 -> [compress]; true -> [] end ++
+			if ShowProtocol == 1 -> [show_protocol]; true -> [] end ++
+			if Persistent == 1 -> [persistent]; true -> [] end,
 	Chan = #tsud_net_channel{name = binary_to_list(Name), priority = Pri, flags = Flags},
 	[Chan | decode_net_channels(Rest)].
 
@@ -218,7 +222,8 @@ encode_net(Rec) ->
 decode_cluster(Data) ->
 	<<Flags:32/little, SessionId:32/little>> = Data,
 	<<_:25, Smartcard:1, Version:4, ValidSession:1, Supported:1>> = <<Flags:32/big>>,
-	FlagAtoms = if Smartcard == 1 -> [smartcard]; true -> [] end ++ if Supported == 1 -> [supported]; true -> [] end,
+	FlagAtoms = if Smartcard == 1 -> [smartcard]; true -> [] end ++
+				if Supported == 1 -> [supported]; true -> [] end,
 	#tsud_cluster{version = Version+1, flags = FlagAtoms, sessionid = if ValidSession == 1 -> SessionId; true -> none end}.
 
 encode_cluster(#tsud_cluster{version = Ver, flags = Flags, sessionid = SessionId}) ->
@@ -270,10 +275,7 @@ encode_core(Rec) ->
 	Support24 = case lists:member('24bpp', Colors) of true -> 1; _ -> 0 end,
 	<<Supported:16/big>> = <<0:12, Support32:1, Support15:1, Support16:1, Support24:1>>,
 
-	CredSSPEarly = case lists:member(credssp_early, Selected) of true -> 1; _ -> 0 end,
-	CredSSP = case lists:member(credssp, Selected) of true -> 1; _ -> 0 end,
-	Ssl = case lists:member(ssl, Selected) of true -> 1; _ -> 0 end,
-	<<Prots:32/big>> = <<0:28, CredSSPEarly:1, 0:1, CredSSP:1, Ssl:1>>,
+	Prots = rdpp:encode_protocol_flags(Selected),
 
 	{ConnTyp, ConnTypeValid} = case ConnType of
 		modem -> {16#01, 1};
@@ -324,11 +326,17 @@ decode_core(Data) ->
 			<<_:12, Support32:1, Support15:1, Support16:1, Support24:1>> = <<SupportedDepths:16/big>>,
 			Supported = if Support32 == 1 -> ['32bpp']; true -> [] end ++ if Support15 == 1 -> ['15bpp']; true -> [] end ++ if Support16 == 1 -> ['16bpp']; true -> [] end ++ if Support24 == 1 -> ['24bpp']; true -> [] end,
 
-			<<_:28, CredSSPEarly:1, _:1, CredSSP:1, Ssl:1>> = <<Selected:32/big>>,
-			Prots = if CredSSPEarly == 1 -> [credssp_early]; true -> [] end ++ if CredSSP == 1 -> [credssp]; true -> [] end ++ if Ssl == 1 -> [ssl]; true -> [] end,
+			Prots = rdpp:decode_protocol_flags(Selected),
 
 			<<_:6, DynamicDST:1, DynVCGFX:1, NetCharAuto:1, MonitorLayout:1, ConnTypeValid:1, _:1, StrongKeys:1, StatusInfo:1, Want32:1, ErrInfo:1>> = <<CapFlags:16/big>>,
-			Caps = if DynamicDST == 1 -> [dynamic_dst]; true -> [] end ++ if DynVCGFX == 1 -> [dynvc_gfx]; true -> [] end ++ if NetCharAuto == 1 -> [netchar_autodetect]; true -> [] end ++ if MonitorLayout == 1 -> [monitor_layout]; true -> [] end ++ if StrongKeys == 1 -> [strongkeys]; true -> [] end ++ if StatusInfo == 1 -> [statusinfo]; true -> [] end ++ if Want32 == 1 -> [want_32bpp]; true -> [] end ++ if ErrInfo == 1 -> [errinfo]; true -> [] end,
+			Caps = if DynamicDST == 1 -> [dynamic_dst]; true -> [] end ++
+				   if DynVCGFX == 1 -> [dynvc_gfx]; true -> [] end ++
+				   if NetCharAuto == 1 -> [netchar_autodetect]; true -> [] end ++
+				   if MonitorLayout == 1 -> [monitor_layout]; true -> [] end ++
+				   if StrongKeys == 1 -> [strongkeys]; true -> [] end ++
+				   if StatusInfo == 1 -> [statusinfo]; true -> [] end ++
+				   if Want32 == 1 -> [want_32bpp]; true -> [] end ++
+				   if ErrInfo == 1 -> [errinfo]; true -> [] end,
 
 			ConnTypeAtom = if ConnTypeValid == 1 ->
 				case ConnType of

@@ -11,18 +11,20 @@
 
 -include("x224.hrl").
 -include("mcsgcc.hrl").
+-include("kbd.hrl").
 -include("tsud.hrl").
 -include("session.hrl").
+-include("rdpp.hrl").
 
 -export([start_link/1]).
--export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, proxy/2, wait_proxy/2]).
+-export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, proxy/2, wait_proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Sock :: term()) -> {ok, pid()}.
 start_link(Sock) ->
 	gen_fsm:start_link(?MODULE, [Sock], []).
 
--record(data, {sock, sslsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[]}).
+-record(data, {sock, sslsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0}).
 
 %% @private
 init([Sock]) ->
@@ -94,7 +96,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	{ok, Packet} = tpkt:encode(DtData),
 	ok = ssl:send(SslSock, Packet),
 
-	{next_state, mcs_attach_user, Data#data{waitchans = Chans}}.
+	{next_state, mcs_attach_user, Data#data{waitchans = Chans, iochan = 1003}}.
 
 mcs_attach_user({mcs_pdu, #mcs_edr{}}, Data) ->
 	{next_state, mcs_attach_user, Data};
@@ -121,6 +123,52 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = User, channel = Chan}}, #data{sslsock = SslS
 		{next_state, rdp_clientinfo, NewData};
 	true ->
 		{next_state, mcs_chans, NewData}
+	end.
+
+rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
+	case rdpp:decode_basic(RdpData) of
+		{ok, #ts_info{} = InfoPkt} ->
+			error_logger:info_report(["info packet: ", rdpp:pretty_print(InfoPkt)]),
+
+			{ok, LicData} = rdpp:encode_basic(#ts_license_vc{}),
+			{ok, Dpdu} = mcsgcc:encode_dpdu(#mcs_srv_data{channel = Chan, data = LicData}),
+			{ok, DtData} = x224:encode(#x224_dt{data = Dpdu}),
+			{ok, Packet} = tpkt:encode(DtData),
+			ok = ssl:send(SslSock, Packet),
+
+			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
+				shareid = (Data#data.themuser bsl 16) + 1,
+				sourcedesc = <<"rdpproxy", 0>>,
+				capabilities = [
+					#ts_cap_general{},
+					#ts_cap_share{},
+					#ts_cap_bitmap{bpp = 16},
+					#ts_cap_pointer{},
+					#ts_cap_input{},
+					#ts_cap_font{}
+				]
+			}),
+			error_logger:info_report([{dapkt, DaPkt}, {size, byte_size(DaPkt)}]),
+			{ok, Dpdu2} = mcsgcc:encode_dpdu(#mcs_srv_data{channel = Chan, data = DaPkt}),
+			{ok, DtData2} = x224:encode(#x224_dt{data = Dpdu2}),
+			{ok, Packet2} = tpkt:encode(DtData2),
+			ok = ssl:send(SslSock, Packet2),
+
+			{next_state, rdp_capex, Data};
+		{ok, RdpPkt} ->
+			error_logger:info_report(["rdp packet: ", rdpp:pretty_print(RdpPkt)]),
+			{next_state, rdp_clientinfo, Data};
+		_ ->
+			{stop, bad_protocol, Data}
+	end.
+
+rdp_capex({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
+	case rdpp:decode_sharecontrol(RdpData) of
+		{ok, CaPkt} ->
+			error_logger:info_report(["rdp packet: ", rdpp:pretty_print(CaPkt)]),
+			{next_state, rdp_capex, Data};
+		_ ->
+			{stop, bad_protocol, Data}
 	end.
 
 wait_proxy({x224_pdu, Pkt}, #data{queue = Queue} = Data) ->

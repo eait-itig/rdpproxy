@@ -95,9 +95,9 @@ encode_dpdu(#mcs_auc{status = Result, user = UserId}) ->
 encode_dpdu(#mcs_cjc{channel = Channel, status = Result, user = UserId}) ->
 	mcsp_per:encode('DomainMCSPDU', {channelJoinConfirm, #'ChannelJoinConfirm'{result = Result, initiator = UserId, requested = Channel, channelId = Channel}});
 encode_dpdu(#mcs_data{user = UserId, channel = Channel, priority = Priority, data = Binary}) ->
-	mcsp_per:encode('DomainMCSPDU', {sendDataRequest, #'SendDataRequest'{initiator = UserId, channelId = Channel, dataPriority = Priority, userData = binary_to_list(Binary)}});
+	mcsp_per:encode('DomainMCSPDU', {sendDataRequest, #'SendDataRequest'{initiator = UserId, channelId = Channel, dataPriority = Priority, segmentation = 1, userData = binary_to_list(Binary)}});
 encode_dpdu(#mcs_srv_data{user = UserId, channel = Channel, priority = Priority, data = Binary}) ->
-	mcsp_per:encode('DomainMCSPDU', {sendDataIndication, #'SendDataIndication'{initiator = UserId, channelId = Channel, dataPriority = Priority, userData = binary_to_list(Binary)}});
+	mcsp_per:encode('DomainMCSPDU', {sendDataIndication, #'SendDataIndication'{initiator = UserId, channelId = Channel, dataPriority = Priority, segmentation = 1, userData = binary_to_list(Binary)}});
 encode_dpdu(_) -> {error, bad_dpdu}.
 
 decode_ci(Bin) ->

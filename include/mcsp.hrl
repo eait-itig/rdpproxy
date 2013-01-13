@@ -3,7 +3,7 @@
 %% SEQUENCE and SET, and macro definitions for each value
 %% definition,in module MCS-PROTOCOL-BER
 
-
+-include("kbd.hrl").
 
 -record('DomainParameters',{
 maxChannelIds, maxUserIds, maxTokenIds, numPriorities, minThroughput, maxHeight, maxMCSPDUsize, protocolVersion}).

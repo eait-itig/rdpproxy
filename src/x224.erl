@@ -12,6 +12,7 @@
 
 -export([encode/1, decode/1, pretty_print/1]).
 
+
 -define(PDU_CR, 2#1110).
 -define(PDU_CC, 2#1101).
 -define(PDU_DR, 2#1000).
@@ -53,10 +54,7 @@ encode(Record) ->
 				<<>>
 			end,
 
-			CredSSPEarly = case lists:member(credssp_early, Protocols) of true -> 1; _ -> 0 end,
-			CredSSP = case lists:member(credssp, Protocols) of true -> 1; _ -> 0 end,
-			Ssl = case lists:member(ssl, Protocols) of true -> 1; _ -> 0 end,
-			<<Prots:32/big>> = <<0:28, CredSSPEarly:1, 0:1, CredSSP:1, Ssl:1>>,
+			Prots = rdpp:encode_protocol_flags(Protocols),
 			RdpPart = <<?RDP_NEGREQ:8, 0:8, 8:16/little, Prots:32/little>>,
 
 			LI = byte_size(Head) + byte_size(CookiePart) + byte_size(RdpPart),
@@ -81,10 +79,7 @@ encode(Record) ->
 		#x224_cc{src = SrcRef, dst = DstRef, class = Class, cdt = Cdt, rdp_status=ok, rdp_flags = Flags, rdp_selected = Protocols} ->
 			Head = <<?PDU_CC:4, Cdt:4, DstRef:16/big, SrcRef:16/big, Class:4, 0:2, 0:1, 0:1>>,
 
-			CredSSPEarly = case lists:member(credssp_early, Protocols) of true -> 1; _ -> 0 end,
-			CredSSP = case lists:member(credssp, Protocols) of true -> 1; _ -> 0 end,
-			Ssl = case lists:member(ssl, Protocols) of true -> 1; _ -> 0 end,
-			<<Prots:32/big>> = <<0:28, CredSSPEarly:1, 0:1, CredSSP:1, Ssl:1>>,
+			Prots = rdpp:encode_protocol_flags(Protocols),
 
 			DynVcGfx = case lists:member(dynvc_gfx, Flags) of true -> 1; _ -> 0 end,
 			ExtData = case lists:member(extdata, Flags) of true -> 1; _ -> 0 end,
@@ -129,8 +124,7 @@ decode(Data) ->
 			end,
 			case RdpData of
 				<<?RDP_NEGREQ:8, Flags:8, _Length:16/little, Protocols:32/little>> ->
-					<<_:28, CredSSPEarly:1, _:1, CredSSP:1, Ssl:1>> = <<Protocols:32/big>>,
-					Prots = if CredSSPEarly == 1 -> [credssp_early]; true -> [] end ++ if CredSSP == 1 -> [credssp]; true -> [] end ++ if Ssl == 1 -> [ssl]; true -> [] end,
+					Prots = rdpp:decode_protocol_flags(Protocols),
 					{ok, #x224_cr{src = SrcRef, dst = DstRef, class = Class, cdt = Cdt, rdp_cookie = Cookie, rdp_protocols = Prots}};
 				_ ->
 					{ok, #x224_cr{src = SrcRef, dst = DstRef, class = Class, cdt = Cdt, rdp_cookie = Cookie}}
@@ -140,9 +134,10 @@ decode(Data) ->
 			case Rest of
 				<<?RDP_NEGRSP:8, Flags:8, _Length:16/little, Selected:32/little>> ->
 					<<_:5, _Reserved:1, DynVcGfx:1, ExtData:1>> = <<Flags:8>>,
-					Flags2 = if DynVcGfx == 1 -> [dynvc_gfx]; true -> [] end ++ if ExtData == 1 -> [extdata]; true -> [] end,
-					<<_:28, CredSSPEarly:1, _:1, CredSSP:1, Ssl:1>> = <<Selected:32/big>>,
-					Prots = if CredSSPEarly == 1 -> [credssp_early]; true -> [] end ++ if CredSSP == 1 -> [credssp]; true -> [] end ++ if Ssl == 1 -> [ssl]; true -> [] end,
+					Flags2 = if DynVcGfx == 1 -> [dynvc_gfx]; true -> [] end ++
+							 if ExtData == 1 -> [extdata]; true -> [] end,
+
+					Prots = rdpp:decode_protocol_flags(Selected),
 					{ok, #x224_cc{src = SrcRef, dst = DstRef, class = Class, cdt = Cdt, rdp_flags = Flags2, rdp_selected = Prots}};
 
 				<<?RDP_NEGFAIL:8,  _Flags:8, _Length:16/little, Code:32/little>> ->
