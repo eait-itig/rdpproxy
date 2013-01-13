@@ -78,6 +78,9 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 		{stop, bad_protocol, Data}
 	end.
 
+mcs_connect({x224_pdu, _}, Data) ->
+	{next_state, mcs_connect, Data};
+
 mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	{ok, Tsuds} = tsud:decode(McsCi#mcs_ci.data),
 	error_logger:info_report(["tsuds: ", tsud:pretty_print(Tsuds)]),
@@ -104,6 +107,9 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	ok = ssl:send(SslSock, Packet),
 
 	{next_state, mcs_attach_user, Data#data{waitchans = Chans, iochan = 1003, tsud_core = TCore}}.
+
+mcs_attach_user({x224_pdu, _}, Data) ->
+	{next_state, mcs_attach_user, Data};
 
 mcs_attach_user({mcs_pdu, #mcs_edr{}}, Data) ->
 	{next_state, mcs_attach_user, Data};
@@ -305,7 +311,8 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 					case mcsgcc:decode(McsData) of
 						{ok, McsPkt} ->
 							?MODULE:State({mcs_pdu, McsPkt}, Data);
-						_ ->
+						Other ->
+							error_logger:info_report([{failed_mcsgcc, Other}]),
 							?MODULE:State({x224_pdu, Pdu}, Data)
 					end;
 				{ok, Pdu} ->
