@@ -52,7 +52,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 	HasSsl = lists:member(ssl, Protos),
 
 	if HasSsl ->
-		Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata,dynvc_gfx]},
+		Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata]},
 		{ok, RespData} = x224:encode(Resp),
 		{ok, Packet} = tpkt:encode(RespData),
 		gen_tcp:send(Sock, Packet),
@@ -94,7 +94,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 			{N, [1003]};
 
 		#tsud_net{channels = InChans} ->
-			{_, OutChans} = lists:foldl(fun(Chan, {N, Cs}) -> {N+1, [N|Cs]} end, {1004, []}, InChans),
+			{_, OutChans} = lists:foldl(fun(Chan, {N, Cs}) -> {N+1, [N|Cs]} end, {1031, []}, InChans),
 			{ok, N} = tsud:encode(#tsud_svr_net{iochannel = 1003, channels = OutChans}),
 			{N, [1003|OutChans]}
 	end,
@@ -142,16 +142,21 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 
 			Core = Data#data.tsud_core,
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
-				shareid = (Data#data.themuser bsl 16) + 1,
-				sourcedesc = <<"rdpproxy", 0>>,
+				shareid = (Data#data.themuser bsl 16) + 2,
+				sourcedesc = <<"RDPPROXY", 0>>,
 				capabilities = [
-					#ts_cap_general{},
 					#ts_cap_share{},
-					#ts_cap_order{},
+					#ts_cap_general{},
 					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_font{},
+					#ts_cap_order{},
+					%#ts_cap_bitmapcache{},
 					#ts_cap_pointer{},
-					#ts_cap_input{},
-					#ts_cap_font{}
+					#ts_cap_input{}
+					%#ts_cap_brush{},
+					%#ts_cap_glyphcache{},
+					%#ts_cap_vchannel{},
+					%#ts_cap_sound{},
 				]
 			}),
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = DaPkt}),

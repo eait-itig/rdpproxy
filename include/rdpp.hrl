@@ -20,7 +20,7 @@
 -record(ts_info, {secflags = [], codepage=0, flags = [mouse, noaudio], compression='8k', domain="", username="", password="", shell="", workdir=""}).
 -record(ts_license_vc, {secflags = []}).
 
--record(ts_cap_general, {os=[unix, other], flags=[long_creds]}).
+-record(ts_cap_general, {os=[unix, native_x11], flags=[short_bitmap_hdr, autoreconnect, long_creds]}).
 -record(ts_cap_bitmap, {bpp, flags=[multirect], width=1024, height=768}).
 -record(ts_cap_share, {channel=16#3ea}).
 -record(ts_cap_order, {flags=[negotiate, zeroboundsdeltas, colorindex], orders=[dstblt,patblt,scrblt,memblt,mem3blt,lineto,polyline,fastglyph]}).

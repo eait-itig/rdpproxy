@@ -54,12 +54,14 @@ pretty_print(mcs_srv_data, N) ->
 pretty_print(_, _) ->
 	no.
 
-decode_try_methods(_, []) -> {error, nomethod};
+decode_try_methods(Bin, []) -> {error, {nomethod, Bin}};
 decode_try_methods(Bin, Methods) ->
 	[Method|Rest] = Methods,
 	case ?MODULE:Method(Bin) of
 		{ok, Rec} -> {ok, Rec};
-		_ -> decode_try_methods(Bin, Rest)
+		Error ->
+			error_logger:info_report([{tried, Method}, {got, Error}]),
+			decode_try_methods(Bin, Rest)
 	end.
 
 decode(Bin) ->

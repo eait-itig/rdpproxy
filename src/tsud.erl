@@ -197,7 +197,7 @@ decode_svr_security(Bin) ->
 decode_net_channels(<<>>) -> [];
 decode_net_channels(Bin) ->
 	<<Name:8/binary, Options:32/little, Rest/binary>> = Bin,
-	<<Init:1, EncryptRdp:1, EncryptSC:1, EncryptCS:1, HighPri:1, MedPri:1, LowPri:1, _:1, CompressRdp:1, Compress:1, ShowProtocol:1, Persistent:1, _/binary>> = <<Options:32/big>>,
+	<<Init:1, EncryptRdp:1, EncryptSC:1, EncryptCS:1, HighPri:1, MedPri:1, LowPri:1, _:1, CompressRdp:1, Compress:1, ShowProtocol:1, Persistent:1, _/bitstring>> = <<Options:32/big>>,
 	Pri = if HighPri == 1 -> high; MedPri == 1 -> medium; true -> low end,
 	Flags = if Init == 1 -> [init]; true -> [] end ++
 			if EncryptRdp == 1 -> [encrypt_rdp]; true -> [] end ++

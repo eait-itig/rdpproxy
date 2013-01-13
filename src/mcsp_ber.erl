@@ -635,7 +635,7 @@ Tlv1 = ?RT_BER:match_tags(Tlv,TagIn),
 %% attribute maxChannelIds(1) with type INTEGER
 %%-------------------------------------------------
 [V1|Tlv2] = Tlv1,
-Term1 = ?RT_BER:decode_integer(V1,{0,'MAX'},[2]),
+Term1 = ?RT_BER:decode_integer(V1,{-(1 bsl 31),'MAX'},[2]),
 
 %%-------------------------------------------------
 %% attribute maxUserIds(2) with type INTEGER
@@ -647,31 +647,31 @@ Term2 = ?RT_BER:decode_integer(V2,{-(1 bsl 31),'MAX'},[2]),
 %% attribute maxTokenIds(3) with type INTEGER
 %%-------------------------------------------------
 [V3|Tlv4] = Tlv3,
-Term3 = ?RT_BER:decode_integer(V3,{0,'MAX'},[2]),
+Term3 = ?RT_BER:decode_integer(V3,{-(1 bsl 31),'MAX'},[2]),
 
 %%-------------------------------------------------
 %% attribute numPriorities(4) with type INTEGER
 %%-------------------------------------------------
 [V4|Tlv5] = Tlv4,
-Term4 = ?RT_BER:decode_integer(V4,{0,'MAX'},[2]),
+Term4 = ?RT_BER:decode_integer(V4,{-(1 bsl 31),'MAX'},[2]),
 
 %%-------------------------------------------------
 %% attribute minThroughput(5) with type INTEGER
 %%-------------------------------------------------
 [V5|Tlv6] = Tlv5,
-Term5 = ?RT_BER:decode_integer(V5,{0,'MAX'},[2]),
+Term5 = ?RT_BER:decode_integer(V5,{-(1 bsl 31),'MAX'},[2]),
 
 %%-------------------------------------------------
 %% attribute maxHeight(6) with type INTEGER
 %%-------------------------------------------------
 [V6|Tlv7] = Tlv6,
-Term6 = ?RT_BER:decode_integer(V6,{0,'MAX'},[2]),
+Term6 = ?RT_BER:decode_integer(V6,{-(1 bsl 31),'MAX'},[2]),
 
 %%-------------------------------------------------
 %% attribute maxMCSPDUsize(7) with type INTEGER
 %%-------------------------------------------------
 [V7|Tlv8] = Tlv7,
-Term7 = ?RT_BER:decode_integer(V7,{0,'MAX'},[2]),
+Term7 = ?RT_BER:decode_integer(V7,{-(1 bsl 31),'MAX'},[2]),
 
 %%-------------------------------------------------
 %% attribute protocolVersion(8) with type INTEGER
