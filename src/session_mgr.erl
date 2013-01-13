@@ -57,13 +57,14 @@ init([]) ->
 
 gen_cookie(0, Data, _) -> Data;
 gen_cookie(N, SoFar, Alpha) ->
-	M = erlang:random(tuple_size(Alpha)),
+	M = random:uniform(tuple_size(Alpha)),
 	C = element(M, Alpha),
 	gen_cookie(N-1, <<SoFar/binary, C>>, Alpha).
 
 %% @private
 handle_call(gen_cookie, _From, #state{alphabet = Alpha} = State) ->
-	{reply, {ok, gen_cookie(32, <<>>, Alpha)}, State};
+	Randomness = gen_cookie(16, <<>>, Alpha),
+	{reply, {ok, Randomness}, State};
 
 handle_call(_Msg, _From, State) ->
 	{noreply, State}.

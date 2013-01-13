@@ -459,14 +459,47 @@ encode_ts_confirm(#ts_confirm{}) ->
 decode_ts_deactivate(Chan, Bin) ->
 	{ok, #ts_deactivate{channel = Chan}}.
 
-encode_ts_deactivate(#ts_confirm{}) ->
-	<<>>.
+encode_ts_deactivate(#ts_deactivate{shareid = ShareId, sourcedesc = SourceDescIn}) ->
+	SourceDesc = if is_binary(SourceDescIn) and (byte_size(SourceDescIn) > 0) -> SourceDescIn; true -> <<0,0>> end,
+	Sz = byte_size(SourceDesc),
+	<<ShareId:32/little, Sz:16/little, SourceDesc/binary>>.
 
 decode_ts_redir(Chan, Bin) ->
 	{ok, #ts_redir{channel = Chan}}.
 
-encode_ts_redir(#ts_confirm{}) ->
-	<<>>.
+encode_ts_redir(#ts_redir{sessionid = Session, username = Username, domain = Domain, password = Password, cookie = Cookie, flags = Flags}) ->
+	InfoOnly = case lists:member(info_only, Flags) of true -> 1; _ -> 0 end,
+	Smartcard = case lists:member(smartcard, Flags) of true -> 1; _ -> 0 end,
+	Logon = case lists:member(logon, Flags) of true -> 1; _ -> 0 end,
+
+	HasCookie = if is_binary(Cookie) and (size(Cookie) > 0) -> 1; true -> 0 end,
+	HasUsername = if is_binary(Username) and (size(Username) > 0) -> 1; true -> 0 end,
+	HasDomain = if is_binary(Domain) and (size(Domain) > 0) -> 1; true -> 0 end,
+	HasPassword = if is_binary(Password) and (size(Password) > 0) -> 1; true -> 0 end,
+
+	<<RedirFlags:32/big>> = <<0:24, InfoOnly:1, Smartcard:1, Logon:1, HasPassword:1, HasDomain:1, HasUsername:1, HasCookie:1, 0:1>>,
+
+	Base = <<Session:32/little, RedirFlags:32/little>>,
+	WithCookie = if HasCookie == 1 ->
+		S1 = byte_size(Cookie),
+		<<Base/binary, S1:32/little, Cookie/binary>>;
+	true -> Base end,
+	WithUsername = if HasUsername == 1 ->
+		S2 = byte_size(Username),
+		<<WithCookie/binary, S2:32/little, Username/binary>>;
+	true -> WithCookie end,
+	WithDomain = if HasDomain == 1 ->
+		S3 = byte_size(Domain),
+		<<WithUsername/binary, S3:32/little, Domain/binary>>;
+	true -> WithUsername end,
+	WithPassword = if HasPassword == 1 ->
+		S4 = byte_size(Password),
+		<<WithDomain/binary, S4:32/little, Password/binary>>;
+	true -> WithDomain end,
+
+	Len = byte_size(WithPassword) + 4,
+	error_logger:info_report([{redir_flags, RedirFlags}, {len, Len}]),
+	<<0:16, 16#0400:16/little, Len:16/little, WithPassword/binary>>.
 
 decode_sharedata(Chan, Bin) ->
 	case Bin of
@@ -734,7 +767,7 @@ decode_ts_info(Fl, Bin) ->
 			end,
 
 			case Rest of
-				<<Domain:DomainLen/binary-unit:8, 0:8, UserName:UserNameLen/binary-unit:8, 0:8, Password:PasswordLen/binary-unit:8, 0:8, Shell:ShellLen/binary-unit:8, 0:8, WorkDir:WorkDirLen/binary-unit:8, Rest2/binary>> ->
+				<<Domain:DomainLen/binary-unit:8, UserName:UserNameLen/binary-unit:8, Password:PasswordLen/binary-unit:8, Shell:ShellLen/binary-unit:8, WorkDir:WorkDirLen/binary-unit:8, Rest2/binary>> ->
 					{ok, #ts_info{secflags = Fl, codepage = CodePage, flags = FlagAtoms, compression = CompLevelAtom, domain = Domain, username = UserName, password = Password, shell = Shell, workdir = WorkDir}};
 				_ ->
 					{error, badlength}

@@ -45,6 +45,9 @@ pretty_print(mcs_cjc, N) ->
 pretty_print(mcs_data, N) ->
 	N = record_info(size, mcs_data) - 1,
 	record_info(fields, mcs_data);
+pretty_print(mcs_srv_data, N) ->
+	N = record_info(size, mcs_srv_data) - 1,
+	record_info(fields, mcs_srv_data);
 %pretty_print(x224_cr, N) ->
 %	N = record_info(size, x224_cr) - 1,
 %	record_info(fields, x224_cr);

@@ -30,8 +30,8 @@
 
 -record(ts_demand, {channel=16#3ea, shareid=0, sourcedesc=[], capabilities=[]}).
 -record(ts_confirm, {channel=16#3ea, shareid=0, sourcedesc=[], capabilities=[]}).
--record(ts_deactivate, {channel=16#3ea, shareid=0}).
--record(ts_redir, {channel=16#3ea, shareid=0}).
+-record(ts_deactivate, {channel=16#3ea, shareid=0, sourcedesc=[]}).
+-record(ts_redir, {channel=16#3ea, shareid=0, sessionid, username=[], domain=[], password=[], cookie=[], flags=[logon]}).
 
 -record(ts_sharedata, {channel=16#3ea, priority=low, comptype=none, flags=[], shareid=0, data={}}).
 -record(ts_sync, {user=0}).

@@ -17,14 +17,14 @@
 -include("rdpp.hrl").
 
 -export([start_link/1]).
--export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, proxy/2, wait_proxy/2]).
+-export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, clicky/2, clicky_highlight/2, proxy/2, wait_proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Sock :: term()) -> {ok, pid()}.
 start_link(Sock) ->
 	gen_fsm:start_link(?MODULE, [Sock], []).
 
--record(data, {sock, sslsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0}).
+-record(data, {sock, sslsock=none, backsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0, tsud_core={}}).
 
 send_dpdu(SslSock, McsPkt) ->
 	{ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -40,7 +40,7 @@ init([Sock]) ->
 
 %% @doc Waiting for control of the socket to be given by frontend_listener
 wait_control(control_given, #data{sock = Sock} = Data) ->
-	inet:setopts(Sock, [{packet, tpkt}, {active, once}]),
+	inet:setopts(Sock, [{packet, tpkt}, {active, once}, {nodelay, true}]),
 	{next_state, initiation, Data}.
 
 initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = Data) ->
@@ -52,18 +52,18 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 	HasSsl = lists:member(ssl, Protos),
 
 	if HasSsl ->
-		Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata]},
+		Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata,dynvc_gfx]},
 		{ok, RespData} = x224:encode(Resp),
 		{ok, Packet} = tpkt:encode(RespData),
 		gen_tcp:send(Sock, Packet),
 
 		inet:setopts(Sock, [{packet, raw}]),
 		{ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
-		ok = ssl:setopts(SslSock, [binary, {active, true}]),
+		ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
 		case session_mgr:get(Cookie) of
 			{ok, #session{host = Host, port = Port}} ->
-				Backend = backend:start_link(self(), Host, Port),
+				{ok, Backend} = backend:start_link(self(), "areole.cooperi.net", 3389),
 				{next_state, wait_proxy, NewData#data{sslsock = SslSock, backend = Backend}};
 			_ ->
 				{next_state, mcs_connect, NewData#data{sslsock = SslSock}}
@@ -82,6 +82,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	{ok, Tsuds} = tsud:decode(McsCi#mcs_ci.data),
 	error_logger:info_report(["tsuds: ", tsud:pretty_print(Tsuds)]),
 	CNet = lists:keyfind(tsud_net, 1, Tsuds),
+	TCore = lists:keyfind(tsud_core, 1, Tsuds),
 
 	{ok, Core} = tsud:encode(#tsud_svr_core{requested = [ssl]}),
 	{Net, Chans} = case CNet of
@@ -102,7 +103,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	{ok, Packet} = tpkt:encode(DtData),
 	ok = ssl:send(SslSock, Packet),
 
-	{next_state, mcs_attach_user, Data#data{waitchans = Chans, iochan = 1003}}.
+	{next_state, mcs_attach_user, Data#data{waitchans = Chans, iochan = 1003, tsud_core = TCore}}.
 
 mcs_attach_user({mcs_pdu, #mcs_edr{}}, Data) ->
 	{next_state, mcs_attach_user, Data};
@@ -133,6 +134,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 			{ok, LicData} = rdpp:encode_basic(#ts_license_vc{}),
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = LicData}),
 
+			Core = Data#data.tsud_core,
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
 				shareid = (Data#data.themuser bsl 16) + 1,
 				sourcedesc = <<"rdpproxy", 0>>,
@@ -140,7 +142,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 					#ts_cap_general{},
 					#ts_cap_share{},
 					#ts_cap_order{},
-					#ts_cap_bitmap{bpp = 16},
+					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_pointer{},
 					#ts_cap_input{},
 					#ts_cap_font{}
@@ -152,8 +154,8 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 		{ok, RdpPkt} ->
 			error_logger:info_report(["rdp packet: ", rdpp:pretty_print(RdpPkt)]),
 			{next_state, rdp_clientinfo, Data};
-		_ ->
-			{stop, bad_protocol, Data}
+		Other ->
+			{stop, {bad_protocol, Other}, Data}
 	end.
 
 rdp_capex({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
@@ -187,39 +189,111 @@ init_finalize({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsoc
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = FontMap}),
 
 			{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
-					#ts_order_opaquerect{dest=[100,100], size=[500,500], color=[255,200,200]},
-					#ts_order_line{start=[100,100], finish=[500,500], color=[255,255,255]}
+					#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]},
+					#ts_order_line{start=[100,100], finish=[200,200], color=[255,255,255]}
 				]}}),
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
 
-			{next_state, init_finalize, Data};
+			{next_state, clicky, Data};
 
 		{ok, #ts_sharedata{} = SD} ->
-			error_logger:info_report(["sharedata: ", rdpp:pretty_print(SD)]),
+			error_logger:info_report(["finalize: ", rdpp:pretty_print(SD)]),
 			{next_state, init_finalize, Data};
 
 		Other ->
 			{stop, Other, Data}
 	end.
 
-wait_proxy({x224_pdu, Pkt}, #data{queue = Queue} = Data) ->
-	{next_state, wait_proxy, Data#data{queue = Queue ++ [Pkt]}};
+clicky({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
+	case rdpp:decode_sharecontrol(RdpData) of
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_input{events = Evts}}} ->
+			case Evts of
+				[#ts_inpevt_mouse{action=move, point=[X,Y]}] ->
+					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
+						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
+								#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,230,230]}
+							]}}),
+						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
+						{next_state, clicky_highlight, Data};
+					true ->
+						{next_state, clicky, Data}
+					end;
+				_ ->
+					{next_state, clicky, Data}
+			end;
+		{ok, #ts_sharedata{} = SD} ->
+			error_logger:info_report(["clicky: ", rdpp:pretty_print(SD)]),
+			{next_state, init_finalize, Data};
 
-wait_proxy({backend_ready, Backend}, #data{queue = Queue, backend = Backend} = Data) ->
-	lists:foreach(fun(Pkt) ->
-		gen_fsm:send_event(Backend, {frontend_pdu, self(), Pkt})
+		Other ->
+			{stop, Other, Data}
+	end.
+
+clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
+	case rdpp:decode_sharecontrol(RdpData) of
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_input{events = Evts}}} ->
+			case Evts of
+				[#ts_inpevt_mouse{action=move, point=[X,Y]}] ->
+					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
+						{next_state, clicky_highlight, Data};
+					true ->
+						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
+								#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]}
+							]}}),
+						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
+						{next_state, clicky, Data}
+					end;
+				[#ts_inpevt_mouse{action=down, buttons=[1], point=[X,Y]}] ->
+					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
+						{ok, Cookie} = session_mgr:store(#session{host = "areole.cooperi.net", port = 3389}),
+						{ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
+							shareid = ShareId,
+							sessionid = 0,
+							flags = [logon],
+							username = unicode:characters_to_binary(<<"test",0>>, latin1, utf16),
+							domain = unicode:characters_to_binary(<<"COOPERI",0>>, latin1, utf16),
+							password = unicode:characters_to_binary(<<"test",0>>, latin1, utf16),
+							cookie = <<Cookie/binary, 16#0d, 16#0a>>
+						}),
+						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Redir}),
+
+						{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{}),
+						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Deact}),
+						ssl:close(SslSock),
+						{next_state, clicky_highlight, Data};
+					true ->
+						{next_state, clicky_highlight, Data}
+					end;
+				_ ->
+					{next_state, clicky_highlight, Data}
+			end;
+
+		{ok, #ts_sharedata{} = SD} ->
+			error_logger:info_report(["clicky: ", rdpp:pretty_print(SD)]),
+			{next_state, init_finalize, Data};
+
+		Other ->
+			{stop, Other, Data}
+	end.
+
+
+wait_proxy({data, Bin}, #data{queue = Queue} = Data) ->
+	{next_state, wait_proxy, Data#data{queue = Queue ++ [Bin]}};
+
+wait_proxy({backend_ready, Backend, Backsock}, #data{queue = Queue, backend = Backend} = Data) ->
+	lists:foreach(fun(Bin) ->
+		ssl:send(Backsock, Bin)
+		%gen_fsm:send_event(Backend, {frontend_data, self(), Bin})
 	end, Queue),
-	{next_state, proxy, Data#data{queue = []}}.
+	{next_state, proxy, Data#data{queue = [], backsock = Backsock}}.
 
-proxy({x224_pdu, Pkt}, #data{sslsock = SslSock, backend = Backend} = Data) ->
-	gen_fsm:send_event(Backend, {frontend_pdu, self(), Pkt}),
+proxy({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backend = Backend} = Data) ->
+	ssl:send(Backsock, Bin),
+	%gen_fsm:send_event(Backend, {frontend_data, self(), Bin}),
 	{next_state, proxy, Data};
 
-proxy({backend_pdu, Backend, Pkt}, #data{sslsock = SslSock, backend = Backend} = Data) ->
-	{ok, PktData} = x224:encode(Pkt),
-	{ok, Packet} = tpkt:encode(PktData),
-	error_logger:info_report([{frontend_send, Packet}]),
-	ssl:send(SslSock, Packet),
+proxy({backend_data, Backend, Bin}, #data{sslsock = SslSock, backend = Backend} = Data) ->
+	ssl:send(SslSock, Bin),
 	{next_state, proxy, Data}.
 
 %% @private
@@ -230,7 +304,6 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 				{ok, #x224_dt{data = McsData} = Pdu} ->
 					case mcsgcc:decode(McsData) of
 						{ok, McsPkt} ->
-							error_logger:info_report(["frontend rx mcs: ", mcsgcc:pretty_print(McsPkt)]),
 							?MODULE:State({mcs_pdu, McsPkt}, Data);
 						_ ->
 							?MODULE:State({x224_pdu, Pdu}, Data)
@@ -246,11 +319,17 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 			{next_state, State, Data}
 	end;
 
+handle_info({ssl, SslSock, Bin}, wait_proxy, #data{sslsock = SslSock} = Data) ->
+	wait_proxy({data, Bin}, Data);
+handle_info({ssl, SslSock, Bin}, proxy, #data{sslsock = SslSock} = Data) ->
+	proxy({data, Bin}, Data);
+
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
 	handle_info({tcp, Sock, Bin}, State, Data);
 
 handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
-	?MODULE:State(disconnect, Data);
+	{stop, closed, Data};
+	%?MODULE:State(disconnect, Data);
 
 handle_info(_Msg, State, Data) ->
 	{next_state, State, Data}.
