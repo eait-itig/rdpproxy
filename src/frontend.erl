@@ -17,7 +17,7 @@
 -include("rdpp.hrl").
 
 -export([start_link/1]).
--export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, proxy/2, wait_proxy/2]).
+-export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, proxy/2, wait_proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Sock :: term()) -> {ok, pid()}.
@@ -25,6 +25,12 @@ start_link(Sock) ->
 	gen_fsm:start_link(?MODULE, [Sock], []).
 
 -record(data, {sock, sslsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0}).
+
+send_dpdu(SslSock, McsPkt) ->
+	{ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
+	{ok, DtData} = x224:encode(#x224_dt{data = McsData}),
+	{ok, Packet} = tpkt:encode(DtData),
+	ok = ssl:send(SslSock, Packet).
 
 %% @private
 init([Sock]) ->
@@ -74,7 +80,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 
 mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	{ok, Tsuds} = tsud:decode(McsCi#mcs_ci.data),
-	lists:foreach(fun(Tsud) -> error_logger:info_report(["tsud: ", tsud:pretty_print(Tsud)]) end, Tsuds),
+	error_logger:info_report(["tsuds: ", tsud:pretty_print(Tsuds)]),
 	CNet = lists:keyfind(tsud_net, 1, Tsuds),
 
 	{ok, Core} = tsud:encode(#tsud_svr_core{requested = [ssl]}),
@@ -102,10 +108,7 @@ mcs_attach_user({mcs_pdu, #mcs_edr{}}, Data) ->
 	{next_state, mcs_attach_user, Data};
 
 mcs_attach_user({mcs_pdu, #mcs_aur{}}, #data{sslsock = SslSock} = Data) ->
-	{ok, Auc} = mcsgcc:encode_dpdu(#mcs_auc{user = Data#data.themuser, status = 'rt-successful'}),
-	{ok, DtData} = x224:encode(#x224_dt{data = Auc}),
-	{ok, Packet} = tpkt:encode(DtData),
-	ok = ssl:send(SslSock, Packet),
+	send_dpdu(SslSock, #mcs_auc{user = Data#data.themuser, status = 'rt-successful'}),
 	{next_state, mcs_chans, Data}.
 
 mcs_chans({mcs_pdu, #mcs_cjr{user = User, channel = Chan}}, #data{sslsock = SslSock, themuser = User, waitchans = Chans, chans = All} = Data) ->
@@ -113,10 +116,7 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = User, channel = Chan}}, #data{sslsock = SslS
 	NewChans = Chans -- [Chan],
 	NewData = Data#data{waitchans = NewChans, chans = [Chan|All]},
 
-	{ok, Cjc} = mcsgcc:encode_dpdu(#mcs_cjc{user = User, channel = Chan, status = 'rt-successful'}),
-	{ok, DtData} = x224:encode(#x224_dt{data = Cjc}),
-	{ok, Packet} = tpkt:encode(DtData),
-	ok = ssl:send(SslSock, Packet),
+	send_dpdu(SslSock, #mcs_cjc{user = User, channel = Chan, status = 'rt-successful'}),
 
 	if (length(NewChans) == 0) ->
 		error_logger:info_report([{mcs_chans, all_ok}, {chans, NewData#data.chans}]),
@@ -131,10 +131,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 			error_logger:info_report(["info packet: ", rdpp:pretty_print(InfoPkt)]),
 
 			{ok, LicData} = rdpp:encode_basic(#ts_license_vc{}),
-			{ok, Dpdu} = mcsgcc:encode_dpdu(#mcs_srv_data{channel = Chan, data = LicData}),
-			{ok, DtData} = x224:encode(#x224_dt{data = Dpdu}),
-			{ok, Packet} = tpkt:encode(DtData),
-			ok = ssl:send(SslSock, Packet),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = LicData}),
 
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
 				shareid = (Data#data.themuser bsl 16) + 1,
@@ -142,17 +139,14 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 				capabilities = [
 					#ts_cap_general{},
 					#ts_cap_share{},
+					#ts_cap_order{},
 					#ts_cap_bitmap{bpp = 16},
 					#ts_cap_pointer{},
 					#ts_cap_input{},
 					#ts_cap_font{}
 				]
 			}),
-			error_logger:info_report([{dapkt, DaPkt}, {size, byte_size(DaPkt)}]),
-			{ok, Dpdu2} = mcsgcc:encode_dpdu(#mcs_srv_data{channel = Chan, data = DaPkt}),
-			{ok, DtData2} = x224:encode(#x224_dt{data = Dpdu2}),
-			{ok, Packet2} = tpkt:encode(DtData2),
-			ok = ssl:send(SslSock, Packet2),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = DaPkt}),
 
 			{next_state, rdp_capex, Data};
 		{ok, RdpPkt} ->
@@ -164,11 +158,48 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 
 rdp_capex({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
-		{ok, CaPkt} ->
-			error_logger:info_report(["rdp packet: ", rdpp:pretty_print(CaPkt)]),
-			{next_state, rdp_capex, Data};
-		_ ->
-			{stop, bad_protocol, Data}
+		{ok, #ts_confirm{} = Pkt} ->
+			error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
+			{next_state, init_finalize, Data};
+		Other ->
+			{stop, Other, Data}
+	end.
+
+init_finalize({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
+	case rdpp:decode_sharecontrol(RdpData) of
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_sync{}}} ->
+			{ok, SyncData} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_sync{}}),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = SyncData}),
+			{next_state, init_finalize, Data};
+
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_control{action=cooperate}}} ->
+			{ok, CoopData} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_control{action = cooperate}}),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = CoopData}),
+			{next_state, init_finalize, Data};
+
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_control{action=request}}} ->
+			{ok, GrantData} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_control{action = granted, controlid = 16#3ea, grantid=Data#data.themuser}}),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = GrantData}),
+			{next_state, init_finalize, Data};
+
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_fontlist{}}} ->
+			{ok, FontMap} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_fontmap{}}),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = FontMap}),
+
+			{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
+					#ts_order_opaquerect{dest=[100,100], size=[500,500], color=[255,200,200]},
+					#ts_order_line{start=[100,100], finish=[500,500], color=[255,255,255]}
+				]}}),
+			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
+
+			{next_state, init_finalize, Data};
+
+		{ok, #ts_sharedata{} = SD} ->
+			error_logger:info_report(["sharedata: ", rdpp:pretty_print(SD)]),
+			{next_state, init_finalize, Data};
+
+		Other ->
+			{stop, Other, Data}
 	end.
 
 wait_proxy({x224_pdu, Pkt}, #data{queue = Queue} = Data) ->
@@ -193,7 +224,6 @@ proxy({backend_pdu, Backend, Pkt}, #data{sslsock = SslSock, backend = Backend} =
 
 %% @private
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
-	error_logger:info_report([{frontend_recv, Bin}]),
 	case tpkt:decode(Bin) of
 		{ok, Body} ->
 			case x224:decode(Body) of

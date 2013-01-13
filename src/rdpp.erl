@@ -39,7 +39,63 @@ pretty_print(ts_deactivate, N) ->
 pretty_print(ts_sharedata, N) ->
 	N = record_info(size, ts_sharedata) - 1,
 	record_info(fields, ts_sharedata);
-pretty_print(_, _) ->
+pretty_print(ts_license_vc, N) ->
+	N = record_info(size, ts_license_vc) - 1,
+	record_info(fields, ts_license_vc);
+pretty_print(ts_sync, N) ->
+	N = record_info(size, ts_sync) - 1,
+	record_info(fields, ts_sync);
+pretty_print(ts_control, N) ->
+	N = record_info(size, ts_control) - 1,
+	record_info(fields, ts_control);
+pretty_print(ts_fontlist, N) ->
+	N = record_info(size, ts_fontlist) - 1,
+	record_info(fields, ts_fontlist);
+pretty_print(ts_fontmap, N) ->
+	N = record_info(size, ts_fontmap) - 1,
+	record_info(fields, ts_fontmap);
+pretty_print(ts_input, N) ->
+	N = record_info(size, ts_input) - 1,
+	record_info(fields, ts_input);
+
+pretty_print(ts_inpevt_sync, N) ->
+	N = record_info(size, ts_inpevt_sync) - 1,
+	record_info(fields, ts_inpevt_sync);
+pretty_print(ts_inpevt_key, N) ->
+	N = record_info(size, ts_inpevt_key) - 1,
+	record_info(fields, ts_inpevt_key);
+pretty_print(ts_inpevt_unicode, N) ->
+	N = record_info(size, ts_inpevt_unicode) - 1,
+	record_info(fields, ts_inpevt_unicode);
+pretty_print(ts_inpevt_mouse, N) ->
+	N = record_info(size, ts_inpevt_mouse) - 1,
+	record_info(fields, ts_inpevt_mouse);
+pretty_print(ts_inpevt_wheel, N) ->
+	N = record_info(size, ts_inpevt_wheel) - 1,
+	record_info(fields, ts_inpevt_wheel);
+
+pretty_print(ts_cap_general, N) ->
+	N = record_info(size, ts_cap_general) - 1,
+	record_info(fields, ts_cap_general);
+pretty_print(ts_cap_bitmap, N) ->
+	N = record_info(size, ts_cap_bitmap) - 1,
+	record_info(fields, ts_cap_bitmap);
+pretty_print(ts_cap_share, N) ->
+	N = record_info(size, ts_cap_share) - 1,
+	record_info(fields, ts_cap_share);
+pretty_print(ts_cap_order, N) ->
+	N = record_info(size, ts_cap_order) - 1,
+	record_info(fields, ts_cap_order);
+pretty_print(ts_cap_input, N) ->
+	N = record_info(size, ts_cap_input) - 1,
+	record_info(fields, ts_cap_input);
+pretty_print(ts_cap_font, N) ->
+	N = record_info(size, ts_cap_font) - 1,
+	record_info(fields, ts_cap_font);
+pretty_print(ts_cap_pointer, N) ->
+	N = record_info(size, ts_cap_pointer) - 1,
+	record_info(fields, ts_cap_pointer);
+pretty_print(0, _) ->
 	no.
 
 -spec encode_protocol_flags([atom()]) -> integer().
@@ -111,9 +167,8 @@ encode_sharecontrol(Pdu) ->
 		#ts_demand{} -> {16#1, encode_ts_demand(Pdu)};
 		#ts_confirm{} -> {16#3, encode_ts_confirm(Pdu)};
 		#ts_deactivate{} -> {16#6, encode_ts_deactivate(Pdu)};
-		%#ts_update{} -> {16#7, encode_sharedata(Pdu)};
 		#ts_redir{} -> {16#a, encode_ts_redir(Pdu)};
-		_ -> <<>>
+		#ts_sharedata{} -> {16#7, encode_sharedata(Pdu)}
 	end,
 	Channel = element(2, Pdu),
 	Length = byte_size(Inner) + 6,
@@ -184,6 +239,42 @@ decode_tscap(2, Bin) ->
 
 	#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height};
 
+decode_tscap(3, Bin) ->
+	<<_:30/unit:8, BaseFlags:16/little, OrderSupport:32/binary-unit:8, _/binary>> = Bin,
+
+	<<_:8, ExtraFlags:1, SolidPatternBrushOnly:1, ColorIndex:1, _:1, ZeroBoundsDeltas:1, _:1, NegotiateOrders:1, _:1>> = <<BaseFlags:16/big>>,
+
+	<<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, 0, 0, DrawNineGrid, LineTo, MultiDrawNineGrid, 0, SaveBitmap, 0, 0, 0, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, 0, FastGlyph, EllipseSC, EllipseCB, Index, 0, 0, 0, _>> = OrderSupport,
+
+	Flags = if SolidPatternBrushOnly == 1 -> [solid_pattern_brush_only]; true -> [] end ++
+			if ColorIndex == 1 -> [colorindex]; true -> [] end ++
+			if ZeroBoundsDeltas == 1 -> ['zeroboundsdeltas']; true -> [] end ++
+			if NegotiateOrders == 1 -> [negotiate]; true -> [] end,
+
+	Orders = if DstBlt == 1 -> [dstblt]; true -> [] end ++
+			 if PatBlt == 1 -> [patblt]; true -> [] end ++
+			 if ScrBlt == 1 -> [scrblt]; true -> [] end ++
+			 if MemBlt == 1 -> [memblt]; true -> [] end ++
+			 if Mem3Blt == 1 -> [mem3blt]; true -> [] end ++
+			 if DrawNineGrid == 1 -> [drawninegrid]; true -> [] end ++
+			 if LineTo == 1 -> [lineto]; true -> [] end ++
+			 if MultiDrawNineGrid == 1 -> [multidrawninegrid]; true -> [] end ++
+			 if SaveBitmap == 1 -> [savebitmap]; true -> [] end ++
+			 if MultiDstBlt == 1 -> [multidstblt]; true -> [] end ++
+			 if MultiPatBlt == 1 -> [multipatblt]; true -> [] end ++
+			 if MultiScrBlt == 1 -> [multiscrblt]; true -> [] end ++
+			 if MultiOpaqueRect == 1 -> [multiopaquerect]; true -> [] end ++
+			 if FastIndex == 1 -> [fastindex]; true -> [] end ++
+			 if PolygonSC == 1 -> [polygonsc]; true -> [] end ++
+			 if PolygonCB == 1 -> [polygoncb]; true -> [] end ++
+			 if Polyline == 1 -> [polyline]; true -> [] end ++
+			 if FastGlyph == 1 -> [fastglyph]; true -> [] end ++
+			 if EllipseSC == 1 -> [ellipsesc]; true -> [] end ++
+			 if EllipseCB == 1 -> [ellipsecb]; true -> [] end ++
+			 if Index == 1 -> [index]; true -> [] end,
+
+	#ts_cap_order{flags = Flags, orders = Orders};
+
 decode_tscap(9, Bin) ->
 	<<Chan:16/little, _:16>> = Bin,
 	#ts_cap_share{channel = Chan};
@@ -244,6 +335,43 @@ encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = He
 	Inner = <<Bpp:16/little, 1:16/little, 1:16/little, 1:16/little, Width:16/little, Height:16/little, 0:16, Resize:16/little, Compression:16/little, 0:8, DrawingFlags:8, Multirect:16/little, 0:16>>,
 	Size = byte_size(Inner) + 4,
 	<<2:16/little, Size:16/little, Inner/binary>>;
+
+encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
+	DstBlt = case lists:member(dstblt, Orders) of true -> 1; _ -> 0 end,
+	DstBlt = case lists:member(dstblt, Orders) of true -> 1; _ -> 0 end,
+	PatBlt = case lists:member(patblt, Orders) of true -> 1; _ -> 0 end,
+	ScrBlt = case lists:member(scrblt, Orders) of true -> 1; _ -> 0 end,
+	MemBlt = case lists:member(memblt, Orders) of true -> 1; _ -> 0 end,
+	Mem3Blt = case lists:member(mem3blt, Orders) of true -> 1; _ -> 0 end,
+	DrawNineGrid = case lists:member(drawninegrid, Orders) of true -> 1; _ -> 0 end,
+	LineTo = case lists:member(lineto, Orders) of true -> 1; _ -> 0 end,
+	MultiDrawNineGrid = case lists:member(multidrawninegrid, Orders) of true -> 1; _ -> 0 end,
+	SaveBitmap = case lists:member(savebitmap, Orders) of true -> 1; _ -> 0 end,
+	MultiDstBlt = case lists:member(multidstblt, Orders) of true -> 1; _ -> 0 end,
+	MultiPatBlt = case lists:member(multipatblt, Orders) of true -> 1; _ -> 0 end,
+	MultiScrBlt = case lists:member(multiscrblt, Orders) of true -> 1; _ -> 0 end,
+	MultiOpaqueRect = case lists:member(multiopaquerect, Orders) of true -> 1; _ -> 0 end,
+	FastIndex = case lists:member(fastindex, Orders) of true -> 1; _ -> 0 end,
+	PolygonSC = case lists:member(polygonsc, Orders) of true -> 1; _ -> 0 end,
+	PolygonCB = case lists:member(polygoncb, Orders) of true -> 1; _ -> 0 end,
+	Polyline = case lists:member(polyline, Orders) of true -> 1; _ -> 0 end,
+	FastGlyph = case lists:member(fastglyph, Orders) of true -> 1; _ -> 0 end,
+	EllipseSC = case lists:member(ellipsesc, Orders) of true -> 1; _ -> 0 end,
+	EllipseCB = case lists:member(ellipsecb, Orders) of true -> 1; _ -> 0 end,
+	Index = case lists:member(index, Orders) of true -> 1; _ -> 0 end,
+
+	OrderSupport = <<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, 0, 0, DrawNineGrid, LineTo, MultiDrawNineGrid, 0, SaveBitmap, 0, 0, 0, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, 0, FastGlyph, EllipseSC, EllipseCB, Index, 0, 0, 0, 0>>,
+
+	SolidPatternBrushOnly = case lists:member(solid_pattern_brush_only, Orders) of true -> 1; _ -> 0 end,
+	ColorIndex = case lists:member(colorindex, Orders) of true -> 1; _ -> 0 end,
+	ZeroBoundsDeltas = case lists:member(zeroboundsdeltas, Orders) of true -> 1; _ -> 0 end,
+	NegotiateOrders = case lists:member(negotiate, Orders) of true -> 1; _ -> 0 end,
+
+	<<BaseFlags:16/big>> = <<0:8, 0:1, SolidPatternBrushOnly:1, ColorIndex:1, 0:1, ZeroBoundsDeltas:1, 0:1, NegotiateOrders:1, 0:1>>,
+
+	Inner = <<0:30/unit:8, BaseFlags:16/little, OrderSupport/binary, 0:20/unit:8>>,
+	Size = byte_size(Inner) + 4,
+	<<3:16/little, Size:16/little, Inner/binary>>;
 
 encode_tscap(#ts_cap_share{channel = Chan}) ->
 	Inner = <<Chan:16/little, 0:16>>,
@@ -349,17 +477,22 @@ decode_sharedata(Chan, Bin) ->
 						if Compressed == 1 -> [compressed]; true -> [] end,
 			Prio = case Priority of 1 -> low; 2 -> medium; 4 -> high; _ -> unknown end,
 			CompTypeAtom = case CompType of 0 -> '8k'; 1 -> '64k'; 2 -> 'rdp6'; 3 -> 'rdp61'; _ -> 'unknown' end,
-			RealSize = byte_size(Rest) + 6 + 12,
+			RealSize = byte_size(Rest),
 			if (Compressed == 1) and (CompressedLength == RealSize) ->
 				{ok, #ts_sharedata{channel = Chan, shareid = ShareId, priority = Prio, flags = FlagAtoms, comptype = CompTypeAtom, data = {PduType, Rest}}};
 			(Compressed == 0) and (Length == RealSize) ->
 				Inner = case PduType of
 					%16#02 -> decode_update(Rest);
-					_ -> Rest
+					31 -> decode_ts_sync(Rest);
+					20 -> decode_ts_control(Rest);
+					39 -> decode_ts_fontlist(Rest);
+					40 -> decode_ts_fontmap(Rest);
+					28 -> decode_ts_input(Rest);
+					_ -> {PduType, Rest}
 				end,
 				{ok, #ts_sharedata{channel = Chan, shareid = ShareId, priority = Prio, flags = FlagAtoms, data = Inner}};
 			true ->
-				{error, badlength}
+				{error, {badlength, Length, CompressedLength, RealSize}}
 			end;
 		_ ->
 			{error, badpacket}
@@ -367,7 +500,12 @@ decode_sharedata(Chan, Bin) ->
 
 encode_sharedata(#ts_sharedata{shareid = ShareId, data = Pdu, priority = Prio, comptype = CompTypeAtom, flags = FlagAtoms}) ->
 	{PduType, Inner} = case Pdu of
-		%#ts_update{} -> {16#02, encode_update(Pdu)};
+		%#ts_update{} -> {16#02, encode_ts_update(Pdu)};
+		#ts_sync{} -> {31, encode_ts_sync(Pdu)};
+		#ts_control{} -> {20, encode_ts_control(Pdu)};
+		#ts_fontlist{} -> {39, encode_ts_fontlist(Pdu)};
+		#ts_fontmap{} -> {40, encode_ts_fontmap(Pdu)};
+		#ts_update_orders{} -> {2, encode_ts_update(Pdu)};
 		{N, Data} -> {N, Data}
 	end,
 	CompType = case CompTypeAtom of '8k' -> 0; '64k' -> 1; 'rdp6' -> 2; 'rdp61' -> 3; _ -> 4 end,
@@ -380,6 +518,146 @@ encode_sharedata(#ts_sharedata{shareid = ShareId, data = Pdu, priority = Prio, c
 
 	Size = byte_size(Inner) + 6 + 12,
 	<<ShareId:32/little, 0:8, Priority:8, Size:16/little, PduType:8, Flags:4, CompType:4, Size:16/little, Inner/binary>>.
+
+decode_ts_sync(Bin) ->
+	<<1:16/little, User:16/little>> = Bin,
+	#ts_sync{user = User}.
+
+encode_ts_sync(#ts_sync{user = User}) ->
+	<<1:16/little, User:16/little>>.
+
+decode_ts_control(Bin) ->
+	<<Action:16/little, GrantId:16/little, ControlId:32/little>> = Bin,
+	ActionAtom = case Action of 1 -> request; 2 -> granted; 3 -> detach; 4 -> cooperate end,
+	#ts_control{action = ActionAtom, grantid = GrantId, controlid = ControlId}.
+
+encode_ts_control(#ts_control{action = ActionAtom, grantid = GrantId, controlid = ControlId}) ->
+	Action = case ActionAtom of request -> 1; granted -> 2; detach -> 3; cooperate -> 4 end,
+	<<Action:16/little, GrantId:16/little, ControlId:32/little>>.
+
+decode_ts_fontlist(Bin) ->
+	#ts_fontlist{}.
+
+encode_ts_fontlist(#ts_fontlist{}) ->
+	<<0:16, 0:16, 3:16/little, 50:16/little>>.
+
+decode_ts_fontmap(Bin) ->
+	#ts_fontmap{}.
+
+encode_ts_fontmap(#ts_fontmap{}) ->
+	<<0:16, 0:16, 3:16/little, 4:16/little>>.
+
+encode_ts_update(Rec) ->
+	{Type, Inner} = case Rec of
+		#ts_update_orders{} -> {0, encode_ts_update_orders(Rec)}
+	end,
+	<<Type:16/little, Inner/binary>>.
+
+ceil(X) ->
+    T = erlang:trunc(X),
+    case (X - T) of
+        Neg when Neg < 0 -> T;
+        Pos when Pos > 0 -> T + 1;
+        _ -> T
+    end.
+
+encode_ts_order_head(Type, Fields, Flags) ->
+	Standard = 1,
+	TypeChange = 1,
+	Bounds = 0,
+	Delta = case lists:member(delta, Flags) of true -> 1; _ -> 0 end,
+	ZeroBoundsDelta = 0,
+	FieldZeros = 0,
+
+	<<ControlFlags:8>> = <<FieldZeros:2, ZeroBoundsDelta:1, Delta:1, TypeChange:1, Bounds:1, 0:1, Standard:1>>,
+	FieldBits = ceil((length(Fields) + 1.0) / 8.0) * 8,
+	Shortfall = FieldBits - length(Fields),
+	FieldShort = lists:foldl(fun(Next, Bin) ->
+		<<Next:1, Bin/bitstring>>
+	end, <<>>, Fields),
+	<<FieldN:FieldBits/big>> = <<0:Shortfall, FieldShort/bitstring>>,
+
+	<<ControlFlags:8, Type:8, FieldN:FieldBits/little>>.
+
+encode_ts_order(#ts_order_opaquerect{flags = Flags, dest=[X,Y], size=[W,H], color=[R,G,B]}) ->
+	Inner = <<X:16/little-signed, Y:16/little-signed, W:16/little-signed, H:16/little-signed, R:8, G:8, B:8>>,
+	Head = encode_ts_order_head(16#0a, [1,1,1,1,1,1,1], Flags),
+	<<Head/binary, Inner/binary>>;
+encode_ts_order(#ts_order_srcblt{flags = Flags, dest = [X1,Y1], src = [X2, Y2], size = [W,H], rop = Rop}) ->
+	Inner = <<X1:16/little-signed, Y1:16/little-signed, W:16/little-signed, H:16/little-signed, Rop:8, X2:16/little, Y2:16/little>>,
+	Head = encode_ts_order_head(16#02, [1,1,1,1,1,1,1], Flags),
+	<<Head/binary, Inner/binary>>;
+encode_ts_order(#ts_order_line{start = [X1,Y1], finish = [X2,Y2], flags = Flags, rop = Rop, color = [R,G,B]}) ->
+	Inner = <<X1:16/little-signed, Y1:16/little-signed, X2:16/little-signed, Y2:16/little-signed, Rop:8, R:8, G:8, B:8>>,
+	Head = encode_ts_order_head(16#09, [0,1,1,1,1,0,1,0,0,1], Flags),
+	<<Head/binary, Inner/binary>>.
+
+encode_ts_update_orders(#ts_update_orders{orders = Orders}) ->
+	OrdersBin = lists:foldl(fun(Next, Bin) ->
+		Encode = encode_ts_order(Next),
+		<<Bin/binary, Encode/binary>>
+	end, <<>>, Orders),
+	N = length(Orders),
+	<<0:16, N:16/little, 0:16, OrdersBin/binary>>.
+
+decode_ts_inpevt(16#0000, Bin) ->
+	<<_:16, Flags:16/little, Rest/binary>> = Bin,
+	<<_:12, KanaLock:1, CapsLock:1, NumLock:1, ScrollLock:1>> = <<Flags:16/big>>,
+	FlagAtoms = if KanaLock == 1 -> [kanalock]; true -> [] end ++
+				if CapsLock == 1 -> [capslock]; true -> [] end ++
+				if NumLock == 1 -> [numlock]; true -> [] end ++
+				if ScrollLock == 1 -> [scrolllock]; true -> [] end,
+	{#ts_inpevt_sync{flags=FlagAtoms}, Rest};
+
+decode_ts_inpevt(16#0004, Bin) ->
+	<<Flags:16/little, KeyCode:16/little, _:16, Rest/binary>> = Bin,
+	<<Release:1, AlreadyDown:1, _:5, Extended:1, _:8>> = <<Flags:16/big>>,
+	Action = if Release == 1 -> up; true -> down end,
+	FlagAtoms = if AlreadyDown == 1 -> [already_down]; true -> [] end ++
+				if Extended == 1 -> [extended]; true -> [] end,
+	{#ts_inpevt_key{code = KeyCode, action = Action, flags = FlagAtoms}, Rest};
+
+decode_ts_inpevt(16#0005, Bin) ->
+	<<Flags:16/little, KeyCode:16/little, _:16, Rest/binary>> = Bin,
+	<<Release:1, _:15>> = <<Flags:16/big>>,
+	Action = if Release == 1 -> up; true -> down end,
+	{#ts_inpevt_unicode{code = KeyCode, action = Action}, Rest};
+
+decode_ts_inpevt(16#8001, Bin) ->
+	<<Flags:16/little, X:16/little, Y:16/little, Rest/binary>> = Bin,
+	<<Down:1, Button3:1, Button2:1, Button1:1, Move:1, _:1, Wheel:1, WheelNegative:1, Clicks:8>> = <<Flags:16/big>>,
+	if Wheel == 1 ->
+		SignedClicks = if WheelNegative == 1 -> (0 - Clicks); true -> Clicks end,
+		{#ts_inpevt_wheel{point = [X,Y], clicks = SignedClicks}, Rest};
+	true ->
+		Action = if Move == 1 -> move; Down == 1 -> down; true -> up end,
+		Buttons = if Button3 == 1 -> [3]; true -> [] end ++
+				  if Button2 == 1 -> [2]; true -> [] end ++
+				  if Button1 == 1 -> [1]; true -> [] end,
+		{#ts_inpevt_mouse{point = [X,Y], action = Action, buttons = Buttons}, Rest}
+	end;
+
+decode_ts_inpevt(16#8002, Bin) ->
+	<<Flags:16/little, X:16/little, Y:16/little, Rest/binary>> = Bin,
+	<<Down:1, _:13, Button5:1, Button4:1>> = <<Flags:16/big>>,
+	Action = if Down == 1 -> down; true -> up end,
+	Buttons = if Button4 == 1 -> [4]; true -> [] end ++
+			  if Button5 == 1 -> [5]; true -> [] end,
+	{#ts_inpevt_mouse{point = [X,Y], action = Action, buttons = Buttons}, Rest};
+
+decode_ts_inpevt(_, _) ->
+	error(not_implemented).
+
+decode_ts_inpevts(_, <<>>) -> [];
+decode_ts_inpevts(0, _) -> [];
+decode_ts_inpevts(N, Bin) ->
+	<<Time:32/little, Type:16/little, Rest/binary>> = Bin,
+	{Next, Rem} = decode_ts_inpevt(Type, Rest),
+	[Next | decode_ts_inpevts(N - 1, Rem)].
+
+decode_ts_input(Bin) ->
+	<<N:16/little, _:16, Evts/binary>> = Bin,
+	#ts_input{events = decode_ts_inpevts(N, Evts)}.
 
 encode_basic(Rec) ->
 	SecFlags = element(2, Rec),
