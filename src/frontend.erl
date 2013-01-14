@@ -94,7 +94,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 			{N, [1003]};
 
 		#tsud_net{channels = InChans} ->
-			{_, OutChans} = lists:foldl(fun(Chan, {N, Cs}) -> {N+1, [N|Cs]} end, {1004, []}, InChans),
+			{_, OutChans} = lists:foldl(fun(Chan, {N, Cs}) -> {N+1, Cs ++ [N]} end, {1004, []}, InChans),
 			{ok, N} = tsud:encode(#tsud_svr_net{iochannel = 1003, channels = OutChans}),
 			{N, [1003|OutChans]}
 	end,
@@ -102,6 +102,12 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	OutTsuds = <<Core/binary, Net/binary, Sec/binary>>,
 
 	{ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = OutTsuds, node = Data#data.themuser}),
+
+	{ok, DebugCr} = mcsgcc:decode_cr(Cr),
+	error_logger:info_report(["cr output: ", mcsgcc:pretty_print(DebugCr)]),
+	{ok, DebugTsuds} = tsud:decode(OutTsuds),
+	error_logger:info_report(["tsud output: ", tsud:pretty_print(DebugTsuds)]),
+
 	{ok, DtData} = x224:encode(#x224_dt{data = Cr}),
 	{ok, Packet} = tpkt:encode(DtData),
 	ok = ssl:send(SslSock, Packet),
@@ -155,7 +161,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 				capabilities = [
 					#ts_cap_share{},
 					#ts_cap_general{os=[windows, winnt]},
-					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_font{},
 					#ts_cap_order{},
 					%#ts_cap_bitmapcache{},
@@ -167,6 +173,8 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 					%#ts_cap_sound{},
 				]
 			}),
+			{ok, Da} = rdpp:decode_sharecontrol(DaPkt),
+			error_logger:info_report(["demand packet: ", rdpp:pretty_print(Da)]),
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = DaPkt}),
 
 			{next_state, rdp_capex, Data};

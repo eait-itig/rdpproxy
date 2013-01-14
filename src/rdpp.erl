@@ -240,7 +240,7 @@ decode_tscap(2, Bin) ->
 	#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height};
 
 decode_tscap(3, Bin) ->
-	<<_:30/unit:8, BaseFlags:16/little, OrderSupport:32/binary-unit:8, _/binary>> = Bin,
+	<<_TermDesc:16/unit:8, _:32, _:16, _:16, _:16, _:16, _:16, BaseFlags:16/little, OrderSupport:32/binary-unit:8, _/binary>> = Bin,
 
 	<<_:8, ExtraFlags:1, SolidPatternBrushOnly:1, ColorIndex:1, _:1, ZeroBoundsDeltas:1, _:1, NegotiateOrders:1, _:1>> = <<BaseFlags:16/big>>,
 
@@ -370,10 +370,10 @@ encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
 
 	OrderSupport = <<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, 0, 0, DrawNineGrid, LineTo, MultiDrawNineGrid, 0, SaveBitmap, 0, 0, 0, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, 0, FastGlyph, EllipseSC, EllipseCB, Index, 0, 0, 0, 0>>,
 
-	SolidPatternBrushOnly = case lists:member(solid_pattern_brush_only, Orders) of true -> 1; _ -> 0 end,
-	ColorIndex = case lists:member(colorindex, Orders) of true -> 1; _ -> 0 end,
-	ZeroBoundsDeltas = case lists:member(zeroboundsdeltas, Orders) of true -> 1; _ -> 0 end,
-	NegotiateOrders = case lists:member(negotiate, Orders) of true -> 1; _ -> 0 end,
+	SolidPatternBrushOnly = case lists:member(solid_pattern_brush_only, Flags) of true -> 1; _ -> 0 end,
+	ColorIndex = case lists:member(colorindex, Flags) of true -> 1; _ -> 0 end,
+	ZeroBoundsDeltas = case lists:member(zeroboundsdeltas, Flags) of true -> 1; _ -> 0 end,
+	NegotiateOrders = case lists:member(negotiate, Flags) of true -> 1; _ -> 0 end,
 
 	<<BaseFlags:16/big>> = <<0:8, 0:1, SolidPatternBrushOnly:1, ColorIndex:1, 0:1, ZeroBoundsDeltas:1, 0:1, NegotiateOrders:1, 0:1>>,
 
@@ -389,12 +389,12 @@ encode_tscap(#ts_cap_share{channel = Chan}) ->
 encode_tscap(#ts_cap_font{flags = Flags}) ->
 	Fontlist = case lists:member(fontlist, Flags) of true -> 1; _ -> 0 end,
 	Inner = <<Fontlist:16/little, 0:16>>,
-	Size = byte_size(Inner),% + 4,
-	<<14:16/little, Size:16/little>>;%, Inner/binary>>;
+	Size = byte_size(Inner) + 4,
+	<<14:16/little, Size:16/little, Inner/binary>>;
 
 encode_tscap(#ts_cap_pointer{flags = Flags, cache_size = CacheSize}) ->
 	Color = case lists:member(color, Flags) of true -> 1; _ -> 0 end,
-	Inner = <<Color:16/little, 0:16, CacheSize:16/little>>,
+	Inner = <<Color:16/little, 20:16/little, CacheSize:16/little>>,
 	Size = byte_size(Inner) + 4,
 	<<8:16/little, Size:16/little, Inner/binary>>;
 
@@ -418,7 +418,7 @@ encode_tscap({Type, Bin}) ->
 
 decode_ts_demand(Chan, Bin) ->
 	case Bin of
-		<<ShareId:32/little, _:16, SDLen:16/little, Len:16/little, Rest/binary>> ->
+		<<ShareId:32/little, SDLen:16/little, Len:16/little, Rest/binary>> ->
 			case Rest of
 				<<SD:SDLen/binary-unit:8, N:16/little, _:16, CapsBin/binary>> ->
 					RealLen = byte_size(CapsBin) + 4,
@@ -426,7 +426,7 @@ decode_ts_demand(Chan, Bin) ->
 						Caps = decode_tscaps(N, CapsBin),
 						{ok, #ts_demand{channel = Chan, shareid = ShareId, sourcedesc = SD, capabilities = Caps}};
 					true ->
-						{error, badlength}
+						{error, {badlength, Len, RealLen}}
 					end;
 				_ ->
 					{error, badpacket}
