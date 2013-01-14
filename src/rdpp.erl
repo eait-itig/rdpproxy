@@ -322,6 +322,14 @@ encode_tscap(#ts_cap_general{os = [Major,Minor], flags=Flags}) ->
 	Size = byte_size(Inner) + 4,
 	<<1:16/little, Size:16/little, Inner/binary>>;
 
+encode_tscap(#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize}) ->
+	Compress = case lists:member(compress, FlagAtoms) of true -> 1; _ -> 0 end,
+	Compress8k = case lists:member(compress_8k, FlagAtoms) of true -> 1; _ -> 0 end,
+	<<Flags:32/big>> = <<0:30, Compress8k:1, Compress:1>>,
+	Inner = <<Flags:32/little, ChunkSize:32/little>>,
+	Size = byte_size(Inner) + 4,
+	<<20:16/little, Size:16/little, Inner/binary>>;
+
 encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height}) ->
 	Resize = case lists:member(resize, Flags) of true -> 1; _ -> 0 end,
 	Compression = case lists:member(compression, Flags) of true -> 1; _ -> 0 end,
@@ -369,20 +377,20 @@ encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
 
 	<<BaseFlags:16/big>> = <<0:8, 0:1, SolidPatternBrushOnly:1, ColorIndex:1, 0:1, ZeroBoundsDeltas:1, 0:1, NegotiateOrders:1, 0:1>>,
 
-	Inner = <<0:30/unit:8, BaseFlags:16/little, OrderSupport/binary, 0:20/unit:8>>,
+	Inner = <<0:16/unit:8, 0:32, 1:16/little, 20:16/little, 0:16, 1:16/little, 0:16, BaseFlags:16/little, OrderSupport/binary, 16#a1, 16#06, 0:16, 0:32, 1000000:32/little, 1:16/little, 0:16, 0:16, 0:16>>,
 	Size = byte_size(Inner) + 4,
 	<<3:16/little, Size:16/little, Inner/binary>>;
 
 encode_tscap(#ts_cap_share{channel = Chan}) ->
-	Inner = <<Chan:16/little, 0:16>>,
+	Inner = <<Chan:16/little, 16#e2, 16#b5>>,
 	Size = byte_size(Inner) + 4,
 	<<9:16/little, Size:16/little, Inner/binary>>;
 
 encode_tscap(#ts_cap_font{flags = Flags}) ->
 	Fontlist = case lists:member(fontlist, Flags) of true -> 1; _ -> 0 end,
 	Inner = <<Fontlist:16/little, 0:16>>,
-	Size = byte_size(Inner) + 4,
-	<<14:16/little, Size:16/little, Inner/binary>>;
+	Size = byte_size(Inner),% + 4,
+	<<14:16/little, Size:16/little>>;%, Inner/binary>>;
 
 encode_tscap(#ts_cap_pointer{flags = Flags, cache_size = CacheSize}) ->
 	Color = case lists:member(color, Flags) of true -> 1; _ -> 0 end,
@@ -430,9 +438,9 @@ decode_ts_demand(Chan, Bin) ->
 encode_ts_demand(#ts_demand{shareid = ShareId, sourcedesc = SourceDesc, capabilities = Caps}) ->
 	N = length(Caps),
 	CapsBin = lists:foldl(fun(Next, Bin) -> NextBin = encode_tscap(Next), <<Bin/binary, NextBin/binary>> end, <<>>, Caps),
-	SDLen = byte_size(SourceDesc) + 1,
+	SDLen = byte_size(SourceDesc),
 	Sz = byte_size(CapsBin) + 4,
-	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, 0, N:16/little, 0:16, CapsBin/binary, 0:32>>.
+	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, N:16/little, 0:16, CapsBin/binary, 0:32>>.
 
 decode_ts_confirm(Chan, Bin) ->
 	case Bin of

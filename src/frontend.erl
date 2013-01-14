@@ -24,7 +24,7 @@
 start_link(Sock) ->
 	gen_fsm:start_link(?MODULE, [Sock], []).
 
--record(data, {sock, sslsock=none, backsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0, tsud_core={}}).
+-record(data, {sock, sslsock=none, backsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0, tsud_core={}, askedfor=[]}).
 
 send_dpdu(SslSock, McsPkt) ->
 	{ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -48,7 +48,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 
 	UsRef = random:uniform(1 bsl 15),
 	ThemUser = 1000 + random:uniform(1000),
-	NewData = Data#data{themref = ThemRef, usref = UsRef, themuser = ThemUser},
+	NewData = Data#data{themref = ThemRef, usref = UsRef, themuser = ThemUser, askedfor=Protos},
 	HasSsl = lists:member(ssl, Protos),
 
 	if HasSsl ->
@@ -87,21 +87,21 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	CNet = lists:keyfind(tsud_net, 1, Tsuds),
 	TCore = lists:keyfind(tsud_core, 1, Tsuds),
 
-	{ok, Core} = tsud:encode(#tsud_svr_core{requested = [ssl]}),
+	{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,4], requested = Data#data.askedfor}),
 	{Net, Chans} = case CNet of
 		false ->
 			{ok, N} = tsud:encode(#tsud_svr_net{iochannel = 1003, channels = []}),
 			{N, [1003]};
 
 		#tsud_net{channels = InChans} ->
-			{_, OutChans} = lists:foldl(fun(Chan, {N, Cs}) -> {N+1, [N|Cs]} end, {1031, []}, InChans),
+			{_, OutChans} = lists:foldl(fun(Chan, {N, Cs}) -> {N+1, [N|Cs]} end, {1004, []}, InChans),
 			{ok, N} = tsud:encode(#tsud_svr_net{iochannel = 1003, channels = OutChans}),
 			{N, [1003|OutChans]}
 	end,
 	{ok, Sec} = tsud:encode(#tsud_svr_security{method=none, level=none}),
 	OutTsuds = <<Core/binary, Net/binary, Sec/binary>>,
 
-	{ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = OutTsuds}),
+	{ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = OutTsuds, node = Data#data.themuser}),
 	{ok, DtData} = x224:encode(#x224_dt{data = Cr}),
 	{ok, Packet} = tpkt:encode(DtData),
 	ok = ssl:send(SslSock, Packet),
@@ -116,7 +116,11 @@ mcs_attach_user({mcs_pdu, #mcs_edr{}}, Data) ->
 
 mcs_attach_user({mcs_pdu, #mcs_aur{}}, #data{sslsock = SslSock} = Data) ->
 	send_dpdu(SslSock, #mcs_auc{user = Data#data.themuser, status = 'rt-successful'}),
-	{next_state, mcs_chans, Data}.
+	{next_state, mcs_chans, Data};
+
+mcs_attach_user({mcs_pdu, Pdu}, Data) ->
+	error_logger:info_report(["mcs_attach_user got: ", mcsgcc:pretty_print(Pdu)]),
+	{next_state, mcs_attach_user, Data}.
 
 mcs_chans({mcs_pdu, #mcs_cjr{user = User, channel = Chan}}, #data{sslsock = SslSock, themuser = User, waitchans = Chans, chans = All} = Data) ->
 
@@ -130,7 +134,11 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = User, channel = Chan}}, #data{sslsock = SslS
 		{next_state, rdp_clientinfo, NewData};
 	true ->
 		{next_state, mcs_chans, NewData}
-	end.
+	end;
+
+mcs_chans({mcs_pdu, #mcs_data{data = RdpData, channel = Chan} = Pdu}, #data{iochan = Chan} = Data) ->
+	error_logger:info_report(["mcs_chans got: ", mcsgcc:pretty_print(Pdu)]),
+	rdp_clientinfo({mcs_pdu, Pdu}, Data).
 
 rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_basic(RdpData) of
@@ -143,19 +151,19 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 			Core = Data#data.tsud_core,
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
 				shareid = (Data#data.themuser bsl 16) + 2,
-				sourcedesc = <<"RDPPROXY", 0>>,
+				sourcedesc = <<"RDP", 0>>,
 				capabilities = [
 					#ts_cap_share{},
-					#ts_cap_general{},
+					#ts_cap_general{os=[windows, winnt]},
 					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_font{},
 					#ts_cap_order{},
 					%#ts_cap_bitmapcache{},
 					#ts_cap_pointer{},
-					#ts_cap_input{}
+					#ts_cap_input{},
 					%#ts_cap_brush{},
 					%#ts_cap_glyphcache{},
-					%#ts_cap_vchannel{},
+					#ts_cap_vchannel{}
 					%#ts_cap_sound{},
 				]
 			}),
