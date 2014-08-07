@@ -244,7 +244,7 @@ decode_tscap(3, Bin) ->
 
 	<<_:8, ExtraFlags:1, SolidPatternBrushOnly:1, ColorIndex:1, _:1, ZeroBoundsDeltas:1, _:1, NegotiateOrders:1, _:1>> = <<BaseFlags:16/big>>,
 
-	<<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, 0, 0, DrawNineGrid, LineTo, MultiDrawNineGrid, 0, SaveBitmap, 0, 0, 0, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, 0, FastGlyph, EllipseSC, EllipseCB, Index, 0, 0, 0, _>> = OrderSupport,
+	<<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, _, _, DrawNineGrid, LineTo, MultiDrawNineGrid, _, SaveBitmap, _, _, _, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, _, FastGlyph, EllipseSC, EllipseCB, Index, _, _, _, _>> = OrderSupport,
 
 	Flags = if SolidPatternBrushOnly == 1 -> [solid_pattern_brush_only]; true -> [] end ++
 			if ColorIndex == 1 -> [colorindex]; true -> [] end ++

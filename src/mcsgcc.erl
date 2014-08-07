@@ -195,7 +195,7 @@ encode_cr(#mcs_cr{} = McsCr) ->
 							 userData = binary_to_list(CDData)},
 	{ok, CRData} = mcsp_ber:encode('Connect-Response', CR),
 
-	{ok, list_to_binary(CRData)}.
+	{ok, CRData}.
 
 encode_ci(#mcs_ci{} = McsCI) ->
 	UserData = #'UserData_SETOF'{key = {h221NonStandard, "Duca"}, value = binary_to_list(McsCI#mcs_ci.data)},
@@ -223,4 +223,4 @@ encode_ci(#mcs_ci{} = McsCI) ->
 							userData = binary_to_list(CDData)},
 	{ok, CIData} = mcsp_ber:encode('Connect-Initial', CI),
 
-	{ok, list_to_binary(CIData)}.
+	{ok, CIData}.
