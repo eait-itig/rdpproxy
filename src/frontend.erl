@@ -61,6 +61,8 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 		{ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
 		ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
+		%{ok, Backend} = backend:start_link(self(), "areole.cooperi.net", 3389),
+		%{next_state, wait_proxy, NewData#data{sslsock = SslSock, backend = Backend}};
 		case session_mgr:get(Cookie) of
 			{ok, #session{host = Host, port = Port}} ->
 				{ok, Backend} = backend:start_link(self(), "areole.cooperi.net", 3389),
@@ -156,25 +158,21 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 
 			Core = Data#data.tsud_core,
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
-				shareid = (Data#data.themuser bsl 16) + 2,
+				shareid = (Data#data.themuser bsl 4) + 2,
 				sourcedesc = <<"RDP", 0>>,
 				capabilities = [
 					#ts_cap_share{},
-					#ts_cap_general{os=[windows, winnt]},
-					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_general{},
+					#ts_cap_vchannel{},
 					#ts_cap_font{},
+					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_order{},
-					%#ts_cap_bitmapcache{},
 					#ts_cap_pointer{},
-					#ts_cap_input{},
-					%#ts_cap_brush{},
-					%#ts_cap_glyphcache{},
-					#ts_cap_vchannel{}
-					%#ts_cap_sound{},
+					#ts_cap_input{kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0}
 				]
 			}),
 			{ok, Da} = rdpp:decode_sharecontrol(DaPkt),
-			error_logger:info_report(["demand packet: ", rdpp:pretty_print(Da)]),
+			error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = DaPkt}),
 
 			{next_state, rdp_capex, Data};
@@ -275,18 +273,18 @@ clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{ssl
 						{ok, Cookie} = session_mgr:store(#session{host = "areole.cooperi.net", port = 3389}),
 						{ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
 							shareid = ShareId,
-							sessionid = 0,
-							flags = [logon],
-							username = unicode:characters_to_binary(<<"test",0>>, latin1, utf16),
-							domain = unicode:characters_to_binary(<<"COOPERI",0>>, latin1, utf16),
-							password = unicode:characters_to_binary(<<"test",0>>, latin1, utf16),
+							sessionid = 1,
+							flags = [],
+							username = unicode:characters_to_binary(<<"test",0>>, latin1, {utf16,little}),
+							domain = unicode:characters_to_binary(<<"COOPERI",0>>, latin1, {utf16,little}),
+							password = unicode:characters_to_binary(<<"test">>, latin1, {utf16,little}),
 							cookie = <<Cookie/binary, 16#0d, 16#0a>>
 						}),
 						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Redir}),
 
-						{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{}),
-						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Deact}),
-						ssl:close(SslSock),
+						%{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{}),
+						%send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Deact}),
+						%ssl:close(SslSock),
 						{next_state, clicky_highlight, Data};
 					true ->
 						{next_state, clicky_highlight, Data}
@@ -350,6 +348,35 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 handle_info({ssl, SslSock, Bin}, wait_proxy, #data{sslsock = SslSock} = Data) ->
 	wait_proxy({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, proxy, #data{sslsock = SslSock} = Data) ->
+	case tpkt:decode(Bin) of
+		{ok, Body} ->
+			case x224:decode(Body) of
+				{ok, #x224_dt{data = McsData} = Pdu} ->
+					case mcsgcc:decode(McsData) of
+						{ok, #mcs_data{data = RdpData, channel = Chan}} ->
+							case rdpp:decode_basic(RdpData) of
+								{ok, Rec} ->
+									error_logger:info_report(["frontend received rdp basic\n", rdpp:pretty_print(Rec)]);
+								_ ->
+									case rdpp:decode_sharecontrol(RdpData) of
+										{ok, Rec} ->
+											error_logger:info_report(["frontend received rdp sharecontrol\n", rdpp:pretty_print(Rec)]);
+										_ -> ok
+									end
+							end;
+						{ok, McsPkt} ->
+							error_logger:info_report(["frontend received mcs\n", mcsgcc:pretty_print(McsPkt)]);
+						Other ->
+							error_logger:info_report(["frontend received x224\n", x224:pretty_print(Pdu)])
+					end;
+				{ok, Pdu} ->
+					error_logger:info_report(["frontend received x224\n", x224:pretty_print(Pdu)]);
+				{error, _} ->
+					ok
+			end;
+		{error, Reason} ->
+			error_logger:info_report([{bad_tpkt, Reason}])
+	end,
 	proxy({data, Bin}, Data);
 
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->

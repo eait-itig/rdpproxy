@@ -20,14 +20,16 @@
 -record(ts_info, {secflags = [], codepage=0, flags = [mouse, noaudio], compression='8k', domain="", username="", password="", shell="", workdir=""}).
 -record(ts_license_vc, {secflags = []}).
 
--record(ts_cap_general, {os=[unix, native_x11], flags=[short_bitmap_hdr, autoreconnect, long_creds]}).
+-record(ts_cap_general, {os=[unix, native_x11], flags=[suppress_output, refresh_rect, short_bitmap_hdr, autoreconnect, long_creds, salted_mac]}).
 -record(ts_cap_bitmap, {bpp, flags=[compression, multirect, resize], width=1024, height=768}).
 -record(ts_cap_share, {channel=16#3ea}).
--record(ts_cap_order, {flags=[negotiate, zeroboundsdeltas, colorindex], orders=[dstblt,patblt,scrblt,memblt,lineto]}).
+-record(ts_cap_order, {flags=[negotiate, zeroboundsdeltas, colorindex], orders=[dstblt,patblt,scrblt,memblt,mem3blt,lineto,savebitmap,multidstblt,multipatblt,multiscrblt,multiopaquerect,fastindex,polygonsc,polygoncb,polyline,fastglyph,ellipsesc,ellipsecb,index]}).
 -record(ts_cap_input, {flags=[mousex, scancodes, unicode], kbd_layout=?KBDL_US, kbd_type=?KBD_IBM101, kbd_sub_type=0, kbd_fun_keys=12, ime=""}).
 -record(ts_cap_font, {flags=[fontlist]}).
--record(ts_cap_pointer, {flags=[color], cache_size=16}).
--record(ts_cap_vchannel, {flags=[], chunksize=4096}).
+-record(ts_cap_pointer, {flags=[color], cache_size=25}).
+-record(ts_cap_vchannel, {flags=[], chunksize=1600}).
+-record(ts_cap_control, {flags=[], control=never, detach=never}).
+-record(ts_cap_activation, {helpkey=0, wmkey=0, helpexkey=0}).
 
 -record(ts_demand, {channel=16#3ea, shareid=0, sourcedesc=[], capabilities=[]}).
 -record(ts_confirm, {channel=16#3ea, shareid=0, sourcedesc=[], capabilities=[]}).

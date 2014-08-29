@@ -95,6 +95,15 @@ pretty_print(ts_cap_font, N) ->
 pretty_print(ts_cap_pointer, N) ->
 	N = record_info(size, ts_cap_pointer) - 1,
 	record_info(fields, ts_cap_pointer);
+pretty_print(ts_cap_vchannel, N) ->
+	N = record_info(size, ts_cap_vchannel) - 1,
+	record_info(fields, ts_cap_vchannel);
+pretty_print(ts_cap_control, N) ->
+	N = record_info(size, ts_cap_control) - 1,
+	record_info(fields, ts_cap_control);
+pretty_print(ts_cap_activation, N) ->
+	N = record_info(size, ts_cap_activation) - 1,
+	record_info(fields, ts_cap_activation);
 pretty_print(0, _) ->
 	no.
 
@@ -178,19 +187,23 @@ encode_sharecontrol(Pdu) ->
 decode_sharecontrol(Bin) ->
 	case Bin of
 		<<Length:16/little, Type:16/little, Chan:16/little, Rest/binary>> ->
-			<<_:7, 0:1, 1:4, InnerType:4>> = <<Type:16/big>>,
-			RealLength = byte_size(Rest) + 6,
-			if RealLength == Length ->
-				case InnerType of
-					16#1 -> decode_ts_demand(Chan, Rest);
-					16#3 -> decode_ts_confirm(Chan, Rest);
-					16#6 -> decode_ts_deactivate(Chan, Rest);
-					16#7 -> decode_sharedata(Chan, Rest);
-					16#a -> decode_ts_redir(Chan, Rest);
-					_ -> {error, badpacket}
-				end;
-			true ->
-				{error, badlength}
+			case <<Type:16/big>> of
+				<<_:7, 0:1, 1:4, InnerType:4>> ->
+					RealLength = byte_size(Rest) + 6,
+					if RealLength == Length ->
+						case InnerType of
+							16#1 -> decode_ts_demand(Chan, Rest);
+							16#3 -> decode_ts_confirm(Chan, Rest);
+							16#6 -> decode_ts_deactivate(Chan, Rest);
+							16#7 -> decode_sharedata(Chan, Rest);
+							16#a -> decode_ts_redir(Chan, Rest);
+							_ -> {error, badpacket}
+						end;
+					true ->
+						{error, badlength}
+					end;
+				_ ->
+					{error, bad_type}
 			end;
 		_ ->
 			{error, badpacket}
@@ -209,7 +222,7 @@ decode_tscaps(N, Bin) ->
 	<<Data:Len/binary-unit:8, Rem/binary>> = Rest,
 	[decode_tscap(Type, Data) | decode_tscaps(N-1, Rem)].
 
-decode_tscap(1, Bin) ->
+decode_tscap(16#1, Bin) ->
 	<<MajorNum:16/little, MinorNum:16/little, _:16, _:16, _:16, ExtraFlags:16/little, _:16, _:16, _:16, RefreshRect:8, SuppressOutput:8>> = Bin,
 	<<0:5, ShortBitmapHdr:1, 0:5, SaltedMac:1, AutoRecon:1, LongCreds:1, 0:1, FastPath:1>> = <<ExtraFlags:16/big>>,
 
@@ -226,7 +239,7 @@ decode_tscap(1, Bin) ->
 
 	#ts_cap_general{os = [Major, Minor], flags = Flags};
 
-decode_tscap(2, Bin) ->
+decode_tscap(16#2, Bin) ->
 	<<Bpp:16/little, _:16, _:16, _:16, Width:16/little, Height:16/little, _:16, Resize:16/little, Compression:16/little, _:8, DrawingFlags:8, Multirect:16/little, _:16>> = Bin,
 	<<_:4, SkipAlpha:1, Subsampling:1, DynamicBpp:1, _:1>> = <<DrawingFlags:8>>,
 
@@ -239,7 +252,7 @@ decode_tscap(2, Bin) ->
 
 	#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height};
 
-decode_tscap(3, Bin) ->
+decode_tscap(16#3, Bin) ->
 	<<_TermDesc:16/unit:8, _:32, _:16, _:16, _:16, _:16, _:16, BaseFlags:16/little, OrderSupport:32/binary-unit:8, _/binary>> = Bin,
 
 	<<_:8, ExtraFlags:1, SolidPatternBrushOnly:1, ColorIndex:1, _:1, ZeroBoundsDeltas:1, _:1, NegotiateOrders:1, _:1>> = <<BaseFlags:16/big>>,
@@ -275,21 +288,33 @@ decode_tscap(3, Bin) ->
 
 	#ts_cap_order{flags = Flags, orders = Orders};
 
-decode_tscap(9, Bin) ->
-	<<Chan:16/little, _:16>> = Bin,
-	#ts_cap_share{channel = Chan};
+decode_tscap(16#5, Bin) ->
+	<<Flags:16/little, RemoteDetach:16/little, Control:16/little, Detach:16/little>> = Bin,
+	FlagAtoms = if (RemoteDetach =/= 0) -> [{remote_detach, RemoteDetach}]; true -> [] end,
+	ControlAtom = case Control of
+		2 -> never;
+		_ -> Control
+	end,
+	DetachAtom = case Detach of
+		2 -> never;
+		_ -> Detach
+	end,
+	#ts_cap_control{flags = FlagAtoms, control = ControlAtom, detach = DetachAtom};
 
-decode_tscap(14, Bin) ->
-	<<Fontlist:16/little, _:16>> = Bin,
-	Flags = if Fontlist == 1 -> [fontlist]; true -> [] end,
-	#ts_cap_font{flags = Flags};
+decode_tscap(16#7, Bin) ->
+	<<HelpKey:16/little, _:16, HelpExKey:16/little, WmKey:16/little>> = Bin,
+	#ts_cap_activation{helpkey = HelpKey, helpexkey = HelpExKey, wmkey = WmKey};
 
-decode_tscap(8, Bin) ->
+decode_tscap(16#8, Bin) ->
 	<<Color:16/little, _:16, CacheSize:16/little>> = Bin,
 	Flags = if Color == 1 -> [color]; true -> [] end,
 	#ts_cap_pointer{flags = Flags, cache_size = CacheSize};
 
-decode_tscap(13, Bin) ->
+decode_tscap(16#9, Bin) ->
+	<<Chan:16/little, _:16>> = Bin,
+	#ts_cap_share{channel = Chan};
+
+decode_tscap(16#d, Bin) ->
 	<<InputFlags:16/little, _:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin:64/binary-unit:8>> = Bin,
 	<<_:10, FastPath2:1, Unicode:1, FastPath:1, MouseX:1, _:1, Scancodes:1>> = <<InputFlags:16/big>>,
 
@@ -300,6 +325,18 @@ decode_tscap(13, Bin) ->
 			if FastPath2 == 1 -> [fastpath2]; true -> [] end,
 
 	#ts_cap_input{flags = Flags, ime = ImeBin, kbd_layout = Layout, kbd_type = Type, kbd_sub_type = SubType, kbd_fun_keys = FunKeys};
+
+decode_tscap(16#e, Bin) ->
+	<<Fontlist:16/little, _:16>> = Bin,
+	Flags = if Fontlist == 1 -> [fontlist]; true -> [] end,
+	#ts_cap_font{flags = Flags};
+
+decode_tscap(16#14, Bin) ->
+	<<Flags:32/little, ChunkSize:32/little>> = Bin,
+	<<_:30, CompressCtoS:1, CompressStoC:1>> = <<Flags:32/big>>,
+	FlagAtoms = if CompressCtoS == 1 -> [compress_cs]; true -> [] end ++
+				if CompressStoC == 1 -> [compress_sc]; true -> [] end,
+	#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize};
 
 decode_tscap(Type, Bin) ->
 	{Type, Bin}.
@@ -319,16 +356,14 @@ encode_tscap(#ts_cap_general{os = [Major,Minor], flags=Flags}) ->
 
 	<<ExtraFlags:16/big>> = <<0:5, ShortBitmapHdr:1, 0:5, SaltedMac:1, AutoRecon:1, LongCreds:1, 0:1, FastPath:1>>,
 	Inner = <<MajorNum:16/little, MinorNum:16/little, 16#200:16/little, 0:16, 0:16, ExtraFlags:16/little, 0:16, 0:16, 0:16, RefreshRect:8, SuppressOutput:8>>,
-	Size = byte_size(Inner) + 4,
-	<<1:16/little, Size:16/little, Inner/binary>>;
+	encode_tscap({16#01, Inner});
 
 encode_tscap(#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize}) ->
-	Compress = case lists:member(compress, FlagAtoms) of true -> 1; _ -> 0 end,
-	Compress8k = case lists:member(compress_8k, FlagAtoms) of true -> 1; _ -> 0 end,
-	<<Flags:32/big>> = <<0:30, Compress8k:1, Compress:1>>,
+	CompressCS = case lists:member(compress_cs, FlagAtoms) of true -> 1; _ -> 0 end,
+	CompressSC = case lists:member(compress_sc, FlagAtoms) of true -> 1; _ -> 0 end,
+	<<Flags:32/big>> = <<0:30, CompressCS:1, CompressSC:1>>,
 	Inner = <<Flags:32/little, ChunkSize:32/little>>,
-	Size = byte_size(Inner) + 4,
-	<<20:16/little, Size:16/little, Inner/binary>>;
+	encode_tscap({16#14, Inner});
 
 encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height}) ->
 	Resize = case lists:member(resize, Flags) of true -> 1; _ -> 0 end,
@@ -341,8 +376,7 @@ encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = He
 	<<DrawingFlags:8>> = <<0:4, SkipAlpha:1, Subsampling:1, DynamicBpp:1, 0:1>>,
 
 	Inner = <<Bpp:16/little, 1:16/little, 1:16/little, 1:16/little, Width:16/little, Height:16/little, 0:16, Resize:16/little, Compression:16/little, 0:8, DrawingFlags:8, Multirect:16/little, 0:16>>,
-	Size = byte_size(Inner) + 4,
-	<<2:16/little, Size:16/little, Inner/binary>>;
+	encode_tscap({16#02, Inner});
 
 encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
 	DstBlt = case lists:member(dstblt, Orders) of true -> 1; _ -> 0 end,
@@ -377,26 +411,36 @@ encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
 
 	<<BaseFlags:16/big>> = <<0:8, 0:1, SolidPatternBrushOnly:1, ColorIndex:1, 0:1, ZeroBoundsDeltas:1, 0:1, NegotiateOrders:1, 0:1>>,
 
-	Inner = <<0:16/unit:8, 0:32, 1:16/little, 20:16/little, 0:16, 1:16/little, 0:16, BaseFlags:16/little, OrderSupport/binary, 16#a1, 16#06, 0:16, 0:32, 1000000:32/little, 1:16/little, 0:16, 0:16, 0:16>>,
-	Size = byte_size(Inner) + 4,
-	<<3:16/little, Size:16/little, Inner/binary>>;
+	Inner = <<0:16/unit:8, 0:32, 1:16/little, 20:16/little, 0:16, 1:16/little, 0:16, BaseFlags:16/little, OrderSupport/binary, 0:16, 0:16, 0:32, 230400:32/little, 0:16, 0:16, 0:16, 0:16>>,
+	encode_tscap({16#03, Inner});
 
 encode_tscap(#ts_cap_share{channel = Chan}) ->
-	Inner = <<Chan:16/little, 16#e2, 16#b5>>,
-	Size = byte_size(Inner) + 4,
-	<<9:16/little, Size:16/little, Inner/binary>>;
+	Inner = <<Chan:16/little, 16#e2b5:16>>,
+	encode_tscap({16#09, Inner});
+
+encode_tscap(#ts_cap_activation{helpkey=HelpKey, helpexkey=HelpExKey, wmkey=WmKey}) ->
+	Inner = <<HelpKey:16/little, 0:16, HelpExKey:16/little, WmKey:16/little>>,
+	encode_tscap({16#07, Inner});
+
+encode_tscap(#ts_cap_control{control=ControlAtom, detach=DetachAtom}) ->
+	Control = case ControlAtom of
+		never -> 2
+	end,
+	Detach = case DetachAtom of
+		never -> 2
+	end,
+	Inner = <<0:16, 0:16, Control:16/little, Detach:16/little>>,
+	encode_tscap({16#05, Inner});
 
 encode_tscap(#ts_cap_font{flags = Flags}) ->
 	Fontlist = case lists:member(fontlist, Flags) of true -> 1; _ -> 0 end,
 	Inner = <<Fontlist:16/little, 0:16>>,
-	Size = byte_size(Inner) + 4,
-	<<14:16/little, Size:16/little, Inner/binary>>;
+	encode_tscap({16#0e, Inner});
 
 encode_tscap(#ts_cap_pointer{flags = Flags, cache_size = CacheSize}) ->
 	Color = case lists:member(color, Flags) of true -> 1; _ -> 0 end,
 	Inner = <<Color:16/little, 20:16/little, CacheSize:16/little>>,
-	Size = byte_size(Inner) + 4,
-	<<8:16/little, Size:16/little, Inner/binary>>;
+	encode_tscap({16#08, Inner});
 
 encode_tscap(#ts_cap_input{flags=Flags, kbd_layout=Layout, kbd_type=Type, kbd_sub_type=SubType, kbd_fun_keys=FunKeys, ime=Ime}) ->
 	Scancodes = case lists:member(scancodes, Flags) of true -> 1; _ -> 0 end,
@@ -409,8 +453,7 @@ encode_tscap(#ts_cap_input{flags=Flags, kbd_layout=Layout, kbd_type=Type, kbd_su
 	<<InputFlags:16/big>> = <<0:10, FastPath2:1, Unicode:1, FastPath:1, MouseX:1, 0:1, Scancodes:1>>,
 
 	Inner = <<InputFlags:16/little, 0:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin/binary>>,
-	Size = byte_size(Inner) + 4,
-	<<13:16/little, Size:16/little, Inner/binary>>;
+	encode_tscap({16#0d, Inner});
 
 encode_tscap({Type, Bin}) ->
 	Size = byte_size(Bin) + 4,
@@ -440,7 +483,7 @@ encode_ts_demand(#ts_demand{shareid = ShareId, sourcedesc = SourceDesc, capabili
 	CapsBin = lists:foldl(fun(Next, Bin) -> NextBin = encode_tscap(Next), <<Bin/binary, NextBin/binary>> end, <<>>, Caps),
 	SDLen = byte_size(SourceDesc),
 	Sz = byte_size(CapsBin) + 4,
-	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, N:16/little, 0:16, CapsBin/binary, 0:32>>.
+	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, N:16/little, 0:16, CapsBin/binary, 100:32/little>>.
 
 decode_ts_confirm(Chan, Bin) ->
 	case Bin of
@@ -468,7 +511,7 @@ decode_ts_deactivate(Chan, Bin) ->
 	{ok, #ts_deactivate{channel = Chan}}.
 
 encode_ts_deactivate(#ts_deactivate{shareid = ShareId, sourcedesc = SourceDescIn}) ->
-	SourceDesc = if is_binary(SourceDescIn) and (byte_size(SourceDescIn) > 0) -> SourceDescIn; true -> <<0,0>> end,
+	SourceDesc = if is_binary(SourceDescIn) and (byte_size(SourceDescIn) > 0) -> SourceDescIn; true -> <<0>> end,
 	Sz = byte_size(SourceDesc),
 	<<ShareId:32/little, Sz:16/little, SourceDesc/binary>>.
 
@@ -507,7 +550,7 @@ encode_ts_redir(#ts_redir{sessionid = Session, username = Username, domain = Dom
 
 	Len = byte_size(WithPassword) + 4,
 	error_logger:info_report([{redir_flags, RedirFlags}, {len, Len}]),
-	<<0:16, 16#0400:16/little, Len:16/little, WithPassword/binary>>.
+	<<0:16, 16#0400:16/little, Len:16/little, WithPassword/binary, 0:9/unit:8>>.
 
 decode_sharedata(Chan, Bin) ->
 	case Bin of

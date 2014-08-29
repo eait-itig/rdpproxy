@@ -101,8 +101,37 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 			{next_state, State, Data}
 	end;
 
-handle_info({ssl, SslSock, Bin}, proxy, #data{sslsock = SslSock} = Data) ->
-	proxy({data, Bin}, Data);
+handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data) ->
+	case tpkt:decode(Bin) of
+		{ok, Body} ->
+			case x224:decode(Body) of
+				{ok, #x224_dt{data = McsData} = Pdu} ->
+					case mcsgcc:decode(McsData) of
+						{ok, #mcs_srv_data{data = RdpData, channel = Chan}} ->
+							case rdpp:decode_basic(RdpData) of
+								{ok, Rec} ->
+									error_logger:info_report(["backend received rdp basic\n", rdpp:pretty_print(Rec)]);
+								_ ->
+									case rdpp:decode_sharecontrol(RdpData) of
+										{ok, Rec} ->
+											error_logger:info_report(["backend received rdp sharecontrol\n", rdpp:pretty_print(Rec)]);
+										_ -> ok
+									end
+							end;
+						{ok, McsPkt} ->
+							error_logger:info_report(["backend received mcs\n", mcsgcc:pretty_print(McsPkt)]);
+						Other ->
+							error_logger:info_report(["backend received x224\n", x224:pretty_print(Pdu)])
+					end;
+				{ok, Pdu} ->
+					error_logger:info_report(["backend received x224\n", x224:pretty_print(Pdu)]);
+				{error, _} ->
+					ok
+			end;
+		{error, Reason} ->
+			error_logger:info_report([{bad_tpkt, Reason}])
+	end,
+	?MODULE:State({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
 	handle_info({tcp, Sock, Bin}, State, Data);
 
