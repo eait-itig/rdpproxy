@@ -18,10 +18,12 @@ encode(Binary) ->
 -spec decode(Binary :: binary()) -> {ok, Body :: binary()} | {error, term()}.
 decode(Binary) ->
 	case Binary of
-		<<3, 0, Length:16/big, Body/binary>> ->
-			RealLength = byte_size(Body) + 4,
-			if Length == RealLength ->
-				{ok, Body};
+		<<3, 0, Length:16/big, Rest/binary>> ->
+			RealLength = Length - 4,
+			RemLength = byte_size(Rest),
+			if RealLength =< RemLength ->
+				<<Body:RealLength/binary, Rem/binary>> = Rest,
+				{ok, Body, Rem};
 			true ->
 				{error, bad_length}
 			end;

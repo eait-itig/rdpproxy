@@ -88,7 +88,11 @@ proxy({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = SslSock, fron
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 	error_logger:info_report([{backend_recv, Bin}]),
 	case tpkt:decode(Bin) of
-		{ok, Body} ->
+		{ok, Body, Rem} ->
+			case byte_size(Rem) of
+				N when N > 0 -> self() ! {tcp, Sock, Rem};
+				_ -> ok
+			end,
 			case x224:decode(Body) of
 				{ok, Pdu} ->
 					error_logger:info_report(["backend received\n", x224:pretty_print(Pdu)]),
@@ -103,7 +107,7 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 
 handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data) ->
 	case tpkt:decode(Bin) of
-		{ok, Body} ->
+		{ok, Body, _Rem} ->
 			case x224:decode(Body) of
 				{ok, #x224_dt{data = McsData} = Pdu} ->
 					case mcsgcc:decode(McsData) of

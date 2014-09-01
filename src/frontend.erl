@@ -89,7 +89,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	CNet = lists:keyfind(tsud_net, 1, Tsuds),
 	TCore = lists:keyfind(tsud_core, 1, Tsuds),
 
-	{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,4], requested = Data#data.askedfor}),
+	{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,1], requested = Data#data.askedfor}),
 	{Net, Chans} = case CNet of
 		false ->
 			{ok, N} = tsud:encode(#tsud_svr_net{iochannel = 1003, channels = []}),
@@ -101,7 +101,9 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 			{N, [1003|OutChans]}
 	end,
 	{ok, Sec} = tsud:encode(#tsud_svr_security{method=none, level=none}),
-	OutTsuds = <<Core/binary, Net/binary, Sec/binary>>,
+	{ok, MsgChan} = tsud:encode(#tsud_svr_msgchannel{channel = 1002}),
+	{ok, Multitrans} = tsud:encode(#tsud_svr_multitransport{}),
+	OutTsuds = <<Core/binary, Net/binary, Sec/binary, MsgChan/binary, Multitrans/binary>>,
 
 	{ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = OutTsuds, node = Data#data.themuser}),
 
@@ -324,7 +326,11 @@ proxy({backend_data, Backend, Bin}, #data{sslsock = SslSock, backend = Backend} 
 %% @private
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 	case tpkt:decode(Bin) of
-		{ok, Body} ->
+		{ok, Body, Rem} ->
+			case byte_size(Rem) of
+				N when N > 0 -> self() ! {tcp, Sock, Rem};
+				_ -> ok
+			end,
 			case x224:decode(Body) of
 				{ok, #x224_dt{data = McsData} = Pdu} ->
 					case mcsgcc:decode(McsData) of
@@ -341,7 +347,7 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 					?MODULE:State({data, Body}, Data)
 			end;
 		{error, Reason} ->
-			error_logger:info_report([{bad_tpkt, Reason}]),
+			error_logger:info_report([{tcp_bad_tpkt, Reason, Bin}]),
 			{next_state, State, Data}
 	end;
 
@@ -349,7 +355,7 @@ handle_info({ssl, SslSock, Bin}, wait_proxy, #data{sslsock = SslSock} = Data) ->
 	wait_proxy({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, proxy, #data{sslsock = SslSock} = Data) ->
 	case tpkt:decode(Bin) of
-		{ok, Body} ->
+		{ok, Body, _Rem} ->
 			case x224:decode(Body) of
 				{ok, #x224_dt{data = McsData} = Pdu} ->
 					case mcsgcc:decode(McsData) of

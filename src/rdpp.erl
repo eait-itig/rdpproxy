@@ -16,94 +16,43 @@
 -export([encode_basic/1, encode_sharecontrol/1]).
 -export([pretty_print/1]).
 
+-define(pp(Rec),
+pretty_print(Rec, N) ->
+	N = record_info(size, Rec) - 1,
+	record_info(fields, Rec)).
+
 pretty_print(Record) ->
 	io_lib_pretty:print(Record, fun pretty_print/2).
-pretty_print(ts_security, N) ->
-	N = record_info(size, ts_security) - 1,
-	record_info(fields, ts_security);
-pretty_print(ts_info, N) ->
-	N = record_info(size, ts_info) - 1,
-	record_info(fields, ts_info);
-pretty_print(ts_demand, N) ->
-	N = record_info(size, ts_demand) - 1,
-	record_info(fields, ts_demand);
-pretty_print(ts_confirm, N) ->
-	N = record_info(size, ts_confirm) - 1,
-	record_info(fields, ts_confirm);
-pretty_print(ts_redir, N) ->
-	N = record_info(size, ts_redir) - 1,
-	record_info(fields, ts_redir);
-pretty_print(ts_deactivate, N) ->
-	N = record_info(size, ts_deactivate) - 1,
-	record_info(fields, ts_deactivate);
-pretty_print(ts_sharedata, N) ->
-	N = record_info(size, ts_sharedata) - 1,
-	record_info(fields, ts_sharedata);
-pretty_print(ts_license_vc, N) ->
-	N = record_info(size, ts_license_vc) - 1,
-	record_info(fields, ts_license_vc);
-pretty_print(ts_sync, N) ->
-	N = record_info(size, ts_sync) - 1,
-	record_info(fields, ts_sync);
-pretty_print(ts_control, N) ->
-	N = record_info(size, ts_control) - 1,
-	record_info(fields, ts_control);
-pretty_print(ts_fontlist, N) ->
-	N = record_info(size, ts_fontlist) - 1,
-	record_info(fields, ts_fontlist);
-pretty_print(ts_fontmap, N) ->
-	N = record_info(size, ts_fontmap) - 1,
-	record_info(fields, ts_fontmap);
-pretty_print(ts_input, N) ->
-	N = record_info(size, ts_input) - 1,
-	record_info(fields, ts_input);
+?pp(ts_security);
+?pp(ts_info);
+?pp(ts_demand);
+?pp(ts_confirm);
+?pp(ts_redir);
+?pp(ts_deactivate);
+?pp(ts_sharedata);
+?pp(ts_license_vc);
+?pp(ts_sync);
+?pp(ts_control);
+?pp(ts_fontlist);
+?pp(ts_fontmap);
+?pp(ts_input);
 
-pretty_print(ts_inpevt_sync, N) ->
-	N = record_info(size, ts_inpevt_sync) - 1,
-	record_info(fields, ts_inpevt_sync);
-pretty_print(ts_inpevt_key, N) ->
-	N = record_info(size, ts_inpevt_key) - 1,
-	record_info(fields, ts_inpevt_key);
-pretty_print(ts_inpevt_unicode, N) ->
-	N = record_info(size, ts_inpevt_unicode) - 1,
-	record_info(fields, ts_inpevt_unicode);
-pretty_print(ts_inpevt_mouse, N) ->
-	N = record_info(size, ts_inpevt_mouse) - 1,
-	record_info(fields, ts_inpevt_mouse);
-pretty_print(ts_inpevt_wheel, N) ->
-	N = record_info(size, ts_inpevt_wheel) - 1,
-	record_info(fields, ts_inpevt_wheel);
+?pp(ts_inpevt_sync);
+?pp(ts_inpevt_key);
+?pp(ts_inpevt_unicode);
+?pp(ts_inpevt_mouse);
+?pp(ts_inpevt_wheel);
 
-pretty_print(ts_cap_general, N) ->
-	N = record_info(size, ts_cap_general) - 1,
-	record_info(fields, ts_cap_general);
-pretty_print(ts_cap_bitmap, N) ->
-	N = record_info(size, ts_cap_bitmap) - 1,
-	record_info(fields, ts_cap_bitmap);
-pretty_print(ts_cap_share, N) ->
-	N = record_info(size, ts_cap_share) - 1,
-	record_info(fields, ts_cap_share);
-pretty_print(ts_cap_order, N) ->
-	N = record_info(size, ts_cap_order) - 1,
-	record_info(fields, ts_cap_order);
-pretty_print(ts_cap_input, N) ->
-	N = record_info(size, ts_cap_input) - 1,
-	record_info(fields, ts_cap_input);
-pretty_print(ts_cap_font, N) ->
-	N = record_info(size, ts_cap_font) - 1,
-	record_info(fields, ts_cap_font);
-pretty_print(ts_cap_pointer, N) ->
-	N = record_info(size, ts_cap_pointer) - 1,
-	record_info(fields, ts_cap_pointer);
-pretty_print(ts_cap_vchannel, N) ->
-	N = record_info(size, ts_cap_vchannel) - 1,
-	record_info(fields, ts_cap_vchannel);
-pretty_print(ts_cap_control, N) ->
-	N = record_info(size, ts_cap_control) - 1,
-	record_info(fields, ts_cap_control);
-pretty_print(ts_cap_activation, N) ->
-	N = record_info(size, ts_cap_activation) - 1,
-	record_info(fields, ts_cap_activation);
+?pp(ts_cap_general);
+?pp(ts_cap_bitmap);
+?pp(ts_cap_share);
+?pp(ts_cap_order);
+?pp(ts_cap_input);
+?pp(ts_cap_font);
+?pp(ts_cap_pointer);
+?pp(ts_cap_vchannel);
+?pp(ts_cap_control);
+?pp(ts_cap_activation);
 pretty_print(0, _) ->
 	no.
 
@@ -215,6 +164,10 @@ zero_pad(Bin, Len) ->
 	Rem = Len - byte_size(Bin),
 	<<Bin/binary, 0:Rem/unit:8>>.
 
+zerobin_to_string(Bin) ->
+	[First|_] = binary:split(Bin, <<0>>),
+	binary_to_list(First).
+
 decode_tscaps(0, _) -> [];
 decode_tscaps(N, Bin) ->
 	<<Type:16/little, Size:16/little, Rest/binary>> = Bin,
@@ -224,7 +177,7 @@ decode_tscaps(N, Bin) ->
 
 decode_tscap(16#1, Bin) ->
 	<<MajorNum:16/little, MinorNum:16/little, _:16, _:16, _:16, ExtraFlags:16/little, _:16, _:16, _:16, RefreshRect:8, SuppressOutput:8>> = Bin,
-	<<0:5, ShortBitmapHdr:1, 0:5, SaltedMac:1, AutoRecon:1, LongCreds:1, 0:1, FastPath:1>> = <<ExtraFlags:16/big>>,
+	<<_:5, ShortBitmapHdr:1, _:5, SaltedMac:1, AutoRecon:1, LongCreds:1, _:1, FastPath:1>> = <<ExtraFlags:16/big>>,
 
 	Major = case MajorNum of 1 -> windows; 2 -> os2; 3 -> macintosh; 4 -> unix; _ -> other end,
 	Minor = case MinorNum of 1 -> win31x; 2 -> win95; 3 -> winnt; 4 -> os2v21; 5 -> powerpc; 6 -> macintosh; 7 -> native_x11; 8 -> pseudo_x11; _ -> other end,
