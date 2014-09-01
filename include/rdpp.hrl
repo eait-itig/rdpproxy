@@ -22,7 +22,7 @@
 
 -record(ts_cap_general, {os=[unix, native_x11], flags=[suppress_output, refresh_rect, short_bitmap_hdr, autoreconnect, long_creds, salted_mac]}).
 -record(ts_cap_bitmap, {bpp, flags=[compression, multirect, resize], width=1024, height=768}).
--record(ts_cap_share, {channel=16#3eb}).
+-record(ts_cap_share, {channel=16#3ea}).
 -record(ts_cap_order, {flags=[negotiate, zeroboundsdeltas, colorindex], orders=[dstblt,patblt,scrblt,memblt,mem3blt,lineto,savebitmap,multidstblt,multipatblt,multiscrblt,multiopaquerect,fastindex,polygonsc,polygoncb,polyline,fastglyph,ellipsesc,ellipsecb,index]}).
 -record(ts_cap_input, {flags=[mousex, scancodes, unicode], kbd_layout=?KBDL_US, kbd_type=?KBD_IBM101, kbd_sub_type=0, kbd_fun_keys=12, ime=""}).
 -record(ts_cap_font, {flags=[fontlist]}).

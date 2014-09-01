@@ -89,7 +89,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	CNet = lists:keyfind(tsud_net, 1, Tsuds),
 	TCore = lists:keyfind(tsud_core, 1, Tsuds),
 
-	{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,1], requested = Data#data.askedfor}),
+	{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,4], requested = Data#data.askedfor}),
 	{Net, Chans} = case CNet of
 		false ->
 			{ok, N} = tsud:encode(#tsud_svr_net{iochannel = 1003, channels = []}),
@@ -164,13 +164,13 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 				sourcedesc = <<"RDP", 0>>,
 				capabilities = [
 					#ts_cap_share{},
-					#ts_cap_general{},
+					#ts_cap_general{flags = [suppress_output, refresh_rect, short_bitmap_hdr, autoreconnect, long_creds, salted_mac, fastpath]},
 					#ts_cap_vchannel{},
 					#ts_cap_font{},
 					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_order{},
 					#ts_cap_pointer{},
-					#ts_cap_input{kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0}
+					#ts_cap_input{flags = [mousex, scancodes, unicode, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0}
 				]
 			}),
 			{ok, Da} = rdpp:decode_sharecontrol(DaPkt),
@@ -234,8 +234,8 @@ init_finalize({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsoc
 clicky({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
 		{ok, #ts_sharedata{shareid = ShareId, data = #ts_input{events = Evts}}} ->
-			case Evts of
-				[#ts_inpevt_mouse{action=move, point=[X,Y]}] ->
+			case lists:last(Evts) of
+				#ts_inpevt_mouse{action=move, point={X,Y}} ->
 					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
 								#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,230,230]}
@@ -259,8 +259,8 @@ clicky({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = Ssl
 clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
 		{ok, #ts_sharedata{shareid = ShareId, data = #ts_input{events = Evts}}} ->
-			case Evts of
-				[#ts_inpevt_mouse{action=move, point=[X,Y]}] ->
+			case lists:last(Evts) of
+				#ts_inpevt_mouse{action=move, point={X,Y}} ->
 					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 						{next_state, clicky_highlight, Data};
 					true ->
@@ -270,7 +270,7 @@ clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{ssl
 						send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
 						{next_state, clicky, Data}
 					end;
-				[#ts_inpevt_mouse{action=down, buttons=[1], point=[X,Y]}] ->
+				#ts_inpevt_mouse{action=down, buttons=[1], point={X,Y}} ->
 					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 						{ok, Cookie} = session_mgr:store(#session{host = "areole.cooperi.net", port = 3389}),
 						{ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
@@ -323,33 +323,50 @@ proxy({backend_data, Backend, Bin}, #data{sslsock = SslSock, backend = Backend} 
 	ssl:send(SslSock, Bin),
 	{next_state, proxy, Data}.
 
+queue_remainder(Sock, Bin) when byte_size(Bin) > 0 ->
+	self() ! {tcp, Sock, Bin};
+queue_remainder(_, _) -> ok.
+
 %% @private
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
-	case tpkt:decode(Bin) of
-		{ok, Body, Rem} ->
-			case byte_size(Rem) of
-				N when N > 0 -> self() ! {tcp, Sock, Rem};
-				_ -> ok
-			end,
+	maybe([
+		fun() ->
+			case fastpath:decode_input(Bin) of
+				{ok, Pdu, Rem} ->
+					queue_remainder(Sock, Rem),
+					{return, ?MODULE:State({fp_pdu, Pdu})};
+				{error, _} ->
+					{continue, []}
+			end
+		end,
+		fun() ->
+			case tpkt:decode(Bin) of
+				{ok, Body, Rem} ->
+					queue_remainder(Sock, Rem),
+					{continue, [Body]};
+				{error, Reason} ->
+					{return, error_logger:info_report([{tcp_bad_pkt, Reason, Bin}])}
+			end
+		end,
+		fun(Body) ->
 			case x224:decode(Body) of
 				{ok, #x224_dt{data = McsData} = Pdu} ->
-					case mcsgcc:decode(McsData) of
-						{ok, McsPkt} ->
-							?MODULE:State({mcs_pdu, McsPkt}, Data);
-						Other ->
-							error_logger:info_report([{failed_mcsgcc, Other}]),
-							?MODULE:State({x224_pdu, Pdu}, Data)
-					end;
+					{continue, [Pdu, McsData]};
 				{ok, Pdu} ->
-					error_logger:info_report(["frontend rx x224: ", x224:pretty_print(Pdu)]),
-					?MODULE:State({x224_pdu, Pdu}, Data);
+					{return, ?MODULE:State({x224_pdu, Pdu}, Data)};
 				{error, _} ->
-					?MODULE:State({data, Body}, Data)
-			end;
-		{error, Reason} ->
-			error_logger:info_report([{tcp_bad_tpkt, Reason, Bin}]),
-			{next_state, State, Data}
-	end;
+					{return, ?MODULE:State({data, Body}, Data)}
+			end
+		end,
+		fun(Pdu, McsData) ->
+			case mcsgcc:decode(McsData) of
+				{ok, McsPkt} ->
+					{return, ?MODULE:State({mcs_pdu, McsPkt}, Data)};
+				_ ->
+					{return, ?MODULE:State({x224_pdu, Pdu}, Data)}
+			end
+		end
+	], []);
 
 handle_info({ssl, SslSock, Bin}, wait_proxy, #data{sslsock = SslSock} = Data) ->
 	wait_proxy({data, Bin}, Data);
@@ -403,3 +420,12 @@ terminate(_Reason, _State, _Data) ->
 % default handler
 code_change(_OldVsn, State, _Data, _Extra) ->
 	{ok, State}.
+
+maybe([], Args) -> error(no_return);
+maybe([Fun | Rest], Args) ->
+	case apply(Fun, Args) of
+		{continue, NewArgs} ->
+			maybe(Rest, NewArgs);
+		{return, Value} ->
+			Value
+	end.

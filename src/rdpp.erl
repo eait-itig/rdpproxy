@@ -280,9 +280,12 @@ decode_tscap(16#d, Bin) ->
 	#ts_cap_input{flags = Flags, ime = ImeBin, kbd_layout = Layout, kbd_type = Type, kbd_sub_type = SubType, kbd_fun_keys = FunKeys};
 
 decode_tscap(16#e, Bin) ->
-	<<Fontlist:16/little, _:16>> = Bin,
-	Flags = if Fontlist == 1 -> [fontlist]; true -> [] end,
-	#ts_cap_font{flags = Flags};
+	case Bin of
+		<<>> -> #ts_cap_font{};
+		<<Fontlist:16/little, _:16>> ->
+			Flags = if Fontlist == 1 -> [fontlist]; true -> [] end,
+			#ts_cap_font{flags = Flags}
+	end;
 
 decode_tscap(16#14, Bin) ->
 	<<Flags:32/little, ChunkSize:32/little>> = Bin,
@@ -665,13 +668,13 @@ decode_ts_inpevt(16#8001, Bin) ->
 	<<Down:1, Button3:1, Button2:1, Button1:1, Move:1, _:1, Wheel:1, WheelNegative:1, Clicks:8>> = <<Flags:16/big>>,
 	if Wheel == 1 ->
 		SignedClicks = if WheelNegative == 1 -> (0 - Clicks); true -> Clicks end,
-		{#ts_inpevt_wheel{point = [X,Y], clicks = SignedClicks}, Rest};
+		{#ts_inpevt_wheel{point = {X,Y}, clicks = SignedClicks}, Rest};
 	true ->
 		Action = if Move == 1 -> move; Down == 1 -> down; true -> up end,
 		Buttons = if Button3 == 1 -> [3]; true -> [] end ++
 				  if Button2 == 1 -> [2]; true -> [] end ++
 				  if Button1 == 1 -> [1]; true -> [] end,
-		{#ts_inpevt_mouse{point = [X,Y], action = Action, buttons = Buttons}, Rest}
+		{#ts_inpevt_mouse{point = {X,Y}, action = Action, buttons = Buttons}, Rest}
 	end;
 
 decode_ts_inpevt(16#8002, Bin) ->
@@ -680,7 +683,7 @@ decode_ts_inpevt(16#8002, Bin) ->
 	Action = if Down == 1 -> down; true -> up end,
 	Buttons = if Button4 == 1 -> [4]; true -> [] end ++
 			  if Button5 == 1 -> [5]; true -> [] end,
-	{#ts_inpevt_mouse{point = [X,Y], action = Action, buttons = Buttons}, Rest};
+	{#ts_inpevt_mouse{point = {X,Y}, action = Action, buttons = Buttons}, Rest};
 
 decode_ts_inpevt(_, _) ->
 	error(not_implemented).
