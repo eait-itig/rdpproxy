@@ -520,7 +520,7 @@ decode_sharedata(Chan, Bin) ->
 			RealSize = byte_size(Rest),
 			if (Compressed == 1) and (CompressedLength == RealSize) ->
 				{ok, #ts_sharedata{channel = Chan, shareid = ShareId, priority = Prio, flags = FlagAtoms, comptype = CompTypeAtom, data = {PduType, Rest}}};
-			(Compressed == 0) and (Length == RealSize) ->
+			(Compressed == 0) -> %and (Length == RealSize) ->
 				Inner = case PduType of
 					%16#02 -> decode_update(Rest);
 					31 -> decode_ts_sync(Rest);

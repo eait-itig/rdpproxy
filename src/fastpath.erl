@@ -48,6 +48,13 @@ decode_inp_events(<<Code:3, Flags:5, Rest/binary>>) ->
 			[#fp_inp_scancode{flags = FlagAtoms, action = Action, code = ScanCode} | decode_inp_events(Rem)];
 		?FP_INP_MOUSEX ->
 			<<PointerFlags:16/little, X:16/little, Y:16/little, Rem/binary>> = Rest,
+			<<Down:1, _:13, Button5:1, Button4:1>> = <<PointerFlags:16/big>>,
+			Action = if Down == 1 -> down; true -> up end,
+			Buttons = if Button4 == 1 -> [4]; true -> [] end ++
+					  if Button5 == 1 -> [5]; true -> [] end,
+			[#fp_inp_mouse{point = {X,Y}, action = Action, buttons = Buttons} | decode_inp_events(Rem)];
+		?FP_INP_MOUSE ->
+			<<PointerFlags:16/little, X:16/little, Y:16/little, Rem/binary>> = Rest,
 			<<Down:1, Button3:1, Button2:1, Button1:1, Move:1, _:1, Wheel:1, WheelNegative:1, Clicks:8>> = <<PointerFlags:16/big>>,
 			if Wheel == 1 ->
 				SignedClicks = if WheelNegative == 1 -> (0 - Clicks); true -> Clicks end,

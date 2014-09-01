@@ -15,6 +15,7 @@
 -include("tsud.hrl").
 -include("session.hrl").
 -include("rdpp.hrl").
+-include("fastpath.hrl").
 
 -export([start_link/1]).
 -export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, clicky/2, clicky_highlight/2, proxy/2, wait_proxy/2]).
@@ -24,7 +25,7 @@
 start_link(Sock) ->
 	gen_fsm:start_link(?MODULE, [Sock], []).
 
--record(data, {sock, sslsock=none, backsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0, tsud_core={}, askedfor=[]}).
+-record(data, {sock, sslsock=none, backsock=none, themref=0, themuser=0, usref=0, backend=none, queue=[], waitchans=[], chans=[], iochan=0, tsud_core={}, askedfor=[], shareid=0}).
 
 send_dpdu(SslSock, McsPkt) ->
 	{ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -159,8 +160,9 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = LicData}),
 
 			Core = Data#data.tsud_core,
+			ShareId = (Data#data.themuser bsl 4) + 2,
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
-				shareid = (Data#data.themuser bsl 4) + 2,
+				shareid = ShareId,
 				sourcedesc = <<"RDP", 0>>,
 				capabilities = [
 					#ts_cap_share{},
@@ -177,7 +179,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 			error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
 			send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = DaPkt}),
 
-			{next_state, rdp_capex, Data};
+			{next_state, rdp_capex, Data#data{shareid = ShareId}};
 		{ok, RdpPkt} ->
 			error_logger:info_report(["rdp packet: ", rdpp:pretty_print(RdpPkt)]),
 			{next_state, rdp_clientinfo, Data};
@@ -231,6 +233,22 @@ init_finalize({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsoc
 			{stop, Other, Data}
 	end.
 
+clicky({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, iochan = Chan, shareid = ShareId} = Data) ->
+	case lists:last(Evts) of
+		#fp_inp_mouse{action=move, point={X,Y}} ->
+			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
+				{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
+						#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,230,230]}
+					]}}),
+				send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
+				{next_state, clicky_highlight, Data};
+			true ->
+				{next_state, clicky, Data}
+			end;
+		_ ->
+			{next_state, clicky, Data}
+	end;
+
 clicky({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
 		{ok, #ts_sharedata{shareid = ShareId, data = #ts_input{events = Evts}}} ->
@@ -255,6 +273,43 @@ clicky({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = Ssl
 		Other ->
 			{stop, Other, Data}
 	end.
+
+clicky_highlight({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, iochan = Chan, shareid = ShareId} = Data) ->
+	case lists:last(Evts) of
+		#fp_inp_mouse{action=move, point={X,Y}} ->
+			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
+				{next_state, clicky_highlight, Data};
+			true ->
+				{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{shareid = ShareId, data = #ts_update_orders{orders = [
+						#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]}
+					]}}),
+				send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Updates}),
+				{next_state, clicky, Data}
+			end;
+		#fp_inp_mouse{action=down, buttons=[1], point={X,Y}} ->
+			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
+				{ok, Cookie} = session_mgr:store(#session{host = "areole.cooperi.net", port = 3389}),
+				{ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
+					shareid = ShareId,
+					sessionid = 1,
+					flags = [],
+					username = unicode:characters_to_binary(<<"test",0>>, latin1, {utf16,little}),
+					domain = unicode:characters_to_binary(<<"COOPERI",0>>, latin1, {utf16,little}),
+					password = unicode:characters_to_binary(<<"test">>, latin1, {utf16,little}),
+					cookie = <<Cookie/binary, 16#0d, 16#0a>>
+				}),
+				send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Redir}),
+
+				{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{}),
+				send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Deact}),
+				ssl:close(SslSock),
+				{next_state, clicky_highlight, Data};
+			true ->
+				{next_state, clicky_highlight, Data}
+			end;
+		_ ->
+			{next_state, clicky_highlight, Data}
+	end;
 
 clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
@@ -286,7 +341,7 @@ clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{ssl
 
 						%{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{}),
 						%send_dpdu(SslSock, #mcs_srv_data{channel = Chan, data = Deact}),
-						%ssl:close(SslSock),
+						ssl:close(SslSock),
 						{next_state, clicky_highlight, Data};
 					true ->
 						{next_state, clicky_highlight, Data}
@@ -334,7 +389,7 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 			case fastpath:decode_input(Bin) of
 				{ok, Pdu, Rem} ->
 					queue_remainder(Sock, Rem),
-					{return, ?MODULE:State({fp_pdu, Pdu})};
+					{return, ?MODULE:State({fp_pdu, Pdu}, Data)};
 				{error, _} ->
 					{continue, []}
 			end
