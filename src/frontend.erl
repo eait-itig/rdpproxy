@@ -280,7 +280,7 @@ clicky({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = Ssl
 			end;
 		{ok, #ts_sharedata{} = SD} ->
 			error_logger:info_report(["clicky: ", rdpp:pretty_print(SD)]),
-			{next_state, init_finalize, Data};
+			{next_state, clicky, Data};
 
 		Other ->
 			{stop, Other, Data}
@@ -363,8 +363,8 @@ clicky_highlight({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{ssl
 			end;
 
 		{ok, #ts_sharedata{} = SD} ->
-			error_logger:info_report(["clicky: ", rdpp:pretty_print(SD)]),
-			{next_state, init_finalize, Data};
+			error_logger:info_report(["clicky highlight: ", rdpp:pretty_print(SD)]),
+			{next_state, clicky_highlight, Data};
 
 		Other ->
 			{stop, Other, Data}
