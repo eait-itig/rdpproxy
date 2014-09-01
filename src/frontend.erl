@@ -49,6 +49,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock} = 
 
 	UsRef = random:uniform(1 bsl 15),
 	ThemUser = 1000 + random:uniform(1000),
+	error_logger:info_report([{them_ref, ThemRef}, {us_ref, UsRef}, {them_user, ThemUser}]),
 	NewData = Data#data{themref = ThemRef, usref = UsRef, themuser = ThemUser, askedfor=Protos},
 	HasSsl = lists:member(ssl, Protos),
 
@@ -89,6 +90,8 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 	error_logger:info_report(["tsuds: ", tsud:pretty_print(Tsuds)]),
 	CNet = lists:keyfind(tsud_net, 1, Tsuds),
 	TCore = lists:keyfind(tsud_core, 1, Tsuds),
+	CMsgChan = lists:keyfind(tsud_msgchannel, 1, Tsuds),
+	CMultitrans = lists:keyfind(tsud_multitransport, 1, Tsuds),
 
 	{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,4], requested = Data#data.askedfor}),
 	{Net, Chans} = case CNet of
@@ -102,16 +105,22 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data) ->
 			{N, [1003|OutChans]}
 	end,
 	{ok, Sec} = tsud:encode(#tsud_svr_security{method=none, level=none}),
-	{ok, MsgChan} = tsud:encode(#tsud_svr_msgchannel{channel = 1002}),
-	{ok, Multitrans} = tsud:encode(#tsud_svr_multitransport{}),
+	{ok, MsgChan} = case CMsgChan of
+		false -> {ok, <<>>};
+		_ -> tsud:encode(#tsud_svr_msgchannel{channel = 1002})
+	end,
+	{ok, Multitrans} = case CMultitrans of
+		false -> {ok, <<>>};
+		_ -> tsud:encode(#tsud_svr_multitransport{})
+	end,
 	OutTsuds = <<Core/binary, Net/binary, Sec/binary, MsgChan/binary, Multitrans/binary>>,
 
 	{ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = OutTsuds, node = Data#data.themuser}),
 
 	{ok, DebugCr} = mcsgcc:decode_cr(Cr),
-	error_logger:info_report(["cr output: ", mcsgcc:pretty_print(DebugCr)]),
 	{ok, DebugTsuds} = tsud:decode(OutTsuds),
 	error_logger:info_report(["tsud output: ", tsud:pretty_print(DebugTsuds)]),
+	error_logger:info_report(["cr output: ", mcsgcc:pretty_print(DebugCr)]),
 
 	{ok, DtData} = x224:encode(#x224_dt{data = Cr}),
 	{ok, Packet} = tpkt:encode(DtData),
@@ -187,14 +196,17 @@ rdp_clientinfo({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslso
 			{stop, {bad_protocol, Other}, Data}
 	end.
 
-rdp_capex({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
+rdp_capex({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan, shareid = ShareId} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
-		{ok, #ts_confirm{} = Pkt} ->
+		{ok, #ts_confirm{shareid = ShareId} = Pkt} ->
 			error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
 			{next_state, init_finalize, Data};
 		Other ->
 			{stop, Other, Data}
 	end.
+
+init_finalize({fp_pdu, #fp_pdu{contents = Evts}}, #data{} = Data) ->
+	{next_state, init_finalize, Data};
 
 init_finalize({mcs_pdu, #mcs_data{data = RdpData, channel = Chan}}, #data{sslsock = SslSock, iochan = Chan} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
