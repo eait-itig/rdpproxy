@@ -142,7 +142,8 @@ encode_svr_net(#tsud_svr_net{iochannel=IoChannel, channels=Chans}) ->
 	end, <<>>, Chans),
 	NChans = length(Chans),
 
-	PadBytes = 4 - (NChans rem 4),
+	Rem = byte_size(ChanBin) rem 4,
+	PadBytes = if Rem > 0 -> 4 - Rem; true -> 0 end,
 	ChanPad = <<ChanBin/binary, 0:PadBytes/unit:8>>,
 
 	Inner = <<IoChannel:16/little, NChans:16/little, ChanPad/binary>>,
