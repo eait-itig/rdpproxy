@@ -9,8 +9,10 @@
 -module(rdpp).
 
 -include("kbd.hrl").
+-include("x224.hrl").
 -include("rdpp.hrl").
 
+-export([decode_client/1, decode_server/1]).
 -export([encode_protocol_flags/1, decode_protocol_flags/1]).
 -export([decode_basic/1, decode_sharecontrol/1]).
 -export([encode_basic/1, encode_sharecontrol/1]).
@@ -56,6 +58,50 @@ pretty_print(Record) ->
 ?pp(ts_cap_activation);
 pretty_print(0, _) ->
 	no.
+
+decode_client(Bin) ->
+	decode(Bin, decode_output).
+
+decode_server(Bin) ->
+	decode(Bin, decode_input).
+
+decode(Bin, Dirn) ->
+	maybe([
+		fun() ->
+			case fastpath:Dirn(Bin) of
+				{ok, Pdu, Rem} ->
+					{return, {ok, {fp_pdu, Pdu}, Rem}};
+				{error, _} ->
+					{continue, []}
+			end
+		end,
+		fun() ->
+			case tpkt:decode(Bin) of
+				{ok, Body, Rem} ->
+					{continue, [Body, Rem]};
+				{error, Reason} ->
+					{return, {error, {tpkt, Reason}}}
+			end
+		end,
+		fun(Body, Rem) ->
+			case x224:decode(Body) of
+				{ok, #x224_dt{data = McsData} = Pdu} ->
+					{continue, [Pdu, McsData, Rem]};
+				{ok, Pdu} ->
+					{return, {ok, {x224_pdu, Pdu}, Rem}};
+				{error, Reason} ->
+					{return, {error, {x224, Reason}}}
+			end
+		end,
+		fun(Pdu, McsData, Rem) ->
+			case mcsgcc:decode(McsData) of
+				{ok, McsPkt} ->
+					{return, {ok, {mcs_pdu, McsPkt}, Rem}};
+				_ ->
+					{return, {ok, {x224_pdu, Pdu}, Rem}}
+			end
+		end
+	], []).
 
 -spec encode_protocol_flags([atom()]) -> integer().
 encode_protocol_flags(Protocols) ->
@@ -150,7 +196,9 @@ decode_sharecontrol(Bin) ->
 							16#6 -> decode_ts_deactivate(Chan, Rest);
 							16#7 -> decode_sharedata(Chan, Rest);
 							16#a -> decode_ts_redir(Chan, Rest);
-							_ -> {error, badpacket}
+							Type ->
+								error_logger:info_report([{unhandled_sharecontrol, Type}]),
+								{error, badpacket}
 						end;
 					true ->
 						{error, badlength}
@@ -292,11 +340,23 @@ decode_tscap(16#e, Bin) ->
 	end;
 
 decode_tscap(16#14, Bin) ->
-	<<Flags:32/little, ChunkSize:32/little>> = Bin,
-	<<_:30, CompressCtoS:1, CompressStoC:1>> = <<Flags:32/big>>,
-	FlagAtoms = if CompressCtoS == 1 -> [compress_cs]; true -> [] end ++
-				if CompressStoC == 1 -> [compress_sc]; true -> [] end,
-	#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize};
+	maybe([
+		fun(V) ->
+			case Bin of
+				<<Flags:32/little>> ->
+					{continue, [V, Flags]};
+				<<Flags:32/little, ChunkSize:32/little>> ->
+					V2 = V#ts_cap_vchannel{chunksize = ChunkSize},
+					{continue, [V2, Flags]}
+			end
+		end,
+		fun(V, Flags) ->
+			<<_:30, CompressCtoS:1, CompressStoC:1>> = <<Flags:32/big>>,
+			FlagAtoms = if CompressCtoS == 1 -> [compress_cs]; true -> [] end ++
+						if CompressStoC == 1 -> [compress_sc]; true -> [] end,
+			{return, V#ts_cap_vchannel{flags=FlagAtoms}}
+		end
+	], [#ts_cap_vchannel{}]);
 
 decode_tscap(Type, Bin) ->
 	{Type, Bin}.
@@ -322,7 +382,7 @@ encode_tscap(#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize}) ->
 	CompressCS = case lists:member(compress_cs, FlagAtoms) of true -> 1; _ -> 0 end,
 	CompressSC = case lists:member(compress_sc, FlagAtoms) of true -> 1; _ -> 0 end,
 	<<Flags:32/big>> = <<0:30, CompressCS:1, CompressSC:1>>,
-	Inner = <<Flags:32/little, ChunkSize:32/little>>,
+	Inner = <<Flags:32/little>>, %, ChunkSize:32/little>>,
 	encode_tscap({16#14, Inner});
 
 encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height}) ->
@@ -336,6 +396,7 @@ encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = He
 	<<DrawingFlags:8>> = <<0:4, SkipAlpha:1, Subsampling:1, DynamicBpp:1, 0:1>>,
 
 	Inner = <<Bpp:16/little, 1:16/little, 1:16/little, 1:16/little, Width:16/little, Height:16/little, 0:16, Resize:16/little, Compression:16/little, 0:8, DrawingFlags:8, Multirect:16/little, 0:16>>,
+	% this is different in the example versus spec
 	encode_tscap({16#02, Inner});
 
 encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
@@ -371,11 +432,11 @@ encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
 
 	<<BaseFlags:16/big>> = <<0:8, 0:1, SolidPatternBrushOnly:1, ColorIndex:1, 0:1, ZeroBoundsDeltas:1, 0:1, NegotiateOrders:1, 0:1>>,
 
-	Inner = <<0:16/unit:8, 0:32, 1:16/little, 20:16/little, 0:16, 1:16/little, 0:16, BaseFlags:16/little, OrderSupport/binary, 0:16, 0:16, 0:32, 230400:32/little, 0:16, 0:16, 0:16, 0:16>>,
+	Inner = <<0:16/unit:8, 16#40420f00:32/big, 1:16/little, 20:16/little, 0:16, 1:16/little, 0:16, BaseFlags:16/little, OrderSupport/binary, 16#06a1:16/big, 0:16, 16#40420f00:32/big, 230400:32/little, 1:16/little, 0:16, 0:16, 0:16>>,
 	encode_tscap({16#03, Inner});
 
 encode_tscap(#ts_cap_share{channel = Chan}) ->
-	Inner = <<Chan:16/little, 16#e2b5:16>>,
+	Inner = <<Chan:16/little, 16#dce2:16/big>>,
 	encode_tscap({16#09, Inner});
 
 encode_tscap(#ts_cap_activation{helpkey=HelpKey, helpexkey=HelpExKey, wmkey=WmKey}) ->
@@ -399,7 +460,7 @@ encode_tscap(#ts_cap_font{flags = Flags}) ->
 
 encode_tscap(#ts_cap_pointer{flags = Flags, cache_size = CacheSize}) ->
 	Color = case lists:member(color, Flags) of true -> 1; _ -> 0 end,
-	Inner = <<Color:16/little, 20:16/little, CacheSize:16/little>>,
+	Inner = <<Color:16/little, CacheSize:16/little, CacheSize:16/little>>,
 	encode_tscap({16#08, Inner});
 
 encode_tscap(#ts_cap_input{flags=Flags, kbd_layout=Layout, kbd_type=Type, kbd_sub_type=SubType, kbd_fun_keys=FunKeys, ime=Ime}) ->
@@ -445,7 +506,7 @@ encode_ts_demand(#ts_demand{shareid = ShareId, sourcedesc = SourceDesc, capabili
 	end, <<>>, Caps),
 	SDLen = byte_size(SourceDesc),
 	Sz = byte_size(CapsBin) + 4,
-	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, N:16/little, 0:16, CapsBin/binary, 100:32/little>>.
+	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, N:16/little, 0:16, CapsBin/binary, 0:32/little>>.
 
 decode_ts_confirm(Chan, Bin) ->
 	case Bin of
@@ -757,7 +818,9 @@ decode_basic(Bin) ->
 				{security, Fl} -> decode_ts_security(Fl, Rest);
 				{info, Fl} -> decode_ts_info(Fl, Rest);
 				{heartbeat, Fl} -> decode_ts_heartbeat(Fl, Rest);
-				_ -> {error, badpacket}
+				{Type, Fl} ->
+					error_logger:info_report([{unhandled_basic, Type}, {flags, Fl}]),
+					{error, badpacket}
 			end;
 		_ ->
 			{error, badpacket}
@@ -770,7 +833,8 @@ encode_ts_security(#ts_security{random = Random}) ->
 encode_ts_license_vc(#ts_license_vc{}) ->
 	Inner = <<16#7:32/little, 16#2:32/little, 16#04:16/little, 0:16>>,
 	Len = byte_size(Inner) + 4,
-	<<16#ff, 16#83, Len:16/little, Inner/binary>>.
+	% this was 16#83 before?
+	<<16#ff, 16#03, Len:16/little, Inner/binary>>.
 
 decode_ts_security(Fl, Bin) ->
 	case Bin of

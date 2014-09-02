@@ -244,11 +244,12 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
 		{ok, #ts_info{} = InfoPkt} ->
 			error_logger:info_report(["info packet: ", rdpp:pretty_print(InfoPkt)]),
 
-			{ok, LicData} = rdpp:encode_basic(#ts_license_vc{}),
+			{ok, LicData} = rdpp:encode_basic(#ts_license_vc{secflags=[encrypt_license]}),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = LicData}),
 
 			Core = Data#data.tsud_core,
-			ShareId = (Us bsl 16) + random:uniform(1 bsl 15),
+			Rand = 1,
+			<<ShareId:32/big>> = <<Rand:16/big, Us:16/big>>,
 			{ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
 				shareid = ShareId,
 				channel = Us,
@@ -489,76 +490,38 @@ queue_remainder(_, _) -> ok.
 
 %% @private
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
-	maybe([
-		fun() ->
-			case fastpath:decode_input(Bin) of
-				{ok, Pdu, Rem} ->
-					queue_remainder(Sock, Rem),
-					{return, ?MODULE:State({fp_pdu, Pdu}, Data)};
-				{error, _} ->
-					{continue, []}
-			end
-		end,
-		fun() ->
-			case tpkt:decode(Bin) of
-				{ok, Body, Rem} ->
-					queue_remainder(Sock, Rem),
-					{continue, [Body]};
-				{error, Reason} ->
-					{return, error_logger:info_report([{tcp_bad_pkt, Reason, Bin}])}
-			end
-		end,
-		fun(Body) ->
-			case x224:decode(Body) of
-				{ok, #x224_dt{data = McsData} = Pdu} ->
-					{continue, [Pdu, McsData]};
-				{ok, Pdu} ->
-					{return, ?MODULE:State({x224_pdu, Pdu}, Data)};
-				{error, _} ->
-					{return, ?MODULE:State({data, Body}, Data)}
-			end
-		end,
-		fun(Pdu, McsData) ->
-			case mcsgcc:decode(McsData) of
-				{ok, McsPkt} ->
-					{return, ?MODULE:State({mcs_pdu, McsPkt}, Data)};
-				_ ->
-					{return, ?MODULE:State({x224_pdu, Pdu}, Data)}
-			end
-		end
-	], []);
+	case rdpp:decode_server(Bin) of
+		{ok, Evt, Rem} ->
+			queue_remainder(Sock, Rem),
+			?MODULE:State(Evt, Data);
+		{error, Reason} ->
+			error_logger:info_report([{rdpp_decode_fail, Reason}]),
+			{next_state, State, Data}
+	end;
 
 handle_info({ssl, SslSock, Bin}, wait_proxy, #data{sslsock = SslSock} = Data) ->
 	wait_proxy({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, proxy, #data{sslsock = SslSock} = Data) ->
-	case tpkt:decode(Bin) of
-		{ok, Body, _Rem} ->
-			case x224:decode(Body) of
-				{ok, #x224_dt{data = McsData} = Pdu} ->
-					case mcsgcc:decode(McsData) of
-						{ok, #mcs_data{data = RdpData, channel = Chan}} ->
-							case rdpp:decode_basic(RdpData) of
-								{ok, Rec} ->
-									error_logger:info_report(["frontend received rdp basic\n", rdpp:pretty_print(Rec)]);
-								_ ->
-									case rdpp:decode_sharecontrol(RdpData) of
-										{ok, Rec} ->
-											error_logger:info_report(["frontend received rdp sharecontrol\n", rdpp:pretty_print(Rec)]);
-										_ -> ok
-									end
-							end;
-						{ok, McsPkt} ->
-							error_logger:info_report(["frontend received mcs\n", mcsgcc:pretty_print(McsPkt)]);
-						Other ->
-							error_logger:info_report(["frontend received x224\n", x224:pretty_print(Pdu)])
-					end;
-				{ok, Pdu} ->
-					error_logger:info_report(["frontend received x224\n", x224:pretty_print(Pdu)]);
-				{error, _} ->
-					ok
+	case rdpp:decode_server(Bin) of
+		{ok, {fp_pdu, Pdu}, _} ->
+			error_logger:info_report(["frontend rx fastpath:\n", fastpath:pretty_print(Pdu)]);
+		{ok, {x224_pdu, Pdu}, _} ->
+			error_logger:info_report(["frontend rx x224:\n", x224:pretty_print(Pdu)]);
+		{ok, {mcs_pdu, Pdu = #mcs_data{data = RdpData, channel = Chan}}, _} ->
+			case rdpp:decode_basic(RdpData) of
+				{ok, Rec} ->
+					error_logger:info_report(["frontend rx rdp_basic:\n", rdpp:pretty_print(Rec)]);
+				_ ->
+					case rdpp:decode_sharecontrol(RdpData) of
+						{ok, Rec} ->
+							error_logger:info_report(["frontend rx rdp_sharecontrol\n", rdpp:pretty_print(Rec)]);
+						_ ->
+							error_logger:info_report(["frontend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]])
+					end
 			end;
-		{error, Reason} ->
-			error_logger:info_report([{bad_tpkt, Reason}])
+		{ok, {mcs_pdu, Pdu}, _} ->
+			error_logger:info_report(["frontend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]]);
+		_ -> ok
 	end,
 	proxy({data, Bin}, Data);
 

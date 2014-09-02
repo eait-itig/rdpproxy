@@ -26,6 +26,7 @@ pretty_print(Record) ->
 ?pp(fp_inp_wheel);
 ?pp(fp_inp_sync);
 ?pp(fp_inp_unicode);
+?pp(fp_inp_unknown);
 pretty_print(0, _) ->
 	no.
 
@@ -77,10 +78,12 @@ decode_inp_events(<<Code:3, Flags:5, Rest/binary>>) ->
 			<<CodePoint:16/little, Rem/binary>> = Rest,
 			<<_:4, Release:1>> = <<Flags:5>>,
 			Action = if Release == 1 -> up; true -> down end,
-			[#fp_inp_unicode{code = CodePoint, action = Action} | decode_inp_events(Rest)]
+			[#fp_inp_unicode{code = CodePoint, action = Action} | decode_inp_events(Rest)];
+		Other ->
+			[#fp_inp_unknown{type = Code, flags = Flags}]
 	end.
 
-decode_out_updates(<<>>) -> [].
+decode_out_updates(_) -> [].
 
 decode_input(Binary) ->
 	decode(Binary, fun decode_inp_events/1).
@@ -89,46 +92,74 @@ decode_output(Binary) ->
 	decode(Binary, fun decode_out_updates/1).
 
 decode(Binary, Decoder) ->
-	case Binary of
-		<<1:1, SaltedMAC:1, 0:4, ?ACT_FASTPATH:2, 0:1, PduLength:7, Signature:8/binary, NumEvts:8, Rest/binary>> ->
-			Len = PduLength - (1 + 1 + 8 + 1),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			Flags = [encrypted] ++
-					if SaltedMAC == 1 -> [salted_mac]; true -> [] end,
-			{ok, #fp_pdu{flags = Flags, signature = Signature, contents = Data}, Rem};
-		<<1:1, SaltedMAC:1, NumEvts:4, ?ACT_FASTPATH:2, 0:1, PduLength:7, Signature:8/binary, Rest/binary>> ->
-			Len = PduLength - (1 + 1 + 8),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			Flags = [encrypted] ++
-					if SaltedMAC == 1 -> [salted_mac]; true -> [] end,
-			{ok, #fp_pdu{flags = Flags, signature = Signature, contents = Data}, Rem};
-		<<1:1, SaltedMAC:1, 0:4, ?ACT_FASTPATH:2, 1:1, PduLength:15/big, Signature:8/binary, NumEvts:8, Rest/binary>> ->
-			Len = PduLength - (1 + 2 + 8 + 1),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			Flags = [encrypted] ++
-					if SaltedMAC == 1 -> [salted_mac]; true -> [] end,
-			{ok, #fp_pdu{flags = Flags, signature = Signature, contents = Data}, Rem};
-		<<1:1, SaltedMAC:1, NumEvts:4, ?ACT_FASTPATH:2, 1:1, PduLength:15/big, Signature:8/binary, Rest/binary>> ->
-			Len = PduLength - (1 + 2 + 8),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			Flags = [encrypted] ++
-					if SaltedMAC == 1 -> [salted_mac]; true -> [] end,
-			{ok, #fp_pdu{flags = Flags, signature = Signature, contents = Data}, Rem};
-		<<0:1, 0:1, 0:4, ?ACT_FASTPATH:2, 0:1, PduLength:7, NumEvts:8, Rest/binary>> ->
-			Len = PduLength - (1 + 1 + 1),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			{ok, #fp_pdu{flags = [], contents = Decoder(Data)}, Rem};
-		<<0:1, 0:1, NumEvts:4, ?ACT_FASTPATH:2, 0:1, PduLength:7, Rest/binary>> ->
-			Len = PduLength - (1 + 1),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			{ok, #fp_pdu{flags = [], contents = Decoder(Data)}, Rem};
-		<<0:1, 0:1, 0:4, ?ACT_FASTPATH:2, 1:1, PduLength:15/big, NumEvts:8, Rest/binary>> ->
-			Len = PduLength - (1 + 2 + 1),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			{ok, #fp_pdu{flags = [], contents = Decoder(Data)}, Rem};
-		<<0:1, 0:1, NumEvts:4, ?ACT_FASTPATH:2, 1:1, PduLength:15/big, Rest/binary>> ->
-			Len = PduLength - (1 + 2),
-			<<Data:Len/binary, Rem/binary>> = Rest,
-			{ok, #fp_pdu{flags = [], contents = Decoder(Data)}, Rem};
-		_ -> {error, bad_packet}
+	maybe([
+		fun(Pdu = #fp_pdu{flags = Fl}, Bin) ->
+			case Bin of
+				<<Encrypted:1, SaltedMAC:1, NumEvts:4, ?ACT_FASTPATH:2, Rest/binary>> ->
+					FlagAtoms = if Encrypted == 1 -> [encrypted]; true -> [] end ++
+								if SaltedMAC == 1 -> [salted_mac]; true -> [] end,
+					{continue, [Pdu#fp_pdu{flags = FlagAtoms}, Rest, (Encrypted == 1), NumEvts]};
+				_ ->
+					{return, {error, {bad_packet, header}}}
+			end
+		end,
+		fun(Pdu, Bin, Encrypted, NumEvts) ->
+			case Bin of
+				<<0:1, PduLength:7, Rest/binary>> ->
+					{continue, [Pdu, Rest, Encrypted, NumEvts, PduLength - 2]};
+				<<1:1, PduLength:15/big, Rest/binary>> ->
+					{continue, [Pdu, Rest, Encrypted, NumEvts, PduLength - 3]};
+				_ ->
+					{return, {error, {bad_packet, pdu_length}}}
+			end
+		end,
+		fun(Pdu, Bin, Encrypted, NumEvts, PduLength) ->
+			if Encrypted ->
+				case Bin of
+					<<Signature:8/binary, Rest/binary>> ->
+						Pdu2 = Pdu#fp_pdu{signature = Signature},
+						{continue, [Pdu2, Rest, Encrypted, NumEvts, PduLength - 8]};
+					_ ->
+						{return, {error, {bad_packet, num_evts}}}
+				end;
+			true ->
+				{continue, [Pdu, Bin, Encrypted, NumEvts, PduLength]}
+			end
+		end,
+		fun(Pdu, Bin, Encrypted, NumEvts, PduLength) ->
+			case NumEvts of
+				0 ->
+					case Bin of
+						<<RealNumEvts:8, Rest/binary>> ->
+							{continue, [Pdu, Rest, Encrypted, RealNumEvts, PduLength - 1]};
+						_ ->
+							{return, {error, {bad_packet, num_evts}}}
+					end;
+				_ ->
+					{continue, [Pdu, Bin, Encrypted, NumEvts, PduLength]}
+			end
+		end,
+		fun(Pdu, Bin, Encrypted, NumEvts, PduLength) ->
+			case Bin of
+				<<Data:PduLength/binary, Rem/binary>> ->
+					if not Encrypted ->
+						Pdu2 = Pdu#fp_pdu{contents = Decoder(Data)},
+						{return, {ok, Pdu2, Rem}};
+					true ->
+						Pdu2 = Pdu#fp_pdu{contents = Data},
+						{return, {ok, Pdu2, Rem}}
+					end;
+				_ ->
+					{return, {error, {bad_packet, length}}}
+			end
+		end
+	], [#fp_pdu{}, Binary]).
+
+maybe([], Args) -> error(no_return);
+maybe([Fun | Rest], Args) ->
+	case apply(Fun, Args) of
+		{continue, NewArgs} ->
+			maybe(Rest, NewArgs);
+		{return, Value} ->
+			Value
 	end.

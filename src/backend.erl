@@ -106,34 +106,26 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 	end;
 
 handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data) ->
-	case tpkt:decode(Bin) of
-		{ok, Body, _Rem} ->
-			case x224:decode(Body) of
-				{ok, #x224_dt{data = McsData} = Pdu} ->
-					case mcsgcc:decode(McsData) of
-						{ok, #mcs_srv_data{data = RdpData, channel = Chan}} ->
-							case rdpp:decode_basic(RdpData) of
-								{ok, Rec} ->
-									error_logger:info_report(["backend received rdp basic\n", rdpp:pretty_print(Rec)]);
-								_ ->
-									case rdpp:decode_sharecontrol(RdpData) of
-										{ok, Rec} ->
-											error_logger:info_report(["backend received rdp sharecontrol\n", rdpp:pretty_print(Rec)]);
-										_ -> ok
-									end
-							end;
-						{ok, McsPkt} ->
-							error_logger:info_report(["backend received mcs\n", mcsgcc:pretty_print(McsPkt)]);
-						Other ->
-							error_logger:info_report(["backend received x224\n", x224:pretty_print(Pdu)])
-					end;
-				{ok, Pdu} ->
-					error_logger:info_report(["backend received x224\n", x224:pretty_print(Pdu)]);
-				{error, _} ->
-					ok
+	case rdpp:decode_client(Bin) of
+		{ok, {fp_pdu, Pdu}, _} ->
+			error_logger:info_report(["backend rx fastpath:\n", fastpath:pretty_print(Pdu)]);
+		{ok, {x224_pdu, Pdu}, _} ->
+			error_logger:info_report(["backend rx x224:\n", x224:pretty_print(Pdu)]);
+		{ok, {mcs_pdu, Pdu = #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
+			case rdpp:decode_basic(RdpData) of
+				{ok, Rec} ->
+					error_logger:info_report(["backend rx rdp_basic:\n", rdpp:pretty_print(Rec)]);
+				_ ->
+					case rdpp:decode_sharecontrol(RdpData) of
+						{ok, Rec} ->
+							error_logger:info_report(["backend rx rdp_sharecontrol\n", rdpp:pretty_print(Rec)]);
+						_ ->
+							error_logger:info_report(["backend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]])
+					end
 			end;
-		{error, Reason} ->
-			error_logger:info_report([{bad_tpkt, Reason}])
+		{ok, {mcs_pdu, Pdu}, _} ->
+			error_logger:info_report(["backend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]]);
+		_ -> ok
 	end,
 	?MODULE:State({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
