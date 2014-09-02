@@ -162,22 +162,22 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
 				false ->
 					{continue, [D, Tsuds, SoFar]};
 				_ ->
-					{MsgChan, D2} = next_channel(D),
-					Mcs1 = D2#data.mcs#mcs_state{msgchan = MsgChan},
-					D3 = D2#data{mcs = Mcs1},
-					{ok, Bin} = tsud:encode(#tsud_svr_msgchannel{channel = MsgChan}),
-					{continue, [D3, Tsuds, <<SoFar/binary, Bin/binary>>]}
-			end
-		end,
-		fun(D, Tsuds, SoFar) ->
-			case lists:keyfind(tsud_multitransport, 1, Tsuds) of
-				false ->
-					{continue, [D, Tsuds, SoFar]};
-				_ ->
-					{ok, Bin} = tsud:encode(#tsud_svr_multitransport{}),
+					%{MsgChan, D2} = next_channel(D),
+					%Mcs1 = D2#data.mcs#mcs_state{msgchan = MsgChan},
+					%D3 = D2#data{mcs = Mcs1},
+					{ok, Bin} = tsud:encode(#tsud_svr_msgchannel{channel = 0}),
 					{continue, [D, Tsuds, <<SoFar/binary, Bin/binary>>]}
 			end
 		end,
+		%fun(D, Tsuds, SoFar) ->
+		%	case lists:keyfind(tsud_multitransport, 1, Tsuds) of
+		%		false ->
+		%			{continue, [D, Tsuds, SoFar]};
+		%		_ ->
+		%			{ok, Bin} = tsud:encode(#tsud_svr_multitransport{}),
+		%			{continue, [D, Tsuds, <<SoFar/binary, Bin/binary>>]}
+		%	end
+		%end,
 		fun(D = #data{mcs = Mcs}, Tsuds, SvrTsuds) ->
 			{ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = SvrTsuds, node = Mcs#mcs_state.us}),
 
