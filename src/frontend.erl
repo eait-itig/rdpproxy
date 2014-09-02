@@ -118,7 +118,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
 			{continue, [D4, Tsuds, SoFar]}
 		end,
 		fun(D, Tsuds, SoFar) ->
-			{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,4], requested = D#data.askedfor}),
+			{ok, Core} = tsud:encode(#tsud_svr_core{version=[8,4], requested = D#data.askedfor, capabilities = [dynamic_dst]}),
 			{continue, [D, Tsuds, <<SoFar/binary, Core/binary>>]}
 		end,
 		fun(D, Tsuds, SoFar) ->
@@ -218,8 +218,16 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = Them, channel = Chan}}, #data{sslsock = SslS
 		{next_state, mcs_chans, NewData}
 	end;
 
-mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan} = Pdu}, #data{mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
-	error_logger:info_report(["mcs_chans got: ", mcsgcc:pretty_print(Pdu)]),
+mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan} = Pdu}, #data{waitchans = Chans, mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
+	case rdpp:decode_basic(RdpData) of
+		{ok, #ts_info{}} ->
+			error_logger:info_report([{got, ts_info}, {missing_chans, Chans}]),
+			rdp_clientinfo({mcs_pdu, Pdu}, Data);
+		{ok, RdpPkt} ->
+			error_logger:info_report(["mcs_chans got: ", rdpp:pretty_print(RdpPkt)]);
+		_ ->
+			error_logger:info_report(["mcs_chans got: ", mcsgcc:pretty_print(Pdu)])
+	end,
 	{next_state, mcs_chans, Data};
 
 mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = Them} = Pdu}, #data{mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
@@ -292,12 +300,12 @@ init_finalize({fp_pdu, #fp_pdu{contents = Evts}}, #data{} = Data) ->
 init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them, us = Us, iochan = IoChan}, shareid = ShareId} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
 		{ok, #ts_sharedata{shareid = ShareId, data = #ts_sync{}}} ->
-			{ok, SyncData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_sync{}}),
+			{ok, SyncData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_sync{user = Us}}),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = SyncData}),
 			{next_state, init_finalize, Data};
 
 		{ok, #ts_sharedata{shareid = ShareId, data = #ts_control{action=cooperate}}} ->
-			{ok, CoopData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_control{action = cooperate}}),
+			{ok, CoopData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_control{action = cooperate, controlid = Us, grantid = Them}}),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = CoopData}),
 			{next_state, init_finalize, Data};
 

@@ -824,6 +824,7 @@ decode_ts_info(Fl, Bin) ->
 				16#1 -> '64k';
 				16#2 -> 'rdp6';
 				16#3 -> 'rdp61';
+				16#7 -> 'rdp8';
 				_ -> unknown
 			end,
 
