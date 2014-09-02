@@ -31,6 +31,7 @@
 -record(ts_cap_vchannel, {flags=[], chunksize=1600}).
 -record(ts_cap_control, {flags=[], control=never, detach=never}).
 -record(ts_cap_activation, {helpkey=0, wmkey=0, helpexkey=0}).
+-record(ts_cap_multifrag, {maxsize=64*1024}).
 
 -record(ts_demand, {channel, shareid, sourcedesc=[], capabilities=[]}).
 -record(ts_confirm, {channel, shareid, sourcedesc=[], capabilities=[]}).

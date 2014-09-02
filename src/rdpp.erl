@@ -56,6 +56,7 @@ pretty_print(Record) ->
 ?pp(ts_cap_vchannel);
 ?pp(ts_cap_control);
 ?pp(ts_cap_activation);
+?pp(ts_cap_multifrag);
 pretty_print(0, _) ->
 	no.
 
@@ -358,6 +359,10 @@ decode_tscap(16#14, Bin) ->
 		end
 	], [#ts_cap_vchannel{}]);
 
+decode_tscap(16#1a, Bin) ->
+	<<MaxSize:32/little>> = Bin,
+	#ts_cap_multifrag{maxsize = MaxSize};
+
 decode_tscap(Type, Bin) ->
 	{Type, Bin}.
 
@@ -475,6 +480,9 @@ encode_tscap(#ts_cap_input{flags=Flags, kbd_layout=Layout, kbd_type=Type, kbd_su
 
 	Inner = <<InputFlags:16/little, 0:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin/binary>>,
 	encode_tscap({16#0d, Inner});
+
+encode_tscap(#ts_cap_multifrag{maxsize = MaxSize}) ->
+	encode_tscap({16#1a, <<MaxSize:32/little>>});
 
 encode_tscap({Type, Bin}) ->
 	Size = byte_size(Bin) + 4,
