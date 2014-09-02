@@ -12,8 +12,8 @@
 
 -record(mcs_edr, {height=0, interval=0}).
 -record(mcs_aur, {}).
--record(mcs_auc, {status='rt-successful', user=1001}).
--record(mcs_cjr, {channel, user=1001}).
--record(mcs_cjc, {channel, status='rt-successful', user=1001}).
--record(mcs_data, {user=1001, channel=0, priority=high, data}).
--record(mcs_srv_data, {user=16#3ea, channel=0, priority=high, data}).
+-record(mcs_auc, {status='rt-successful', user}).
+-record(mcs_cjr, {channel, user}).
+-record(mcs_cjc, {channel, status='rt-successful', user}).
+-record(mcs_data, {user, channel, priority=high, data}).
+-record(mcs_srv_data, {user, channel, priority=high, data}).

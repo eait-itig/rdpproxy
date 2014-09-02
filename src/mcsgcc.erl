@@ -19,38 +19,22 @@
 -export([decode/1, encode/1]).
 -export([pretty_print/1]).
 
+-define(pp(Rec),
+pretty_print(Rec, N) ->
+	N = record_info(size, Rec) - 1,
+	record_info(fields, Rec)).
+
 pretty_print(Record) ->
 	io_lib_pretty:print(Record, fun pretty_print/2).
-pretty_print(mcs_ci, N) ->
-	N = record_info(size, mcs_ci) - 1,
-	record_info(fields, mcs_ci);
-pretty_print(mcs_cr, N) ->
-	N = record_info(size, mcs_cr) - 1,
-	record_info(fields, mcs_cr);
-pretty_print(mcs_edr, N) ->
-	N = record_info(size, mcs_edr) - 1,
-	record_info(fields, mcs_edr);
-pretty_print(mcs_aur, N) ->
-	N = record_info(size, mcs_aur) - 1,
-	record_info(fields, mcs_aur);
-pretty_print(mcs_auc, N) ->
-	N = record_info(size, mcs_auc) - 1,
-	record_info(fields, mcs_auc);
-pretty_print(mcs_cjr, N) ->
-	N = record_info(size, mcs_cjr) - 1,
-	record_info(fields, mcs_cjr);
-pretty_print(mcs_cjc, N) ->
-	N = record_info(size, mcs_cjc) - 1,
-	record_info(fields, mcs_cjc);
-pretty_print(mcs_data, N) ->
-	N = record_info(size, mcs_data) - 1,
-	record_info(fields, mcs_data);
-pretty_print(mcs_srv_data, N) ->
-	N = record_info(size, mcs_srv_data) - 1,
-	record_info(fields, mcs_srv_data);
-%pretty_print(x224_cr, N) ->
-%	N = record_info(size, x224_cr) - 1,
-%	record_info(fields, x224_cr);
+?pp(mcs_ci);
+?pp(mcs_cr);
+?pp(mcs_edr);
+?pp(mcs_aur);
+?pp(mcs_auc);
+?pp(mcs_cjr);
+?pp(mcs_cjc);
+?pp(mcs_data);
+?pp(mcs_srv_data);
 pretty_print(_, _) ->
 	no.
 

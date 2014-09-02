@@ -36,6 +36,7 @@ pretty_print(Record) ->
 ?pp(ts_fontlist);
 ?pp(ts_fontmap);
 ?pp(ts_input);
+?pp(ts_heartbeat);
 
 ?pp(ts_inpevt_sync);
 ?pp(ts_inpevt_key);
@@ -74,7 +75,7 @@ decode_protocol_flags(Protocols) ->
 
 -spec decode_sec_flags(integer()) -> {Type :: atom(), Flags :: [atom()]}.
 decode_sec_flags(Flags) ->
-	<<FlagsHiValid:1, _:1, AutodetectRsp:1, AutodetectReq:1, SaltedMAC:1, RedirectionPkt:1, EncryptLicense:1, _:1, LicensePkt:1, InfoPkt:1, IgnoreSeqno:1, ResetSeqno:1, Encrypt:1, MultitransRsp:1, MultitransReq:1, SecExchPkt:1>> = <<Flags:16/big>>,
+	<<FlagsHiValid:1, Heartbeat:1, AutodetectRsp:1, AutodetectReq:1, SaltedMAC:1, RedirectionPkt:1, EncryptLicense:1, _:1, LicensePkt:1, InfoPkt:1, IgnoreSeqno:1, ResetSeqno:1, Encrypt:1, MultitransRsp:1, MultitransReq:1, SecExchPkt:1>> = <<Flags:16/big>>,
 
 	Type = if
 		AutodetectRsp == 1 -> autodetect_rsp;
@@ -85,6 +86,7 @@ decode_sec_flags(Flags) ->
 		MultitransRsp == 1 -> multitrans_rsp;
 		MultitransReq == 1 -> multitrans_req;
 		SecExchPkt == 1 -> security;
+		Heartbeat == 1 -> heartbeat;
 		true -> unknown
 	end,
 
@@ -98,16 +100,17 @@ decode_sec_flags(Flags) ->
 
 -spec encode_sec_flags({Type :: atom(), Flags :: [atom()]}) -> integer().
 encode_sec_flags({Type, Flags}) ->
-	{AutodetectRsp, AutodetectReq, RedirectionPkt, LicensePkt, InfoPkt, MultitransRsp, MultitransReq, SecExchPkt} = case Type of
-		autodetect_rsp -> 	{1, 0, 0, 0, 0, 0, 0, 0};
-		autodetect_req -> 	{0, 1, 0, 0, 0, 0, 0, 0};
-		redirection -> 		{0, 0, 1, 0, 0, 0, 0, 0};
-		license -> 			{0, 0, 0, 1, 0, 0, 0, 0};
-		info -> 			{0, 0, 0, 0, 1, 0, 0, 0};
-		multitrans_rsp -> 	{0, 0, 0, 0, 0, 1, 0, 0};
-		multitrans_req -> 	{0, 0, 0, 0, 0, 0, 1, 0};
-		security -> 		{0, 0, 0, 0, 0, 0, 0, 1};
-		_ ->				{0, 0, 0, 0, 0, 0, 0, 0}
+	{AutodetectRsp, AutodetectReq, RedirectionPkt, LicensePkt, InfoPkt, MultitransRsp, MultitransReq, SecExchPkt, Heartbeat} = case Type of
+		autodetect_rsp -> 	{1, 0, 0, 0, 0, 0, 0, 0, 0};
+		autodetect_req -> 	{0, 1, 0, 0, 0, 0, 0, 0, 0};
+		redirection -> 		{0, 0, 1, 0, 0, 0, 0, 0, 0};
+		license -> 			{0, 0, 0, 1, 0, 0, 0, 0, 0};
+		info -> 			{0, 0, 0, 0, 1, 0, 0, 0, 0};
+		multitrans_rsp -> 	{0, 0, 0, 0, 0, 1, 0, 0, 0};
+		multitrans_req -> 	{0, 0, 0, 0, 0, 0, 1, 0, 0};
+		security -> 		{0, 0, 0, 0, 0, 0, 0, 1, 0};
+		heartbeat ->		{0, 0, 0, 0, 0, 0, 0, 0, 1};
+		_ ->				{0, 0, 0, 0, 0, 0, 0, 0, 0}
 	end,
 
 	FlagsHiValid = case lists:member(flagshi_valid, Flags) of true -> 1; _ -> 0 end,
@@ -117,7 +120,7 @@ encode_sec_flags({Type, Flags}) ->
 	ResetSeqno = case lists:member(reset_seqno, Flags) of true -> 1; _ -> 0 end,
 	Encrypt = case lists:member(encrypt, Flags) of true -> 1; _ -> 0 end,
 
-	<<Out:16/big>> = <<FlagsHiValid:1, 0:1, AutodetectRsp:1, AutodetectReq:1, SaltedMAC:1, RedirectionPkt:1, EncryptLicense:1, 0:1, LicensePkt:1, InfoPkt:1, IgnoreSeqno:1, ResetSeqno:1, Encrypt:1, MultitransRsp:1, MultitransReq:1, SecExchPkt:1>>,
+	<<Out:16/big>> = <<FlagsHiValid:1, Heartbeat:1, AutodetectRsp:1, AutodetectReq:1, SaltedMAC:1, RedirectionPkt:1, EncryptLicense:1, 0:1, LicensePkt:1, InfoPkt:1, IgnoreSeqno:1, ResetSeqno:1, Encrypt:1, MultitransRsp:1, MultitransReq:1, SecExchPkt:1>>,
 	Out.
 
 encode_sharecontrol(Pdu) ->
@@ -130,7 +133,8 @@ encode_sharecontrol(Pdu) ->
 	end,
 	Channel = element(2, Pdu),
 	Length = byte_size(Inner) + 6,
-	<<Type:16/big>> = <<0:8, 1:4, InnerType:4>>,
+	Version = 16#01,
+	<<Type:16/big>> = <<Version:12/big, InnerType:4>>,
 	{ok, <<Length:16/little, Type:16/little, Channel:16/little, Inner/binary>>}.
 
 decode_sharecontrol(Bin) ->
@@ -436,7 +440,9 @@ decode_ts_demand(Chan, Bin) ->
 
 encode_ts_demand(#ts_demand{shareid = ShareId, sourcedesc = SourceDesc, capabilities = Caps}) ->
 	N = length(Caps),
-	CapsBin = lists:foldl(fun(Next, Bin) -> NextBin = encode_tscap(Next), <<Bin/binary, NextBin/binary>> end, <<>>, Caps),
+	CapsBin = lists:foldl(fun(Next, Bin) ->
+		NextBin = encode_tscap(Next), <<Bin/binary, NextBin/binary>>
+	end, <<>>, Caps),
 	SDLen = byte_size(SourceDesc),
 	Sz = byte_size(CapsBin) + 4,
 	<<ShareId:32/little, SDLen:16/little, Sz:16/little, SourceDesc/binary, N:16/little, 0:16, CapsBin/binary, 100:32/little>>.
@@ -474,39 +480,74 @@ encode_ts_deactivate(#ts_deactivate{shareid = ShareId, sourcedesc = SourceDescIn
 decode_ts_redir(Chan, Bin) ->
 	{ok, #ts_redir{channel = Chan}}.
 
-encode_ts_redir(#ts_redir{sessionid = Session, username = Username, domain = Domain, password = Password, cookie = Cookie, flags = Flags}) ->
+encode_ts_redir(#ts_redir{sessionid = Session, username = Username, domain = Domain, password = Password, cookie = Cookie, flags = Flags, address = NetAddress, fqdn = Fqdn}) ->
 	InfoOnly = case lists:member(info_only, Flags) of true -> 1; _ -> 0 end,
 	Smartcard = case lists:member(smartcard, Flags) of true -> 1; _ -> 0 end,
 	Logon = case lists:member(logon, Flags) of true -> 1; _ -> 0 end,
 
-	HasCookie = if is_binary(Cookie) and (size(Cookie) > 0) -> 1; true -> 0 end,
-	HasUsername = if is_binary(Username) and (size(Username) > 0) -> 1; true -> 0 end,
-	HasDomain = if is_binary(Domain) and (size(Domain) > 0) -> 1; true -> 0 end,
-	HasPassword = if is_binary(Password) and (size(Password) > 0) -> 1; true -> 0 end,
+	HasCookie = if is_binary(Cookie) and (byte_size(Cookie) > 0) -> 1; true -> 0 end,
+	HasUsername = if is_binary(Username) and (byte_size(Username) > 0) -> 1; true -> 0 end,
+	HasDomain = if is_binary(Domain) and (byte_size(Domain) > 0) -> 1; true -> 0 end,
+	HasPassword = if is_binary(Password) and (byte_size(Password) > 0) -> 1; true -> 0 end,
+	HasNetAddress = if is_binary(NetAddress) and (byte_size(NetAddress) > 0) -> 1; true -> 0 end,
+	HasFqdn = if is_binary(Fqdn) and (byte_size(Fqdn) > 0) -> 1; true -> 0 end,
 
-	<<RedirFlags:32/big>> = <<0:24, InfoOnly:1, Smartcard:1, Logon:1, HasPassword:1, HasDomain:1, HasUsername:1, HasCookie:1, 0:1>>,
+	%if (HasNetAddress == 1) andalso (HasCookie == 1) ->
+	%	error(cookie_and_netaddr);
+	%true -> ok end,
 
-	Base = <<Session:32/little, RedirFlags:32/little>>,
-	WithCookie = if HasCookie == 1 ->
-		S1 = byte_size(Cookie),
-		<<Base/binary, S1:32/little, Cookie/binary>>;
-	true -> Base end,
-	WithUsername = if HasUsername == 1 ->
-		S2 = byte_size(Username),
-		<<WithCookie/binary, S2:32/little, Username/binary>>;
-	true -> WithCookie end,
-	WithDomain = if HasDomain == 1 ->
-		S3 = byte_size(Domain),
-		<<WithUsername/binary, S3:32/little, Domain/binary>>;
-	true -> WithUsername end,
-	WithPassword = if HasPassword == 1 ->
-		S4 = byte_size(Password),
-		<<WithDomain/binary, S4:32/little, Password/binary>>;
-	true -> WithDomain end,
+	UseCookieForTsv = 0,
+	HasTsvUrl = 0,
+	HasMultiNetAddr = 0,
+	HasNetBios = 0,
 
-	Len = byte_size(WithPassword) + 4,
-	error_logger:info_report([{redir_flags, RedirFlags}, {len, Len}]),
-	<<0:16, 16#0400:16/little, Len:16/little, WithPassword/binary, 0:9/unit:8>>.
+	<<RedirFlags:32/big>> = <<0:19, UseCookieForTsv:1, HasTsvUrl:1, HasMultiNetAddr:1, HasNetBios:1, HasFqdn:1, InfoOnly:1, Smartcard:1, Logon:1, HasPassword:1, HasDomain:1, HasUsername:1, HasCookie:1, HasNetAddress:1>>,
+
+	maybe([
+		fun() ->
+			{continue, [<<Session:32/little, RedirFlags:32/little>>]}
+		end,
+		fun(Base) ->
+			{continue, [if HasNetAddress == 1 ->
+				S = byte_size(NetAddress),
+				<<Base/binary, S:32/little, NetAddress/binary>>;
+			true -> Base end]}
+		end,
+		fun(Base) ->
+			{continue, [if HasCookie == 1 ->
+				S = byte_size(Cookie),
+				<<Base/binary, S:32/little, Cookie/binary>>;
+			true -> Base end]}
+		end,
+		fun(Base) ->
+			{continue, [if HasUsername == 1 ->
+				S = byte_size(Username),
+				<<Base/binary, S:32/little, Username/binary>>;
+			true -> Base end]}
+		end,
+		fun(Base) ->
+			{continue, [if HasDomain == 1 ->
+				S = byte_size(Domain),
+				<<Base/binary, S:32/little, Domain/binary>>;
+			true -> Base end]}
+		end,
+		fun(Base) ->
+			{continue, [if HasPassword == 1 ->
+				S = byte_size(Password),
+				<<Base/binary, S:32/little, Password/binary>>;
+			true -> Base end]}
+		end,
+		fun(Base) ->
+			{continue, [if HasFqdn == 1 ->
+				S = byte_size(Fqdn),
+				<<Base/binary, S:32/little, Fqdn/binary>>;
+			true -> Base end]}
+		end,
+		fun(Payload) ->
+			Len = byte_size(Payload) + 4,
+			{return, <<0:16, 16#0400:16/little, Len:16/little, Payload/binary, 0:9/unit:8>>}
+		end
+	], []).
 
 decode_sharedata(Chan, Bin) ->
 	case Bin of
@@ -703,7 +744,8 @@ encode_basic(Rec) ->
 	SecFlags = element(2, Rec),
 	{Type, Inner} = case Rec of
 		#ts_security{} -> {security, encode_ts_security(Rec)};
-		#ts_license_vc{} -> {license, encode_ts_license_vc(Rec)}
+		#ts_license_vc{} -> {license, encode_ts_license_vc(Rec)};
+		#ts_heartbeat{} -> {heartbeat, encode_ts_heartbeat(Rec)}
 	end,
 	Flags = encode_sec_flags({Type, SecFlags}),
 	{ok, <<Flags:16/little, 0:16, Inner/binary>>}.
@@ -714,6 +756,7 @@ decode_basic(Bin) ->
 			case decode_sec_flags(Flags) of
 				{security, Fl} -> decode_ts_security(Fl, Rest);
 				{info, Fl} -> decode_ts_info(Fl, Rest);
+				{heartbeat, Fl} -> decode_ts_heartbeat(Fl, Rest);
 				_ -> {error, badpacket}
 			end;
 		_ ->
@@ -738,6 +781,17 @@ decode_ts_security(Fl, Bin) ->
 			true ->
 				{error, badlength}
 			end;
+		_ ->
+			{error, badpacket}
+	end.
+
+encode_ts_heartbeat(#ts_heartbeat{period = Period, warning = Warn, reconnect = Recon}) ->
+	<<0, Period, Warn, Recon>>.
+
+decode_ts_heartbeat(Fl, Bin) ->
+	case Bin of
+		<<_, Period, Warn, Recon>> ->
+			{ok, #ts_heartbeat{secflags = Fl, period = Period, warning = Warn, reconnect = Recon}};
 		_ ->
 			{error, badpacket}
 	end.
@@ -781,5 +835,14 @@ decode_ts_info(Fl, Bin) ->
 			end;
 		_ ->
 			{error, badpacket}
+	end.
+
+maybe([], Args) -> error(no_return);
+maybe([Fun | Rest], Args) ->
+	case apply(Fun, Args) of
+		{continue, NewArgs} ->
+			maybe(Rest, NewArgs);
+		{return, Value} ->
+			Value
 	end.
 
