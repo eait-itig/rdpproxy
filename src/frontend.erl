@@ -264,7 +264,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
 					#ts_cap_general{os = [windows, winnt], flags = [suppress_output, refresh_rect, short_bitmap_hdr, autoreconnect, long_creds, salted_mac, fastpath]},
 					#ts_cap_vchannel{},
 					#ts_cap_font{},
-					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_order{},
 					#ts_cap_pointer{},
 					#ts_cap_input{flags = [mousex, scancodes, unicode, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0}
