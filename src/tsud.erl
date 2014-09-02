@@ -173,7 +173,7 @@ encode_svr_security(#tsud_svr_security{method=MethodAtom, level=LevelAtom, rando
 		_ -> 0
 	end,
 	Inner = if (Meth == 0) and (Level == 0) ->
-		<<Meth:32/little, Level:32/little, 0:32, 0:32>>;
+		<<Meth:32/little, Level:32/little>>;
 	true ->
 		RandomLen = byte_size(ServerRandom),
 		CertLen = byte_size(Cert),
