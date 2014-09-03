@@ -23,20 +23,17 @@
 -define(RDP_NEGRSP, 16#02).
 -define(RDP_NEGFAIL, 16#03).
 
+-define(pp(Rec),
+pretty_print(Rec, N) ->
+	N = record_info(size, Rec) - 1,
+	record_info(fields, Rec)).
+
 pretty_print(Record) ->
 	io_lib_pretty:print(Record, fun pretty_print/2).
-pretty_print(x224_cr, N) ->
-	N = record_info(size, x224_cr) - 1,
-	record_info(fields, x224_cr);
-pretty_print(x224_cc, N) ->
-	N = record_info(size, x224_cc) - 1,
-	record_info(fields, x224_cc);
-pretty_print(x224_dt, N) ->
-	N = record_info(size, x224_dt) - 1,
-	record_info(fields, x224_dt);
-pretty_print(x224_dr, N) ->
-	N = record_info(size, x224_dr) - 1,
-	record_info(fields, x224_dr);
+?pp(x224_cr);
+?pp(x224_cc);
+?pp(x224_dt);
+?pp(x224_dr);
 pretty_print(_, _) ->
 	no.
 

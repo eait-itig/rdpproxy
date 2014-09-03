@@ -16,6 +16,11 @@
 -define(ROP_SRCAND, 16#88).
 -define(ROP_SRCINVERT, 16#66).
 
+-define(GUID_NSCODEC, <<16#ca8d1bb9:32/little, 16#000f:16/little, 16#154f:16/little, 16#58, 16#9f, 16#ae, 16#2d, 16#1a, 16#87, 16#e2, 16#d6>>).
+-define(GUID_REMOTEFX, <<16#76772F12:32/little, 16#BD72:16/little, 16#4463:16/little, 16#AF, 16#B3, 16#B7, 16#3C, 16#9C, 16#6F, 16#78, 16#86>>).
+-define(GUID_REMOTEFX_IMAGE, <<16#2744CCD4:32/little, 16#9D8A:16/little, 16#4E74:16/little, 16#80, 16#3C, 16#0E, 16#CB, 16#EE, 16#A1, 16#9C, 16#54>>).
+-define(GUID_IGNORE, <<16#9C4351A6:32/little, 16#3535:16/little, 16#42AE:16/little, 16#91, 16#0C, 16#CD, 16#FC, 16#E5, 16#76, 16#0B, 16#58>>).
+
 -record(ts_security, {secflags = [], random=[]}).
 -record(ts_info, {secflags = [], codepage=0, flags = [mouse, noaudio], compression='8k', domain="", username="", password="", shell="", workdir=""}).
 -record(ts_license_vc, {secflags = []}).
@@ -32,6 +37,13 @@
 -record(ts_cap_control, {flags=[], control=never, detach=never}).
 -record(ts_cap_activation, {helpkey=0, wmkey=0, helpexkey=0}).
 -record(ts_cap_multifrag, {maxsize=64*1024}).
+-record(ts_cap_gdip, {flags=[supported,cache], version=0, cache_entries=[], cache_sizes=[], image_cache=[]}).
+-record(ts_cap_bitmapcache, {flags=[rev2, persistent_keys, waiting_list], cells=[]}).
+-record(ts_cap_bitmapcache_cell, {count, size, flags=[]}).
+-record(ts_cap_brush, {flags=[color_8x8, color_full]}).
+-record(ts_cap_large_pointer, {flags=[support_96x96]}).
+-record(ts_cap_bitmap_codecs, {codecs = []}).
+-record(ts_cap_bitmap_codec, {codec, guid, id, properties=[]}).
 
 -record(ts_demand, {channel, shareid, sourcedesc=[], capabilities=[]}).
 -record(ts_confirm, {channel, shareid, sourcedesc=[], capabilities=[]}).

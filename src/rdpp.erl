@@ -57,7 +57,14 @@ pretty_print(Record) ->
 ?pp(ts_cap_control);
 ?pp(ts_cap_activation);
 ?pp(ts_cap_multifrag);
-pretty_print(0, _) ->
+?pp(ts_cap_gdip);
+?pp(ts_cap_bitmapcache);
+?pp(ts_cap_bitmapcache_cell);
+?pp(ts_cap_brush);
+?pp(ts_cap_large_pointer);
+?pp(ts_cap_bitmap_codecs);
+?pp(ts_cap_bitmap_codec);
+pretty_print(_, _) ->
 	no.
 
 decode_client(Bin) ->
@@ -359,9 +366,98 @@ decode_tscap(16#14, Bin) ->
 		end
 	], [#ts_cap_vchannel{}]);
 
+decode_tscap(16#16, Bin) ->
+	<<Supported:32/little, GdipVersion:32/little, CacheSupported:32/little, CacheEntries:10/binary, CacheChunkSizes:8/binary, ImageCacheProps:6/binary>> = Bin,
+	FlagAtoms = if Supported > 0 -> [supported]; true -> [] end ++
+				if CacheSupported > 0 -> [cache]; true -> [] end,
+	{<<>>, CacheEntryPlist} = lists:foldl(fun(Atom, {Bin, Acc}) ->
+		<<Val:16/little, Rest/binary>> = Bin,
+		{Rest, [{Atom, Val} | Acc]}
+	end, {CacheEntries, []}, [graphics,brush,pen,image,image_attr]),
+	{<<>>, CacheSizePlist} = lists:foldl(fun(Atom, {Bin, Acc}) ->
+		<<Val:16/little, Rest/binary>> = Bin,
+		{Rest, [{Atom, Val} | Acc]}
+	end, {CacheChunkSizes, []}, [graphics,brush,pen,image_attr]),
+	{<<>>, ImageCachePlist} = lists:foldl(fun(Atom, {Bin, Acc}) ->
+		<<Val:16/little, Rest/binary>> = Bin,
+		{Rest, [{Atom, Val} | Acc]}
+	end, {ImageCacheProps, []}, [size, total, max]),
+	#ts_cap_gdip{flags=FlagAtoms, version = GdipVersion, cache_entries=CacheEntryPlist, cache_sizes=CacheSizePlist, image_cache=ImageCachePlist};
+
 decode_tscap(16#1a, Bin) ->
 	<<MaxSize:32/little>> = Bin,
 	#ts_cap_multifrag{maxsize = MaxSize};
+
+decode_tscap(16#04, Bin) ->
+	<<_Pad1:32, _Pad2:32, _Pad3:32, _Pad4:32, _Pad5:32, _Pad6:32, Caches/binary>> = Bin,
+	<<Cache0Entries:16/little, Cache0CellSize:16/little,
+	  Cache1Entries:16/little, Cache1CellSize:16/little,
+	  Cache2Entries:16/little, Cache2CellSize:16/little>> = Caches,
+	#ts_cap_bitmapcache{flags=[], cells=[
+		#ts_cap_bitmapcache_cell{count = Cache0Entries, size = Cache0CellSize},
+		#ts_cap_bitmapcache_cell{count = Cache1Entries, size = Cache1CellSize},
+		#ts_cap_bitmapcache_cell{count = Cache2Entries, size = Cache2CellSize}
+	]};
+
+decode_tscap(16#13, Bin) ->
+	<<Flags:16/little, _Pad2, NumCellCaches, Rest/binary>> = Bin,
+	<<_:14, WaitingList:1, PersistentKeys:1>> = <<Flags:16/big>>,
+	FlagAtoms = [rev2] ++
+				if WaitingList == 1 -> [waiting_list]; true -> [] end ++
+				if PersistentKeys == 1 -> [persistent_keys]; true -> [] end,
+	{_Rem, Cells} = lists:foldl(fun(_, {CellBin, Acc}) ->
+		<<CellInfo:32/little, CellRest/binary>> = CellBin,
+		<<Persistent:1, NumEntries:31/big>> = <<CellInfo:32/big>>,
+		CellFlags = if Persistent == 1 -> [persistent]; true -> [] end,
+		Cell = #ts_cap_bitmapcache_cell{count = NumEntries, flags = CellFlags},
+		{CellRest, [Cell | Acc]}
+	end, {Rest, []}, lists:seq(1, NumCellCaches)),
+	#ts_cap_bitmapcache{flags = FlagAtoms, cells = lists:reverse(Cells)};
+
+decode_tscap(16#0f, Bin) ->
+	<<SupportLevel:32/little>> = Bin,
+	Flags = case SupportLevel of
+		0 -> [];
+		1 -> [color_8x8];
+		2 -> [color_8x8, color_full];
+		N when N > 2 -> [color_8x8, color_full, other]
+	end,
+	#ts_cap_brush{flags = Flags};
+
+decode_tscap(16#1b, Bin) ->
+	<<Flags:16/little>> = Bin,
+	<<_:15, Support96:1>> = <<Flags:16/big>>,
+	FlagAtoms = if Support96 == 1 -> [support_96x96]; true -> [] end,
+	#ts_cap_large_pointer{flags = FlagAtoms};
+
+decode_tscap(16#1d, Bin) ->
+	<<CodecCount, CodecsBin/binary>> = Bin,
+	{<<>>, Codecs} = lists:foldl(fun(_, {CodecBin, Acc}) ->
+		<<Guid:16/binary, Id, PropLen:16/little, PropBin:PropLen/binary, Rest/binary>> = CodecBin,
+		{Name, Props} = case Guid of
+			?GUID_NSCODEC ->
+				<<DynFidelity, Subsampling, ColorLossLevel>> = PropBin,
+				{nscodec, [{dynamic_fidelity, DynFidelity == 1},
+						   {subsampling, Subsampling == 1},
+						   {color_loss_level, ColorLossLevel}]};
+			?GUID_REMOTEFX ->
+				{remotefx, []};
+			?GUID_REMOTEFX_IMAGE ->
+				{remotefx_image, []};
+			?GUID_IGNORE ->
+				{ignore, []};
+			_ ->
+				{unknown, []}
+		end,
+		case Name of
+			ignore ->
+				{Rest, Acc};
+			_ ->
+				Codec = #ts_cap_bitmap_codec{codec = Name, guid = Guid, id = Id, properties = Props},
+				{Rest, [Codec | Acc]}
+		end
+	end, {CodecsBin, []}, lists:seq(1, CodecCount)),
+	#ts_cap_bitmap_codecs{codecs = Codecs};
 
 decode_tscap(Type, Bin) ->
 	{Type, Bin}.
@@ -483,6 +579,49 @@ encode_tscap(#ts_cap_input{flags=Flags, kbd_layout=Layout, kbd_type=Type, kbd_su
 
 encode_tscap(#ts_cap_multifrag{maxsize = MaxSize}) ->
 	encode_tscap({16#1a, <<MaxSize:32/little>>});
+
+encode_tscap(#ts_cap_gdip{flags=FlagAtoms, version=GdipVersion, cache_entries=CacheEntryPlist, cache_sizes=CacheSizePlist, image_cache=ImageCachePlist}) ->
+	CacheEntries = lists:foldl(fun({Atom, Default}, Bin) ->
+		Val = proplists:get_value(Atom, CacheEntryPlist, Default),
+		<<Bin/binary, Val:16/little>>
+	end, <<>>, [{graphics, 10},{brush, 5},{pen, 5},{image, 10},{image_attr, 2}]),
+	CacheChunkSizes = lists:foldl(fun({Atom, Default}, Bin) ->
+		Val = proplists:get_value(Atom, CacheSizePlist, Default),
+		<<Bin/binary, Val:16/little>>
+	end, <<>>, [{graphics, 512},{brush, 2048},{pen, 1024},{image_attr, 64}]),
+	ImageCacheProps = lists:foldl(fun({Atom, Default}, Bin) ->
+		Val = proplists:get_value(Atom, ImageCachePlist, Default),
+		<<Bin/binary, Val:16/little>>
+	end, <<>>, [{chunk, 4096}, {total, 256}, {max, 128}]),
+	Supported = case lists:member(supported, FlagAtoms) of true -> 1; _ -> 0 end,
+	CacheSupported = case lists:member(cache, FlagAtoms) of true -> 1; _ -> 0 end,
+	Inner = <<Supported:32/little, GdipVersion:32/little, CacheSupported:32/little, CacheEntries/binary, CacheChunkSizes/binary, ImageCacheProps/binary>>,
+	encode_tscap({16#16, Inner});
+
+encode_tscap(#ts_cap_large_pointer{flags = FlagAtoms}) ->
+	Support96 = case lists:member(support_96x96, FlagAtoms) of true -> 1; _ -> 0 end,
+	<<Flags:16/big>> = <<0:15, Support96:1>>,
+	encode_tscap({16#1b, <<Flags:16/little>>});
+
+encode_tscap(#ts_cap_bitmap_codecs{codecs = Codecs}) ->
+	CodecCount = length(Codecs),
+	CodecsBin = lists:foldl(
+		fun(Codec = #ts_cap_bitmap_codec{codec = Name, id = Id, properties = Props}, Acc) ->
+			{Guid, PropBin} = case Name of
+				nscodec ->
+					DynFidelity = case proplists:get_value(dynamic_fidelity, Props) of true -> 1; _ -> 0 end,
+					Subsampling = case proplists:get_value(subsampling, Props) of true -> 1; _ -> 0 end,
+					ColorLossLevel = case proplists:get_value(color_loss_level, Props) of I when is_integer(I) -> I; _ -> 0 end,
+					{?GUID_NSCODEC, <<DynFidelity, Subsampling, ColorLossLevel>>};
+				remotefx -> {?GUID_REMOTEFX, <<0:32>>};
+				remotefx_image when is_binary(Props) -> {?GUID_REMOTEFX_IMAGE, Props};
+				ignore -> {?GUID_IGNORE, <<>>};
+				_ when is_binary(Props) -> {Codec#ts_cap_bitmap_codec.guid, Props}
+			end,
+			PropLen = byte_size(PropBin),
+			<<Acc/binary, Guid/binary, Id, PropLen:16/little, PropBin/binary>>
+		end, <<>>, Codecs),
+	encode_tscap({16#1d, <<CodecCount, CodecsBin/binary>>});
 
 encode_tscap({Type, Bin}) ->
 	Size = byte_size(Bin) + 4,
