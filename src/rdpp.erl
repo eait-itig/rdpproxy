@@ -64,6 +64,7 @@ pretty_print(Record) ->
 ?pp(ts_cap_large_pointer);
 ?pp(ts_cap_bitmap_codecs);
 ?pp(ts_cap_bitmap_codec);
+?pp(ts_cap_colortable);
 pretty_print(_, _) ->
 	no.
 
@@ -440,24 +441,26 @@ decode_tscap(16#1d, Bin) ->
 				{nscodec, [{dynamic_fidelity, DynFidelity == 1},
 						   {subsampling, Subsampling == 1},
 						   {color_loss_level, ColorLossLevel}]};
+			?GUID_JPEG ->
+				<<Quality>> = PropBin,
+				{jpeg, [{quality, Quality}]};
 			?GUID_REMOTEFX ->
 				{remotefx, []};
 			?GUID_REMOTEFX_IMAGE ->
-				{remotefx_image, []};
+				{remotefx_image, PropBin};
 			?GUID_IGNORE ->
 				{ignore, []};
 			_ ->
-				{unknown, []}
+				{unknown, PropBin}
 		end,
-		case Name of
-			ignore ->
-				{Rest, Acc};
-			_ ->
-				Codec = #ts_cap_bitmap_codec{codec = Name, guid = Guid, id = Id, properties = Props},
-				{Rest, [Codec | Acc]}
-		end
+		Codec = #ts_cap_bitmap_codec{codec = Name, guid = Guid, id = Id, properties = Props},
+		{Rest, [Codec | Acc]}
 	end, {CodecsBin, []}, lists:seq(1, CodecCount)),
-	#ts_cap_bitmap_codecs{codecs = Codecs};
+	#ts_cap_bitmap_codecs{codecs = lists:reverse(Codecs)};
+
+decode_tscap(16#0a, Bin) ->
+	<<Size:16/little, _:16>> = Bin,
+	#ts_cap_colortable{cache_size = Size};
 
 decode_tscap(Type, Bin) ->
 	{Type, Bin}.
@@ -483,7 +486,7 @@ encode_tscap(#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize}) ->
 	CompressCS = case lists:member(compress_cs, FlagAtoms) of true -> 1; _ -> 0 end,
 	CompressSC = case lists:member(compress_sc, FlagAtoms) of true -> 1; _ -> 0 end,
 	<<Flags:32/big>> = <<0:30, CompressCS:1, CompressSC:1>>,
-	Inner = <<Flags:32/little>>, %, ChunkSize:32/little>>,
+	Inner = <<Flags:32/little, ChunkSize:32/little>>,
 	encode_tscap({16#14, Inner});
 
 encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height}) ->
@@ -613,15 +616,21 @@ encode_tscap(#ts_cap_bitmap_codecs{codecs = Codecs}) ->
 					Subsampling = case proplists:get_value(subsampling, Props) of true -> 1; _ -> 0 end,
 					ColorLossLevel = case proplists:get_value(color_loss_level, Props) of I when is_integer(I) -> I; _ -> 0 end,
 					{?GUID_NSCODEC, <<DynFidelity, Subsampling, ColorLossLevel>>};
+				jpeg ->
+					Quality = case proplists:get_value(quality, Props) of I when is_integer(I) -> I; _ -> 75 end,
+					{?GUID_JPEG, <<Quality>>};
 				remotefx -> {?GUID_REMOTEFX, <<0:32>>};
 				remotefx_image when is_binary(Props) -> {?GUID_REMOTEFX_IMAGE, Props};
-				ignore -> {?GUID_IGNORE, <<>>};
+				ignore -> {?GUID_IGNORE, <<0:32>>};
 				_ when is_binary(Props) -> {Codec#ts_cap_bitmap_codec.guid, Props}
 			end,
 			PropLen = byte_size(PropBin),
 			<<Acc/binary, Guid/binary, Id, PropLen:16/little, PropBin/binary>>
 		end, <<>>, Codecs),
 	encode_tscap({16#1d, <<CodecCount, CodecsBin/binary>>});
+
+encode_tscap(#ts_cap_colortable{cache_size = Size}) ->
+	encode_tscap({16#0a, <<Size:16/little, 0:16>>});
 
 encode_tscap({Type, Bin}) ->
 	Size = byte_size(Bin) + 4,

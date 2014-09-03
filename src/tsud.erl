@@ -245,7 +245,7 @@ encode_net(Rec) ->
 	encode_tsud(?CS_NET, <<>>).
 
 decode_cluster(Data) ->
-	<<Flags:32/little, SessionId:32/little>> = Data,
+	<<Flags:32/little, SessionId:32/little, _OldTail/binary>> = Data,
 	<<_:25, Smartcard:1, Version:4, ValidSession:1, Supported:1>> = <<Flags:32/big>>,
 	FlagAtoms = if Smartcard == 1 -> [smartcard]; true -> [] end ++
 				if Supported == 1 -> [supported]; true -> [] end,

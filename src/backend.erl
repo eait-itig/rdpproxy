@@ -12,6 +12,7 @@
 -include("x224.hrl").
 -include("mcsgcc.hrl").
 -include("tsud.hrl").
+-include("rdpp.hrl").
 
 -export([start_link/3]).
 -export([initiation/2, proxy/2]).
@@ -114,9 +115,20 @@ handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data)
 		{ok, {mcs_pdu, Pdu = #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
 			case rdpp:decode_basic(RdpData) of
 				{ok, Rec} ->
+					{ok, RdpData} = rdpp:encode_basic(Rec),
 					error_logger:info_report(["backend rx rdp_basic:\n", rdpp:pretty_print(Rec)]);
 				_ ->
 					case rdpp:decode_sharecontrol(RdpData) of
+						{ok, #ts_demand{} = Rec} ->
+							case rdpp:encode_sharecontrol(Rec) of
+								{ok, RdpData} -> ok;
+								{ok, OtherData} ->
+									file:write_file("backend_orig", RdpData),
+									file:write_file("backend_reenc", OtherData),
+									error_logger:info_report(io_lib:format("original data = ~p\nreenc data = ~p\n", [RdpData, OtherData]));
+								_ -> error(fail_reencode)
+							end,
+							error_logger:info_report(["backend rx rdp_sharecontrol\n", rdpp:pretty_print(Rec)]);
 						{ok, Rec} ->
 							error_logger:info_report(["backend rx rdp_sharecontrol\n", rdpp:pretty_print(Rec)]);
 						_ ->

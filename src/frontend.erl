@@ -265,17 +265,19 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
 					#ts_cap_vchannel{},
 					#ts_cap_font{},
 					#ts_cap_bitmap_codecs{codecs = [
-						#ts_cap_bitmap_codec{codec = nscodec, id = 0, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]}
+						#ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]},
+						#ts_cap_bitmap_codec{codec = jpeg, id = 0, properties = [{quality, 85}]}
 					]},
-					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_order{},
 					#ts_cap_pointer{},
-					#ts_cap_input{flags = [mousex, scancodes, unicode, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
+					#ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
 					#ts_cap_multifrag{},
-					#ts_cap_gdip{},
-					#ts_cap_large_pointer{}
+					#ts_cap_large_pointer{},
+					#ts_cap_colortable{}
 				]
 			}),
+			file:write_file("my_demand", DaPkt),
 			{ok, Da} = rdpp:decode_sharecontrol(DaPkt),
 			error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = DaPkt}),
