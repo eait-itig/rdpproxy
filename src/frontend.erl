@@ -27,7 +27,7 @@ start_link(Sock) ->
 
 -record(x224_state, {us=none, them=none}).
 -record(mcs_state, {us=none, them=none, iochan=none, msgchan=none, chans=[]}).
--record(data, {sock, sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}}).
+-record(data, {sock, sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}}).
 
 send_dpdu(SslSock, McsPkt) ->
 	{ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -106,7 +106,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
 		fun(D) ->
 			{ok, Tsuds} = tsud:decode(McsCi#mcs_ci.data),
 			error_logger:info_report(["tsuds: ", tsud:pretty_print(Tsuds)]),
-			{continue, [D, Tsuds, <<>>]}
+			{continue, [D#data{tsuds = Tsuds}, Tsuds, <<>>]}
 		end,
 		fun(D, Tsuds, SoFar) ->
 			% allocate our MCS user
@@ -268,7 +268,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
 						#ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]},
 						#ts_cap_bitmap_codec{codec = jpeg, id = 0, properties = [{quality, 85}]}
 					]},
-					#ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
 					#ts_cap_order{},
 					#ts_cap_pointer{},
 					#ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
@@ -301,9 +301,9 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = Them} 
 
 rdp_capex({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them, iochan = IoChan}, shareid = ShareId} = Data) ->
 	case rdpp:decode_sharecontrol(RdpData) of
-		{ok, #ts_confirm{shareid = ShareId} = Pkt} ->
+		{ok, #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt} ->
 			error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
-			{next_state, init_finalize, Data};
+			{next_state, init_finalize, Data#data{caps = Caps}};
 		Other ->
 			{stop, Other, Data}
 	end.
@@ -333,8 +333,8 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
 			{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-					#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]},
-					#ts_order_line{start=[100,100], finish=[200,200], color=[255,255,255]}
+					#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]}
+					%#ts_order_line{start=[100,100], finish=[200,200], color=[255,255,255]}
 				]}}),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
 
@@ -404,13 +404,16 @@ clicky_highlight({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, mc
 		#fp_inp_mouse{action=down, buttons=[1], point={X,Y}} ->
 			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 				{ok, Cookie} = session_mgr:store(#session{host = "areole.cooperi.net", port = 3389}),
+				GeneralCap = lists:keyfind(ts_cap_general, 1, Data#data.caps),
 				{ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
 					channel = Us,
 					shareid = ShareId,
-					sessionid = 1,
+					sessionid = 100,
 					flags = [logon],
-					address = unicode:characters_to_binary(<<"rdpproxy",0>>, latin1, {utf16, little}),
-					fqdn = <<"areole.cooperi.net",0>>,
+					address = if GeneralCap#ts_cap_general.os =:= [other,other] ->
+						unicode:characters_to_binary(<<"uqawil16-mbp",0>>, latin1, {utf16, little});
+						true -> undefined end,
+					%fqdn = <<"areole.cooperi.net",0>>,
 					username = unicode:characters_to_binary(<<"test",0>>, latin1, {utf16,little}),
 					domain = unicode:characters_to_binary(<<"COOPERI",0>>, latin1, {utf16,little}),
 					password = unicode:characters_to_binary(<<"test">>, latin1, {utf16,little}),
