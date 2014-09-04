@@ -40,6 +40,15 @@ pretty_print(Record) ->
 ?pp(ts_input);
 ?pp(ts_heartbeat);
 
+?pp(ts_update_orders);
+?pp(ts_order_opaquerect);
+?pp(ts_order_srcblt);
+?pp(ts_order_line);
+
+?pp(ts_bitmap);
+?pp(ts_bitmap_comp_info);
+?pp(ts_update_bitmaps);
+
 ?pp(ts_inpevt_sync);
 ?pp(ts_inpevt_key);
 ?pp(ts_inpevt_unicode);
@@ -804,6 +813,7 @@ encode_sharedata(#ts_sharedata{shareid = ShareId, data = Pdu, priority = Prio, c
 		#ts_fontlist{} -> {39, encode_ts_fontlist(Pdu)};
 		#ts_fontmap{} -> {40, encode_ts_fontmap(Pdu)};
 		#ts_update_orders{} -> {2, encode_ts_update(Pdu)};
+		#ts_update_bitmaps{} -> {2, encode_ts_update(Pdu)};
 		{N, Data} -> {N, Data}
 	end,
 	CompType = case CompTypeAtom of '8k' -> 0; '64k' -> 1; 'rdp6' -> 2; 'rdp61' -> 3; _ -> 4 end,
@@ -847,7 +857,8 @@ encode_ts_fontmap(#ts_fontmap{}) ->
 
 encode_ts_update(Rec) ->
 	{Type, Inner} = case Rec of
-		#ts_update_orders{} -> {0, encode_ts_update_orders(Rec)}
+		#ts_update_orders{} -> {0, encode_ts_update_orders(Rec)};
+		#ts_update_bitmaps{} -> {1, encode_ts_update_bitmaps(Rec)}
 	end,
 	<<Type:16/little, Inner/binary>>.
 
@@ -859,15 +870,28 @@ ceil(X) ->
         _ -> T
     end.
 
-encode_ts_order_head(Type, Fields, Flags) ->
+encode_ts_order_control_flags(Flags) ->
 	Standard = 1,
 	TypeChange = 1,
 	Bounds = 0,
+	Secondary = case lists:member(secondary, Flags) of true -> 1; _ -> 0 end,
 	Delta = case lists:member(delta, Flags) of true -> 1; _ -> 0 end,
 	ZeroBoundsDelta = 0,
 	FieldZeros = 0,
 
-	<<ControlFlags:8>> = <<FieldZeros:2, ZeroBoundsDelta:1, Delta:1, TypeChange:1, Bounds:1, 0:1, Standard:1>>,
+	<<ControlFlags:8>> = <<FieldZeros:2, ZeroBoundsDelta:1, Delta:1, TypeChange:1, Bounds:1, Secondary:1, Standard:1>>,
+	ControlFlags.
+
+encode_secondary_ts_order(Type, Flags, ExtraFlags, Inner) ->
+	ControlFlags = encode_ts_order_control_flags([secondary | Flags]),
+	% the -13 here is for historical reasons, see the spec
+	OrderLen = byte_size(Inner) + 6 - 13,
+	<<ControlFlags:8, OrderLen:16/little, ExtraFlags:16/little, Type:8, Inner/binary>>.
+
+encode_primary_ts_order(Type, Fields, Flags, Inner) ->
+	ControlFlags = encode_ts_order_control_flags(Flags),
+	% primary drawing orders use the crazy bit string to identify
+	% which params are being given and which are not
 	FieldBits = ceil((length(Fields) + 1.0) / 8.0) * 8,
 	Shortfall = FieldBits - length(Fields),
 	FieldShort = lists:foldl(fun(Next, Bin) ->
@@ -875,20 +899,19 @@ encode_ts_order_head(Type, Fields, Flags) ->
 	end, <<>>, Fields),
 	<<FieldN:FieldBits/big>> = <<0:Shortfall, FieldShort/bitstring>>,
 
-	<<ControlFlags:8, Type:8, FieldN:FieldBits/little>>.
+	<<ControlFlags:8, Type:8, FieldN:FieldBits/little, Inner/binary>>.
 
-encode_ts_order(#ts_order_opaquerect{flags = Flags, dest=[X,Y], size=[W,H], color=[R,G,B]}) ->
+encode_ts_order(#ts_order_opaquerect{flags = Flags, dest={X,Y}, size={W,H}, color={R,G,B}}) ->
 	Inner = <<X:16/little-signed, Y:16/little-signed, W:16/little-signed, H:16/little-signed, R:8, G:8, B:8>>,
-	Head = encode_ts_order_head(16#0a, [1,1,1,1,1,1,1], Flags),
-	<<Head/binary, Inner/binary>>;
-encode_ts_order(#ts_order_srcblt{flags = Flags, dest = [X1,Y1], src = [X2, Y2], size = [W,H], rop = Rop}) ->
+	encode_primary_ts_order(16#0a, [1,1,1,1,1,1,1], Flags, Inner);
+
+encode_ts_order(#ts_order_srcblt{flags = Flags, dest = {X1,Y1}, src = {X2, Y2}, size = {W,H}, rop = Rop}) ->
 	Inner = <<X1:16/little-signed, Y1:16/little-signed, W:16/little-signed, H:16/little-signed, Rop:8, X2:16/little, Y2:16/little>>,
-	Head = encode_ts_order_head(16#02, [1,1,1,1,1,1,1], Flags),
-	<<Head/binary, Inner/binary>>;
-encode_ts_order(#ts_order_line{start = [X1,Y1], finish = [X2,Y2], flags = Flags, rop = Rop, color = [R,G,B]}) ->
+	encode_primary_ts_order(16#02, [1,1,1,1,1,1,1], Flags, Inner);
+
+encode_ts_order(#ts_order_line{start = {X1,Y1}, finish = {X2,Y2}, flags = Flags, rop = Rop, color = {R,G,B}}) ->
 	Inner = <<X1:16/little-signed, Y1:16/little-signed, X2:16/little-signed, Y2:16/little-signed, Rop:8, R:8, G:8, B:8>>,
-	Head = encode_ts_order_head(16#09, [0,1,1,1,1,0,1,0,0,1], Flags),
-	<<Head/binary, Inner/binary>>.
+	encode_primary_ts_order(16#09, [0,1,1,1,1,0,1,0,0,1], Flags, Inner).
 
 encode_ts_update_orders(#ts_update_orders{orders = Orders}) ->
 	OrdersBin = lists:foldl(fun(Next, Bin) ->
@@ -897,6 +920,33 @@ encode_ts_update_orders(#ts_update_orders{orders = Orders}) ->
 	end, <<>>, Orders),
 	N = length(Orders),
 	<<0:16, N:16/little, 0:16, OrdersBin/binary>>.
+
+encode_ts_bitmap(#ts_bitmap{dest={X,Y}, size={W,H}, bpp=Bpp, comp_info=CompInfo, data=Data}) ->
+	#ts_bitmap_comp_info{flags=CompFlags, scan_width=ScanWidth, full_size=FullSize} = CompInfo,
+	Compressed = lists:member(compressed, CompFlags),
+	ComprFlag = case Compressed of true -> 1; _ -> 0 end,
+	NoComprFlag = case Compressed of true -> 0; _ -> 1 end,
+	<<Flags:16/big>> = <<0:5, NoComprFlag:1, 0:9, ComprFlag:1>>,
+	X2 = X + W,
+	Y2 = Y + H,
+	Body = if
+		Compressed ->
+			CompSize = byte_size(Data),
+			CompHdr = <<0:16, CompSize:16/little, ScanWidth:16/little, FullSize:16/little>>,
+			<<CompHdr/binary, Data/binary>>;
+		not Compressed ->
+			Data
+	end,
+	BodyLength = byte_size(Body),
+	<<X:16/little, Y:16/little, X2:16/little, Y2:16/little, W:16/little, H:16/little, Bpp:16/little, Flags:16/little, BodyLength:16/little, Body/binary>>.
+
+encode_ts_update_bitmaps(#ts_update_bitmaps{bitmaps = Bitmaps}) ->
+	N = length(Bitmaps),
+	BitmapsBin = lists:foldl(fun(Next, Bin) ->
+		Encode = encode_ts_bitmap(Next),
+		<<Bin/binary, Encode/binary>>
+	end, <<>>, Bitmaps),
+	<<N:16/little, BitmapsBin/binary>>.
 
 decode_ts_inpevt(16#0000, Bin) ->
 	<<_:16, Flags:16/little, Rest/binary>> = Bin,

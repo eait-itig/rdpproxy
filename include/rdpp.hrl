@@ -63,7 +63,8 @@
 -record(ts_order_line, {flags=[], start, finish, rop=?ROP_PATCOPY, color=[0,0,0]}).
 -record(ts_update_orders, {orders=[]}).
 
--record(ts_bitmap, {dest, size, bpp=24, compress=no, data}).
+-record(ts_bitmap_comp_info, {flags=[], scan_width, full_size}).
+-record(ts_bitmap, {dest, size, bpp=24, comp_info = #ts_bitmap_comp_info{}, data}).
 -record(ts_update_bitmaps, {bitmaps=[]}).
 
 -record(ts_inpevt_sync, {flags=[]}).

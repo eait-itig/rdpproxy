@@ -333,7 +333,7 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
 			{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-					#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]}
+					#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
 					%#ts_order_line{start=[100,100], finish=[200,200], color=[255,255,255]}
 				]}}),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
@@ -353,7 +353,7 @@ clicky({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, mcs = #mcs_s
 		#fp_inp_mouse{action=move, point={X,Y}} ->
 			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 				{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-						#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,230,230]}
+						#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,230,230}}
 					]}}),
 				send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
 				{next_state, clicky_highlight, Data};
@@ -371,7 +371,7 @@ clicky({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #dat
 				#ts_inpevt_mouse{action=move, point={X,Y}} ->
 					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-								#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,230,230]}
+								#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,230,230}}
 							]}}),
 						send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
 						{next_state, clicky_highlight, Data};
@@ -396,7 +396,7 @@ clicky_highlight({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, mc
 				{next_state, clicky_highlight, Data};
 			true ->
 				{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-						#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]}
+						#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
 					]}}),
 				send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
 				{next_state, clicky, Data}
@@ -441,7 +441,7 @@ clicky_highlight({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoCh
 						{next_state, clicky_highlight, Data};
 					true ->
 						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-								#ts_order_opaquerect{dest=[200,200], size=[100,50], color=[255,100,100]}
+								#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
 							]}}),
 						send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
 						{next_state, clicky, Data}
