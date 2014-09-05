@@ -22,14 +22,14 @@
 start_link(Frontend, Address, Port) ->
 	gen_fsm:start_link(?MODULE, [Frontend, Address, Port], []).
 
--record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, frontend}).
+-record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, frontend}).
 
 %% @private
 init([Frontend, Address, Port]) ->
 	process_flag(trap_exit, true),
 	random:seed(erlang:now()),
 	UsRef = 0,
-	case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, tpkt}, {nodelay, true}]) of
+	case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}]) of
 		{ok, Sock} ->
 			Cr = #x224_cr{src = UsRef, dst = 0, rdp_protocols = [ssl]},
 			{ok, CrData} = x224:encode(Cr),
@@ -41,19 +41,19 @@ init([Frontend, Address, Port]) ->
 			{stop, Reason}
 	end.
 
-initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed} = Pkt}, #data{addr = Address, port = Port, sock = Sock, usref = UsRef} = Data) ->
-	gen_tcp:close(Sock),
-	case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, tpkt}, {nodelay, true}]) of
-		{ok, NewSock} ->
-			Cr = #x224_cr{src = UsRef, dst = 0, rdp_protocols = []},
-			{ok, CrData} = x224:encode(Cr),
-			{ok, Packet} = tpkt:encode(CrData),
-			ok = gen_tcp:send(NewSock, Packet),
-			{next_state, initiation, Data#data{sock = NewSock}};
-
-		{error, Reason} ->
-			{stop, Reason, Data}
-	end;
+%initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed} = Pkt}, #data{addr = Address, port = Port, sock = Sock, usref = UsRef} = Data) ->
+%	gen_tcp:close(Sock),
+%	case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, tpkt}, {nodelay, true}]) of
+%		{ok, NewSock} ->
+%			Cr = #x224_cr{src = UsRef, dst = 0, rdp_protocols = []},
+%			{ok, CrData} = x224:encode(Cr),
+%			{ok, Packet} = tpkt:encode(CrData),
+%			ok = gen_tcp:send(NewSock, Packet),
+%			{next_state, initiation, Data#data{sock = NewSock}};
+%
+%		{error, Reason} ->
+%			{stop, Reason, Data}
+%	end;
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend} = Data) ->
 	#x224_cc{src = ThemRef, rdp_selected = Selected, rdp_flags = Flags} = Pkt,
@@ -85,34 +85,16 @@ proxy({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = SslSock, fron
 	end,
 	{next_state, proxy, Data}.
 
-%% @private
-handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
-	error_logger:info_report([{backend_recv, Bin}]),
-	case tpkt:decode(Bin) of
-		{ok, Body, Rem} ->
-			case byte_size(Rem) of
-				N when N > 0 -> self() ! {tcp, Sock, Rem};
-				_ -> ok
-			end,
-			case x224:decode(Body) of
-				{ok, Pdu} ->
-					error_logger:info_report(["backend received\n", x224:pretty_print(Pdu)]),
-					?MODULE:State({pdu, Pdu}, Data);
-				{error, _} ->
-					?MODULE:State({data, Body}, Data)
-			end;
-		{error, Reason} ->
-			error_logger:info_report([{bad_tpkt, Reason}]),
-			{next_state, State, Data}
-	end;
-
-handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data) ->
-	case rdpp:decode_client(Bin) of
-		{ok, {fp_pdu, Pdu}, _} ->
-			error_logger:info_report(["backend rx fastpath:\n", fastpath:pretty_print(Pdu)]);
-		{ok, {x224_pdu, Pdu}, _} ->
-			error_logger:info_report(["backend rx x224:\n", x224:pretty_print(Pdu)]);
-		{ok, {mcs_pdu, Pdu = #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
+debug_print_data(<<>>) -> ok;
+debug_print_data(Bin) ->
+	case rdpp:decode_connseq(Bin) of
+		{ok, {fp_pdu, Pdu}, Rem} ->
+			%error_logger:info_report(["backend rx fastpath:\n", fastpath:pretty_print(Pdu)]);
+			debug_print_data(Rem);
+		{ok, {x224_pdu, Pdu}, Rem} ->
+			error_logger:info_report(["backend rx x224:\n", x224:pretty_print(Pdu)]),
+			debug_print_data(Rem);
+		{ok, {mcs_pdu, Pdu = #mcs_srv_data{data = RdpData, channel = Chan}}, Rem} ->
 			case rdpp:decode_basic(RdpData) of
 				{ok, Rec} ->
 					{ok, RdpData} = rdpp:encode_basic(Rec),
@@ -134,17 +116,47 @@ handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data)
 						_ ->
 							error_logger:info_report(["backend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]])
 					end
-			end;
-		{ok, {mcs_pdu, Pdu}, _} ->
-			error_logger:info_report(["backend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]]);
-		_ -> ok
-	end,
+			end,
+			debug_print_data(Rem);
+		{ok, {mcs_pdu, McsCr = #mcs_cr{}}, Rem} ->
+			{ok, Tsuds} = tsud:decode(McsCr#mcs_cr.data),
+			error_logger:info_report(["backend rx cr with tsuds: ", tsud:pretty_print(Tsuds)]),
+			debug_print_data(Rem);
+		{ok, {mcs_pdu, Pdu}, Rem} ->
+			error_logger:info_report(["backend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]]),
+			debug_print_data(Rem);
+		{ok, Something, Rem} ->
+			error_logger:info_report([{backend_unknown, Something},{remaining, Rem}]);
+		{error, Reason} ->
+			ok
+	end.
+
+%% @private
+handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Data) ->
+	debug_print_data(Bin),
+	case rdpp:decode_connseq(Bin) of
+		{ok, {x224_pdu, Pdu}, Rem} ->
+			case byte_size(Rem) of
+				N when N > 0 -> self() ! {ssl, SslSock, Rem};
+				_ -> ok
+			end,
+			?MODULE:State({pdu, Pdu}, Data);
+		Other ->
+			error_logger:info_report([{backend_out, Other}]),
+			{next_state, State, Data}
+	end;
+
+handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data) ->
+	debug_print_data(Bin),
 	?MODULE:State({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
 	handle_info({tcp, Sock, Bin}, State, Data);
 
+handle_info({ssl_closed, SslSock}, State, #data{sslsock = SslSock} = Data) ->
+	{stop, normal, Data};
+
 handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
-	?MODULE:State(disconnect, Data);
+	{stop, normal, Data};
 
 handle_info(_Msg, State, Data) ->
 	{next_state, State, Data}.

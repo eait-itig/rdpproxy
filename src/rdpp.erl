@@ -97,6 +97,7 @@ decode_connseq(Bin) ->
 		fun decoder_tpkt/1,
 		fun decoder_x224/2,
 		fun decoder_mcs_ci/3,
+		fun decoder_mcs_cr/3,
 		fun decoder_mcs_generic/3
 	], [Bin]).
 
@@ -118,7 +119,7 @@ decoder_tpkt(Bin) ->
 
 decoder_x224(Body, Rem) ->
 	case x224:decode(Body) of
-		{ok, #x224_dt{data = McsData} = Pdu} ->
+		{ok, #x224_dt{eot = 1, tpdunr = 0, data = McsData} = Pdu} ->
 			{continue, [Pdu, McsData, Rem]};
 		{ok, Pdu} ->
 			{return, {ok, {x224_pdu, Pdu}, Rem}};
@@ -139,6 +140,15 @@ decoder_mcs_ci(Pdu, McsData, Rem) ->
 		{ok, McsPkt} ->
 			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
 		_ ->
+			{continue, [Pdu, McsData, Rem]}
+	end.
+
+decoder_mcs_cr(Pdu, McsData, Rem) ->
+	case mcsgcc:decode_cr(McsData) of
+		{ok, McsPkt} ->
+			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
+		Err ->
+			%error_logger:info_report([{mcs_decode_fail, Err}]),
 			{continue, [Pdu, McsData, Rem]}
 	end.
 

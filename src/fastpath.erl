@@ -29,6 +29,11 @@ pretty_print(Record) ->
 ?pp(fp_inp_sync);
 ?pp(fp_inp_unicode);
 ?pp(fp_inp_unknown);
+?pp(ts_inpevt_key);
+?pp(ts_inpevt_mouse);
+?pp(ts_inpevt_wheel);
+?pp(ts_inpevt_sync);
+?pp(ts_inpevt_unicode);
 pretty_print(0, _) ->
 	no.
 

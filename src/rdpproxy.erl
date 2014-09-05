@@ -33,6 +33,9 @@ init(_Args) ->
 			{frontend_sup,
 				{frontend_sup, start_link, [3389]},
 				permanent, infinity, supervisor, [frontend, frontend_sup]},
+			{ui_sup,
+				{ui_sup, start_link, []},
+				permanent, infinity, supervisor, [ui_fsm, ui_sup]},
 			{session_mgr,
 				{session_mgr, start_link, []},
 				permanent, 10, worker, [session_mgr]}

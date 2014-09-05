@@ -65,28 +65,32 @@ decode(Bin) ->
 
 		<<TypeN:16/little, Length:16/little, Rest/binary>> ->
 			DataLength = Length - 4,
-			<<Data:DataLength/binary-unit:8, Rem/binary>> = Rest,
-			{ok, Others} = decode(Rem),
-			Type = case TypeN of
-				?CS_CORE -> decode_core;
-				?CS_SECURITY -> decode_security;
-				?CS_CLUSTER -> decode_cluster;
-				?CS_NET -> decode_net;
-				?CS_MONITOR -> decode_monitor;
-				?CS_MCS_MSGCHANNEL -> decode_msgchannel;
-				?CS_MONITOR_EX -> decode_monitor_ex;
-				?CS_MULTITRANSPORT -> decode_multitransport;
-				?SC_CORE -> decode_svr_core;
-				?SC_NET -> decode_svr_net;
-				?SC_SECURITY -> decode_svr_security;
-				?SC_MCS_MSGCHANNEL -> decode_svr_msgchannel;
-				?SC_MULTITRANSPORT -> decode_svr_multitransport;
-				_ -> unknown
-			end,
-			if Type =:= unknown ->
-				{ok, [#tsud_unknown{type = TypeN, data = Data} | Others]};
-			true ->
-				{ok, [?MODULE:Type(Data) | Others]}
+			case Rest of
+				<<Data:DataLength/binary-unit:8, Rem/binary>> ->
+					{ok, Others} = decode(Rem),
+					Type = case TypeN of
+						?CS_CORE -> decode_core;
+						?CS_SECURITY -> decode_security;
+						?CS_CLUSTER -> decode_cluster;
+						?CS_NET -> decode_net;
+						?CS_MONITOR -> decode_monitor;
+						?CS_MCS_MSGCHANNEL -> decode_msgchannel;
+						?CS_MONITOR_EX -> decode_monitor_ex;
+						?CS_MULTITRANSPORT -> decode_multitransport;
+						?SC_CORE -> decode_svr_core;
+						?SC_NET -> decode_svr_net;
+						?SC_SECURITY -> decode_svr_security;
+						?SC_MCS_MSGCHANNEL -> decode_svr_msgchannel;
+						?SC_MULTITRANSPORT -> decode_svr_multitransport;
+						_ -> unknown
+					end,
+					if Type =:= unknown ->
+						{ok, [#tsud_unknown{type = TypeN, data = Data} | Others]};
+					true ->
+						{ok, [?MODULE:Type(Data) | Others]}
+					end;
+				_ ->
+					{error, bad_tsud}
 			end;
 
 		_ ->
