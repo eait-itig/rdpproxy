@@ -107,7 +107,6 @@ encode_dpdu(#mcs_srv_data{user = UserId, channel = Channel, priority = Priority,
 encode_dpdu(_) -> {error, bad_dpdu}.
 
 decode_ci(Bin) ->
-	case Bin of <<"!",16#80>> -> {error, blacklisted}; _ ->
 	case mcsp_ber:decode('Connect-Initial', Bin) of
 		{ok, CI, Rem} ->
 			padding_only(Rem),
@@ -143,10 +142,9 @@ decode_ci(Bin) ->
 			end;
 		Other ->
 			Other
-	end end.
+	end.
 
 decode_cr(Bin) ->
-	case Bin of <<"!",16#80>> -> {error, blacklisted}; _ ->
 	case mcsp_ber:decode('Connect-Response', Bin) of
 		{ok, CR, Rem} ->
 			padding_only(Rem),
@@ -186,7 +184,7 @@ decode_cr(Bin) ->
 			end;
 		Other ->
 			Other
-	end end.
+	end.
 
 encode_cr(#mcs_cr{} = McsCr) ->
 	UserData = #'UserData_SETOF'{key = {h221NonStandard, "McDn"}, value = binary_to_list(McsCr#mcs_cr.data)},
