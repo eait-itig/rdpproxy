@@ -8,9 +8,11 @@
 
 -module(fastpath).
 
+-include("rdpp.hrl").
 -include("fastpath.hrl").
 
 -export([decode_input/1, decode_output/1]).
+-export([encode_output/1]).
 -export([pretty_print/1]).
 
 -define(pp(Rec),
@@ -90,6 +92,68 @@ decode_input(Binary) ->
 
 decode_output(Binary) ->
 	decode(Binary, fun decode_out_updates/1).
+
+encode_update(#ts_update_orders{orders = Orders}) ->
+	Count = length(Orders),
+	OrdersBin = lists:foldl(fun(Order, Bin) ->
+		B = rdpp:encode_ts_order(Order),
+		<<Bin/binary, B/binary>>
+	end, <<>>, Orders),
+	Inner = <<Count:16/little, OrdersBin/binary>>,
+	encode_update({16#00, single, Inner});
+
+encode_update(Ub = #ts_update_bitmaps{bitmaps = Bitmaps}) ->
+	Inner = rdpp:encode_ts_update_bitmaps(Ub),
+	encode_update({16#01, single, Inner});
+
+encode_update({Type, Fragment, Data}) ->
+	Compression = 0,
+	Fragmentation = case Fragment of
+		single -> 0;
+		last -> 1;
+		first -> 2;
+		next -> 3
+	end,
+	Size = byte_size(Data),
+	<<Compression:2, Fragmentation:2, Type:4, Size:16/little, Data/binary>>.
+
+encode_output(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = Contents}) when is_list(Contents) ->
+	ContentsBin = lists:foldl(
+		fun(Update, Bin) when is_binary(Update) ->
+			<<Bin/binary, Update/binary>>;
+		(Update, Bin) ->
+			B = encode_update(Update),
+			<<Bin/binary, B/binary>>
+		end, <<>>, Contents),
+	Encrypted = case lists:member(encrypted, Flags) of true -> 1; _ -> 0 end,
+	SaltedMAC = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
+	LargeN = (length(Contents) >= 1 bsl 5),
+	LargeSize = ((byte_size(ContentsBin) + 12) >= 1 bsl 8),
+	HeaderLen = 1 + (if LargeSize -> 2; true -> 1 end) +
+				(if LargeN -> 1; true -> 0 end) +
+				(if Encrypted == 1 -> 8; true -> 0 end),
+	TotalSize = HeaderLen + byte_size(ContentsBin),
+	Header0 = if LargeN ->
+		<<Encrypted:1, SaltedMAC:1, 0:4, ?ACT_FASTPATH:2>>;
+	true ->
+		<<Encrypted:1, SaltedMAC:1, (length(Contents)):4, ?ACT_FASTPATH:2>>
+	end,
+	Header1 = if LargeSize ->
+		<<Header0/binary, 1:1, TotalSize:15/big>>;
+	true ->
+		<<Header0/binary, 0:1, TotalSize:7>>
+	end,
+	Header2 = if (Encrypted == 1) ->
+		<<Header1/binary, Signature/binary>>;
+	true ->
+		Header1
+	end,
+	Header3 = if LargeN ->
+		<<Header2/binary, TotalSize:8>>;
+	true ->
+		Header2
+	end,
+	<<Header3/binary, ContentsBin/binary>>.
 
 decode(Binary, Decoder) ->
 	maybe([

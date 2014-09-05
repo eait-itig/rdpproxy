@@ -35,6 +35,18 @@ send_dpdu(SslSock, McsPkt) ->
 	{ok, Packet} = tpkt:encode(DtData),
 	ok = ssl:send(SslSock, Packet).
 
+send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
+	#ts_cap_general{flags = Flags} = lists:keyfind(ts_cap_general, 1, Caps),
+	case lists:member(fastpath, Flags) of
+		true ->
+			Bin = fastpath:encode_output(#fp_pdu{flags=[], contents=[TsUpdate]}),
+			ok = ssl:send(SslSock, Bin);
+		_ ->
+			#data{shareid = ShareId, mcs = #mcs_state{us = Us, iochan = IoChan}} = Data,
+			{ok, Bin} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = TsUpdate}),
+			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Bin})
+	end.
+
 %% @private
 init([Sock]) ->
 	process_flag(trap_exit, true),
@@ -336,11 +348,10 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
 			{ok, FontMap} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_fontmap{}}),
 			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
-			{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-					#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
-					%#ts_order_line{start=[100,100], finish=[200,200], color=[255,255,255]}
-				]}}),
-			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
+			send_update(Data, #ts_update_orders{orders = [
+				#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
+				%#ts_order_line{start=[100,100], finish=[200,200], color=[255,255,255]}
+			]}),
 
 			{next_state, clicky, Data};
 
@@ -356,10 +367,9 @@ clicky({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, mcs = #mcs_s
 	case lists:last(Evts) of
 		#fp_inp_mouse{action=move, point={X,Y}} ->
 			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
-				{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-						#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,230,230}}
-					]}}),
-				send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
+				send_update(Data, #ts_update_orders{orders = [
+					#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,230,230}}
+				]}),
 				{next_state, clicky_highlight, Data};
 			true ->
 				{next_state, clicky, Data}
@@ -374,10 +384,9 @@ clicky({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #dat
 			case lists:last(Evts) of
 				#ts_inpevt_mouse{action=move, point={X,Y}} ->
 					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
-						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-								#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,230,230}}
-							]}}),
-						send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
+						send_update(Data, #ts_update_orders{orders = [
+							#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,230,230}}
+						]}),
 						{next_state, clicky_highlight, Data};
 					true ->
 						{next_state, clicky, Data}
@@ -399,10 +408,9 @@ clicky_highlight({fp_pdu, #fp_pdu{contents = Evts}}, #data{sslsock = SslSock, mc
 			if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 				{next_state, clicky_highlight, Data};
 			true ->
-				{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-						#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
-					]}}),
-				send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
+				send_update(Data, #ts_update_orders{orders = [
+					#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
+				]}),
 				{next_state, clicky, Data}
 			end;
 		#fp_inp_mouse{action=down, buttons=[1], point={X,Y}} ->
@@ -444,10 +452,9 @@ clicky_highlight({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoCh
 					if (X > 200) and (X < 300) and (Y > 200) and (Y < 250) ->
 						{next_state, clicky_highlight, Data};
 					true ->
-						{ok, Updates} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_update_orders{orders = [
-								#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
-							]}}),
-						send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Updates}),
+						send_update(Data, #ts_update_orders{orders = [
+							#ts_order_opaquerect{dest={200,200}, size={100,50}, color={255,100,100}}
+						]}),
 						{next_state, clicky, Data}
 					end;
 				#ts_inpevt_mouse{action=down, buttons=[1], point={X,Y}} ->
