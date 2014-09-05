@@ -12,7 +12,7 @@
 -include("x224.hrl").
 -include("rdpp.hrl").
 
--export([decode_client/1, decode_server/1]).
+-export([decode_client/1, decode_server/1, decode_connseq/1]).
 -export([encode_protocol_flags/1, decode_protocol_flags/1]).
 -export([decode_basic/1, decode_sharecontrol/1]).
 -export([encode_basic/1, encode_sharecontrol/1]).
@@ -85,41 +85,61 @@ decode_server(Bin) ->
 
 decode(Bin, Dirn) ->
 	maybe([
-		fun() ->
-			case fastpath:Dirn(Bin) of
-				{ok, Pdu, Rem} ->
-					{return, {ok, {fp_pdu, Pdu}, Rem}};
-				{error, _} ->
-					{continue, []}
-			end
-		end,
-		fun() ->
-			case tpkt:decode(Bin) of
-				{ok, Body, Rem} ->
-					{continue, [Body, Rem]};
-				{error, Reason} ->
-					{return, {error, {tpkt, Reason}}}
-			end
-		end,
-		fun(Body, Rem) ->
-			case x224:decode(Body) of
-				{ok, #x224_dt{data = McsData} = Pdu} ->
-					{continue, [Pdu, McsData, Rem]};
-				{ok, Pdu} ->
-					{return, {ok, {x224_pdu, Pdu}, Rem}};
-				{error, Reason} ->
-					{return, {error, {x224, Reason}}}
-			end
-		end,
-		fun(Pdu, McsData, Rem) ->
-			case mcsgcc:decode(McsData) of
-				{ok, McsPkt} ->
-					{return, {ok, {mcs_pdu, McsPkt}, Rem}};
-				_ ->
-					{return, {ok, {x224_pdu, Pdu}, Rem}}
-			end
-		end
-	], []).
+		fun decoder_fastpath/2,
+		fun decoder_tpkt/1,
+		fun decoder_x224/2,
+		fun decoder_mcs_generic/3
+	], [Bin, Dirn]).
+
+decode_connseq(Bin) ->
+	maybe([
+		fun decoder_tpkt/1,
+		fun decoder_x224/2,
+		fun decoder_mcs_ci/3,
+		fun decoder_mcs_generic/3
+	], [Bin]).
+
+decoder_fastpath(Bin, Dirn) ->
+	case fastpath:Dirn(Bin) of
+		{ok, Pdu, Rem} ->
+			{return, {ok, {fp_pdu, Pdu}, Rem}};
+		{error, _} ->
+			{continue, [Bin]}
+	end.
+
+decoder_tpkt(Bin) ->
+	case tpkt:decode(Bin) of
+		{ok, Body, Rem} ->
+			{continue, [Body, Rem]};
+		{error, Reason} ->
+			{return, {error, {tpkt, Reason}}}
+	end.
+
+decoder_x224(Body, Rem) ->
+	case x224:decode(Body) of
+		{ok, #x224_dt{data = McsData} = Pdu} ->
+			{continue, [Pdu, McsData, Rem]};
+		{ok, Pdu} ->
+			{return, {ok, {x224_pdu, Pdu}, Rem}};
+		{error, Reason} ->
+			{return, {error, {x224, Reason}}}
+	end.
+
+decoder_mcs_generic(Pdu, McsData, Rem) ->
+	case mcsgcc:decode(McsData) of
+		{ok, McsPkt} ->
+			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
+		_ ->
+			{return, {ok, {x224_pdu, Pdu}, Rem}}
+	end.
+
+decoder_mcs_ci(Pdu, McsData, Rem) ->
+	case mcsgcc:decode_ci(McsData) of
+		{ok, McsPkt} ->
+			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
+		_ ->
+			{continue, [Pdu, McsData, Rem]}
+	end.
 
 -spec encode_protocol_flags([atom()]) -> integer().
 encode_protocol_flags(Protocols) ->

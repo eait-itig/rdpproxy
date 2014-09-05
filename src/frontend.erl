@@ -193,7 +193,11 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
 			TsCore = lists:keyfind(tsud_core, 1, Tsuds),
 			{return, {next_state, mcs_attach_user, D#data{tsud_core = TsCore}}}
 		end
-	], [Data0]).
+	], [Data0]);
+
+mcs_connect({mcs_pdu, Pdu}, Data) ->
+	error_logger:info_report(["mcs_connect got: ", mcsgcc:pretty_print(Pdu)]),
+	{next_state, mcs_connect, Data}.
 
 mcs_attach_user({x224_pdu, _}, Data) ->
 	{next_state, mcs_attach_user, Data};
@@ -505,6 +509,18 @@ queue_remainder(Sock, Bin) when byte_size(Bin) > 0 ->
 queue_remainder(_, _) -> ok.
 
 %% @private
+handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data)
+		when (State =:= initiation) or (State =:= mcs_connect) ->
+	% we have to use decode_connseq here to avoid ambiguity in the asn.1 for
+	% the mcs_ci
+	case rdpp:decode_connseq(Bin) of
+		{ok, Evt, Rem} ->
+			queue_remainder(Sock, Rem),
+			?MODULE:State(Evt, Data);
+		{error, Reason} ->
+			error_logger:info_report([{rdpp_decode_fail, Reason}]),
+			{next_state, State, Data}
+	end;
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
 	case rdpp:decode_server(Bin) of
 		{ok, Evt, Rem} ->

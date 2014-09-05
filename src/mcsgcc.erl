@@ -33,6 +33,7 @@ pretty_print(Record) ->
 ?pp(mcs_auc);
 ?pp(mcs_cjr);
 ?pp(mcs_cjc);
+?pp(mcs_tir);
 ?pp(mcs_data);
 ?pp(mcs_srv_data);
 pretty_print(_, _) ->
@@ -44,7 +45,7 @@ decode_try_methods(Bin, Methods) ->
 	case ?MODULE:Method(Bin) of
 		{ok, Rec} -> {ok, Rec};
 		Error ->
-			error_logger:info_report([{tried, Method}, {got, Error}]),
+			%error_logger:info_report([{tried, Method}, {got, Error}]),
 			decode_try_methods(Bin, Rest)
 	end.
 
@@ -55,6 +56,11 @@ decode(Bin) ->
 encode(#mcs_ci{} = Rec) -> encode_ci(Rec);
 encode(#mcs_cr{} = Rec) -> encode_cr(Rec);
 encode(#mcs_edr{} = Rec) -> encode_dpdu(Rec);
+encode(#mcs_tic{} = Rec) -> encode_dpdu(Rec);
+encode(#mcs_cjc{} = Rec) -> encode_dpdu(Rec);
+encode(#mcs_auc{} = Rec) -> encode_dpdu(Rec);
+encode(#mcs_data{} = Rec) -> encode_dpdu(Rec);
+encode(#mcs_srv_data{} = Rec) -> encode_dpdu(Rec);
 encode(_) -> {error, bad_mcsgcc}.
 
 decode_dpdu(Bin) ->
@@ -73,12 +79,18 @@ decode_dpdu(Bin) ->
 			{ok, #mcs_cjr{user = UserId, channel = Channel}};
 		{ok, {channelJoinConfirm, #'ChannelJoinConfirm'{result = Result, initiator=UserId, requested=Channel}}} ->
 			{ok, #mcs_cjc{user = UserId, status = Result, channel = Channel}};
-		{ok, _} ->
-			{error, nothandled};
+		{ok, {tokenInhibitRequest, #'TokenInhibitRequest'{initiator=UserId, tokenId=Token}}} ->
+			{ok, #mcs_tir{user = UserId, token = Token}};
+		{ok, {tokenInhibitConfirm, #'TokenInhibitConfirm'{initiator=UserId, tokenId=Token, result=Status, tokenStatus=TokenStatus}}} ->
+			{ok, #mcs_tic{user = UserId, token = Token, status = Status, token_status = TokenStatus}};
+		{ok, {Atom, _}} ->
+			{error, {nothandled, Atom}};
 		Other ->
 			Other
 	end.
 
+encode_dpdu(#mcs_tic{user = UserId, token = Token, status = Status, token_status = TokenStatus}) ->
+	mcsp_per:encode('DomainMCSPDU', {tokenInhibitConfirm, #'TokenInhibitConfirm'{result = Status, tokenStatus = TokenStatus, initiator = UserId, tokenId = Token}});
 encode_dpdu(#mcs_auc{status = Result, user = UserId}) ->
 	mcsp_per:encode('DomainMCSPDU', {attachUserConfirm, #'AttachUserConfirm'{result = Result, initiator = UserId}});
 encode_dpdu(#mcs_cjc{channel = Channel, status = Result, user = UserId}) ->

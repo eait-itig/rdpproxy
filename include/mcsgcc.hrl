@@ -15,5 +15,7 @@
 -record(mcs_auc, {status='rt-successful', user}).
 -record(mcs_cjr, {channel, user}).
 -record(mcs_cjc, {channel, status='rt-successful', user}).
+-record(mcs_tir, {user, token}).
+-record(mcs_tic, {user, token, status='rt-successful', token_status='notInUse'}).
 -record(mcs_data, {user, channel, priority=high, data}).
 -record(mcs_srv_data, {user, channel, priority=high, data}).
