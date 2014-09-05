@@ -63,9 +63,9 @@ highlight({input, F, Evt}, S = #state{frontend = F, h = H, w = W, rect = Rt}) ->
 		#ts_inpevt_mouse{action = down, point = P = {X,Y}, buttons = [1]} ->
 			case rect_contains(Rt, P) of
 				true ->
-					{ok, Cookie} = session_mgr:store(#session{host = "gs208-1974.labs.eait.uq.edu.au", port = 3389}),
+					{ok, Cookie} = session_mgr:store(#session{host = "gs208-1975.labs.eait.uq.edu.au", port = 3389}),
 					gen_fsm:send_event(F, {redirect,
-						Cookie, <<"uqawil16-mbp">>,
+						Cookie, <<"uqawil16-mbp.eait.uq.edu.au">>,
 						<<"ntadmin">>, <<".">>, <<"beer'npizza">>}),
 					{stop, normal, S};
 

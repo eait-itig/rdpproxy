@@ -131,7 +131,7 @@ decoder_mcs_generic(Pdu, McsData, Rem) ->
 	case mcsgcc:decode(McsData) of
 		{ok, McsPkt} ->
 			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
-		_ ->
+		Err ->
 			{return, {ok, {x224_pdu, Pdu}, Rem}}
 	end.
 
@@ -139,7 +139,7 @@ decoder_mcs_ci(Pdu, McsData, Rem) ->
 	case mcsgcc:decode_ci(McsData) of
 		{ok, McsPkt} ->
 			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
-		_ ->
+		Other ->
 			{continue, [Pdu, McsData, Rem]}
 	end.
 
@@ -148,7 +148,6 @@ decoder_mcs_cr(Pdu, McsData, Rem) ->
 		{ok, McsPkt} ->
 			{return, {ok, {mcs_pdu, McsPkt}, Rem}};
 		Err ->
-			%error_logger:info_report([{mcs_decode_fail, Err}]),
 			{continue, [Pdu, McsData, Rem]}
 	end.
 

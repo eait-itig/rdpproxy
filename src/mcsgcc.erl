@@ -63,27 +63,32 @@ encode(#mcs_data{} = Rec) -> encode_dpdu(Rec);
 encode(#mcs_srv_data{} = Rec) -> encode_dpdu(Rec);
 encode(_) -> {error, bad_mcsgcc}.
 
+padding_only(Bin) ->
+	Sz = bit_size(Bin),
+	<<0:Sz>> = Bin.
+
 decode_dpdu(Bin) ->
 	case mcsp_per:decode('DomainMCSPDU', Bin) of
-		{ok, {sendDataRequest, #'SendDataRequest'{initiator = User, channelId = Channel, dataPriority = Priority, userData = Data}}} ->
+		{ok, {sendDataRequest, #'SendDataRequest'{initiator = User, channelId = Channel, dataPriority = Priority, userData = Data}}, <<>>} ->
 			{ok, #mcs_data{user = User, channel = Channel, priority = Priority, data = list_to_binary(Data)}};
-		{ok, {sendDataIndication, #'SendDataIndication'{initiator = User, channelId = Channel, dataPriority = Priority, userData = Data}}} ->
+		{ok, {sendDataIndication, #'SendDataIndication'{initiator = User, channelId = Channel, dataPriority = Priority, userData = Data}}, <<>>} ->
 			{ok, #mcs_srv_data{user = User, channel = Channel, priority = Priority, data = list_to_binary(Data)}};
-		{ok, {erectDomainRequest, #'ErectDomainRequest'{subHeight = Height, subInterval = Interval}}} ->
+		{ok, {erectDomainRequest, #'ErectDomainRequest'{subHeight = Height, subInterval = Interval}}, <<>>} ->
 			{ok, #mcs_edr{height = Height, interval = Interval}};
-		{ok, {attachUserRequest, #'AttachUserRequest'{}}} ->
+		{ok, {attachUserRequest, #'AttachUserRequest'{}}, Rem} ->
+			padding_only(Rem),
 			{ok, #mcs_aur{}};
-		{ok, {attachUserConfirm, #'AttachUserConfirm'{result = Result, initiator = UserId}}} ->
+		{ok, {attachUserConfirm, #'AttachUserConfirm'{result = Result, initiator = UserId}},<<>>} ->
 			{ok, #mcs_auc{status = Result, user = UserId}};
-		{ok, {channelJoinRequest, #'ChannelJoinRequest'{initiator = UserId, channelId = Channel}}} ->
+		{ok, {channelJoinRequest, #'ChannelJoinRequest'{initiator = UserId, channelId = Channel}}, <<>>} ->
 			{ok, #mcs_cjr{user = UserId, channel = Channel}};
-		{ok, {channelJoinConfirm, #'ChannelJoinConfirm'{result = Result, initiator=UserId, requested=Channel}}} ->
+		{ok, {channelJoinConfirm, #'ChannelJoinConfirm'{result = Result, initiator=UserId, requested=Channel}}, <<>>} ->
 			{ok, #mcs_cjc{user = UserId, status = Result, channel = Channel}};
-		{ok, {tokenInhibitRequest, #'TokenInhibitRequest'{initiator=UserId, tokenId=Token}}} ->
+		{ok, {tokenInhibitRequest, #'TokenInhibitRequest'{initiator=UserId, tokenId=Token}}, <<>>} ->
 			{ok, #mcs_tir{user = UserId, token = Token}};
-		{ok, {tokenInhibitConfirm, #'TokenInhibitConfirm'{initiator=UserId, tokenId=Token, result=Status, tokenStatus=TokenStatus}}} ->
+		{ok, {tokenInhibitConfirm, #'TokenInhibitConfirm'{initiator=UserId, tokenId=Token, result=Status, tokenStatus=TokenStatus}}, <<>>} ->
 			{ok, #mcs_tic{user = UserId, token = Token, status = Status, token_status = TokenStatus}};
-		{ok, {Atom, _}} ->
+		{ok, {Atom, _}, <<>>} ->
 			{error, {nothandled, Atom}};
 		Other ->
 			Other
@@ -102,8 +107,10 @@ encode_dpdu(#mcs_srv_data{user = UserId, channel = Channel, priority = Priority,
 encode_dpdu(_) -> {error, bad_dpdu}.
 
 decode_ci(Bin) ->
+	case Bin of <<"!",16#80>> -> {error, blacklisted}; _ ->
 	case mcsp_ber:decode('Connect-Initial', Bin) of
-		{ok, CI} ->
+		{ok, CI, Rem} ->
+			padding_only(Rem),
 			Tgt = CI#'Connect-Initial'.targetParameters,
 			Initial = #mcs_ci{calling = CI#'Connect-Initial'.callingDomainSelector,
 							  called = CI#'Connect-Initial'.calledDomainSelector,
@@ -118,10 +125,13 @@ decode_ci(Bin) ->
 
 			CDData = list_to_binary(CI#'Connect-Initial'.userData),
 			case gccp_per:decode('ConnectData', CDData) of
-				{ok, CD} ->
+				{ok, CD, CDRem} ->
+					if byte_size(CDRem) > 0 ->
+						io:format("warning: ci connectdata is carrying ~B extra bytes\n", [byte_size(CDRem)]);
+					true -> ok end,
 					CPDUData = list_to_binary(CD#'ConnectData'.connectPDU),
-					case gccp_per:decode('ConnectGCCPDU', CPDUData) of
-						{ok, {conferenceCreateRequest, CCR}} ->
+					case gccp_per:decode('ConnectGCCPDU', <<CPDUData/binary, CDRem/binary>>) of
+						{ok, {conferenceCreateRequest, CCR}, <<>>} ->
 							NameRec = CCR#'ConferenceCreateRequest'.conferenceName,
 							[#'UserData_SETOF'{key={h221NonStandard, "Duca"}, value=ClientData}] = CCR#'ConferenceCreateRequest'.userData,
 							{ok, Initial#mcs_ci{conf_name = NameRec#'ConferenceName'.numeric, data = list_to_binary(ClientData)}};
@@ -133,11 +143,13 @@ decode_ci(Bin) ->
 			end;
 		Other ->
 			Other
-	end.
+	end end.
 
 decode_cr(Bin) ->
+	case Bin of <<"!",16#80>> -> {error, blacklisted}; _ ->
 	case mcsp_ber:decode('Connect-Response', Bin) of
-		{ok, CR} ->
+		{ok, CR, Rem} ->
+			padding_only(Rem),
 			Tgt = CR#'Connect-Response'.domainParameters,
 			Initial = #mcs_cr{called = CR#'Connect-Response'.calledConnectId,
 							  mcs_result = CR#'Connect-Response'.result,
@@ -152,15 +164,20 @@ decode_cr(Bin) ->
 
 			CDData = list_to_binary(CR#'Connect-Response'.userData),
 			case gccp_per:decode('ConnectData', CDData) of
-				{ok, CD} ->
+				{ok, CD, CDRem} ->
+					if byte_size(CDRem) > 0 ->
+						io:format("warning: cr connectdata is carrying ~B extra bytes\n", [byte_size(CDRem)]);
+					true -> ok end,
 					CPDUData = list_to_binary(CD#'ConnectData'.connectPDU),
-					case gccp_per:decode('ConnectGCCPDU', CPDUData) of
-						{ok, {conferenceCreateResponse, CCR}} ->
+					case gccp_per:decode('ConnectGCCPDU', <<CPDUData/binary,CDRem/binary>>) of
+						{ok, {conferenceCreateResponse, CCR}, <<>>} ->
 							Node = CCR#'ConferenceCreateResponse'.nodeID,
 							Tag = CCR#'ConferenceCreateResponse'.tag,
 							Result = CCR#'ConferenceCreateResponse'.result,
 							[#'UserData_SETOF'{key={h221NonStandard, "McDn"}, value=ClientData}] = CCR#'ConferenceCreateResponse'.userData,
-							{ok, Initial#mcs_cr{node = Node, tag = Tag, result = Result, data = list_to_binary(ClientData)}};
+							CDataBin = list_to_binary(ClientData),
+							%Data = <<CDataBin/binary, CDRem/binary>>,
+							{ok, Initial#mcs_cr{node = Node, tag = Tag, result = Result, data = CDataBin}};
 						Other ->
 							Other
 					end;
@@ -169,7 +186,7 @@ decode_cr(Bin) ->
 			end;
 		Other ->
 			Other
-	end.
+	end end.
 
 encode_cr(#mcs_cr{} = McsCr) ->
 	UserData = #'UserData_SETOF'{key = {h221NonStandard, "McDn"}, value = binary_to_list(McsCr#mcs_cr.data)},

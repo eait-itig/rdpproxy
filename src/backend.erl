@@ -14,28 +14,28 @@
 -include("tsud.hrl").
 -include("rdpp.hrl").
 
--export([start_link/3]).
+-export([start_link/4]).
 -export([initiation/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
--spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()}.
-start_link(Frontend, Address, Port) ->
-	gen_fsm:start_link(?MODULE, [Frontend, Address, Port], []).
+-spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number(), OrigCr :: tuple()) -> {ok, pid()}.
+start_link(Frontend, Address, Port, OrigCr) ->
+	gen_fsm:start_link(?MODULE, [Frontend, Address, Port, OrigCr], []).
 
--record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, frontend}).
+-record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, frontend, origcr}).
 
 %% @private
-init([Frontend, Address, Port]) ->
+init([Frontend, Address, Port, OrigCr]) ->
 	process_flag(trap_exit, true),
 	random:seed(erlang:now()),
-	UsRef = 0,
 	case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}]) of
 		{ok, Sock} ->
-			Cr = #x224_cr{src = UsRef, dst = 0, rdp_protocols = [ssl]},
+			Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
+			io:format("backend send cr: ~s\n", [x224:pretty_print(Cr)]),
 			{ok, CrData} = x224:encode(Cr),
 			{ok, Packet} = tpkt:encode(CrData),
 			ok = gen_tcp:send(Sock, Packet),
-			{ok, initiation, #data{addr = Address, port = Port, frontend = Frontend, sock = Sock, usref = UsRef}};
+			{ok, initiation, #data{addr = Address, port = Port, frontend = Frontend, sock = Sock, usref = OrigCr#x224_cr.src, origcr = OrigCr}};
 
 		{error, Reason} ->
 			{stop, Reason}
@@ -57,6 +57,7 @@ init([Frontend, Address, Port]) ->
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend} = Data) ->
 	#x224_cc{src = ThemRef, rdp_selected = Selected, rdp_flags = Flags} = Pkt,
+	io:format("backend got cc: ~s\n", [x224:pretty_print(Pkt)]),
 
 	HasSsl = lists:member(ssl, Selected),
 
@@ -65,7 +66,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
 		{ok, SslSock} = ssl:connect(Sock, [{verify, verify_none}]),
 		ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
-		gen_fsm:send_event(Frontend, {backend_ready, self(), SslSock}),
+		gen_fsm:send_event(Frontend, {backend_ready, self(), SslSock, Pkt}),
 
 		{next_state, proxy, Data#data{sslsock = SslSock, themref = ThemRef}};
 	true ->
@@ -122,6 +123,12 @@ debug_print_data(Bin) ->
 			{ok, Tsuds} = tsud:decode(McsCr#mcs_cr.data),
 			error_logger:info_report(["backend rx cr with tsuds: ", tsud:pretty_print(Tsuds)]),
 			debug_print_data(Rem);
+		{ok, {mcs_pdu, #mcs_tir{}}, Rem} ->
+			{ok, Data, _} = tpkt:decode(Bin),
+			{ok, X224Pdu} = x224:decode(Data),
+			error_logger:info_report([{decode_cr, mcsgcc:decode_cr(X224Pdu#x224_dt.data)}, {data, Bin}]),
+			file:write_file("bad_cr", Bin),
+			debug_print_data(Rem);
 		{ok, {mcs_pdu, Pdu}, Rem} ->
 			error_logger:info_report(["backend rx mcs:\n", [mcsgcc:pretty_print(Pdu)]]),
 			debug_print_data(Rem);
@@ -146,9 +153,26 @@ handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Dat
 			{next_state, State, Data}
 	end;
 
-handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock} = Data) ->
+handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock, origcr = OrigCr} = Data) ->
 	debug_print_data(Bin),
-	?MODULE:State({data, Bin}, Data);
+	case rdpp:decode_connseq(Bin) of
+		{ok, {mcs_pdu, Cr = #mcs_cr{data = TsudsBin0}}, Rem} ->
+			{ok, Tsuds0} = tsud:decode(TsudsBin0),
+			TsudSvrCore0 = lists:keyfind(tsud_svr_core, 1, Tsuds0),
+			TsudSvrCore1 = TsudSvrCore0#tsud_svr_core{requested = OrigCr#x224_cr.rdp_protocols},
+			io:format("rewriting tsud: ~s\n", [tsud:pretty_print(TsudSvrCore1)]),
+			Tsuds1 = lists:keyreplace(tsud_svr_core, 1, Tsuds0, TsudSvrCore1),
+			TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
+				{ok, TsudBin} = tsud:encode(Tsud),
+				<<SoFar/binary, TsudBin/binary>>
+			end, <<>>, Tsuds1),
+			{ok, OutCrData} = mcsgcc:encode_cr(Cr#mcs_cr{data = TsudsBin1}),
+			{ok, OutDtData} = x224:encode(#x224_dt{data = OutCrData}),
+			{ok, OutPkt} = tpkt:encode(OutDtData),
+			?MODULE:State({data, <<OutPkt/binary, Rem/binary>>}, Data);
+		_ ->
+			?MODULE:State({data, Bin}, Data)
+	end;
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
 	handle_info({tcp, Sock, Bin}, State, Data);
 

@@ -80,7 +80,9 @@ encode(Record) ->
 
 			DynVcGfx = case lists:member(dynvc_gfx, Flags) of true -> 1; _ -> 0 end,
 			ExtData = case lists:member(extdata, Flags) of true -> 1; _ -> 0 end,
-			<<Flags2:8>> = <<0:5, 0:1, DynVcGfx:1, ExtData:1>>,
+			Reserved1 = case lists:member(reserved1, Flags) of true -> 1; _ -> 0 end,
+			Reserved2 = case lists:member(reserved2, Flags) of true -> 1; _ -> 0 end,
+			<<Flags2:8>> = <<0:4, Reserved2:1, Reserved1:1, DynVcGfx:1, ExtData:1>>,
 
 			RdpPart = <<?RDP_NEGRSP:8, Flags2:8, 8:16/little, Prots:32/little>>,
 
@@ -130,9 +132,11 @@ decode(Data) ->
 		<<LI:8, ?PDU_CC:4, Cdt:4, DstRef:16/big, SrcRef:16/big, Class:4, 0:2, ExtFmts:1, ExFlow:1, Rest/binary>> ->
 			case Rest of
 				<<?RDP_NEGRSP:8, Flags:8, _Length:16/little, Selected:32/little>> ->
-					<<_:5, _Reserved:1, DynVcGfx:1, ExtData:1>> = <<Flags:8>>,
+					<<0:4, Reserved2:1, Reserved1:1, DynVcGfx:1, ExtData:1>> = <<Flags:8>>,
 					Flags2 = if DynVcGfx == 1 -> [dynvc_gfx]; true -> [] end ++
-							 if ExtData == 1 -> [extdata]; true -> [] end,
+							 if ExtData == 1 -> [extdata]; true -> [] end ++
+							 if Reserved1 == 1 -> [reserved1]; true -> [] end ++
+							 if Reserved2 == 1 -> [reserved2]; true -> [] end,
 
 					Prots = rdpp:decode_protocol_flags(Selected),
 					{ok, #x224_cc{src = SrcRef, dst = DstRef, class = Class, cdt = Cdt, rdp_flags = Flags2, rdp_selected = Prots}};
@@ -153,7 +157,7 @@ decode(Data) ->
 					{ok, #x224_cc{src = SrcRef, dst = DstRef, class = Class, cdt = Cdt, rdp_selected = []}}
 			end;
 
-		<<LI:8, ?PDU_DT:4, 0:3, ROA:1, EOT:1, TpduNr:7, Rest/binary>> ->
+		<<LI:8, ?PDU_DT:4, 0:3, ROA:1, EOT:1, TpduNr:7, Rest/binary>> when LI == 2 ->
 			{ok, #x224_dt{roa = ROA, eot = EOT, tpdunr = TpduNr, data = Rest}};
 
 		<<LI:8, ?PDU_DR:4, 0:4, DstRef:16/big, SrcRef:16/big, Reason:8, Rest/binary>> ->

@@ -75,33 +75,34 @@ accept(timeout, D = #data{sup = Sup, lsock = LSock}) ->
 
 initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x224 = X224} = Data) ->
 	#x224_cr{src = ThemRef, rdp_cookie = Cookie, rdp_protocols = Protos} = Pkt,
+	io:format("frontend got cr: ~s\n", [x224:pretty_print(Pkt)]),
 
-	UsRef = 100 + random:uniform(100),
-	error_logger:info_report([{them_ref, ThemRef}, {us_ref, UsRef}]),
-	NewX224 = X224#x224_state{them = ThemRef, us = UsRef},
+	error_logger:info_report([{them_ref, ThemRef}]),
+	NewX224 = X224#x224_state{them = ThemRef},
 	NewData = Data#data{x224 = NewX224, askedfor=Protos},
 	HasSsl = lists:member(ssl, Protos),
 
 	if HasSsl ->
-		Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata]},
-		{ok, RespData} = x224:encode(Resp),
-		{ok, Packet} = tpkt:encode(RespData),
-		gen_tcp:send(Sock, Packet),
-
-		inet:setopts(Sock, [{packet, raw}]),
-		{ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
-		ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
-
-		%{ok, Backend} = backend:start_link(self(), "areole.cooperi.net", 3389),
-		%{next_state, wait_proxy, NewData#data{sslsock = SslSock, backend = Backend}};
 		case session_mgr:get(Cookie) of
 			{ok, #session{host = Host, port = Port}} ->
-				{ok, Backend} = backend:start_link(self(), Host, Port),
-				{next_state, wait_proxy, NewData#data{sslsock = SslSock, backend = Backend}};
+				{ok, Backend} = backend:start_link(self(), Host, Port, Pkt),
+				{next_state, wait_proxy, NewData#data{backend = Backend}};
+
 			_ ->
-				{next_state, mcs_connect, NewData#data{sslsock = SslSock}}
+				UsRef = 1000 + random:uniform(1000),
+				Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata,dynvc_gfx]},
+				{ok, RespData} = x224:encode(Resp),
+				{ok, Packet} = tpkt:encode(RespData),
+				gen_tcp:send(Sock, Packet),
+
+				inet:setopts(Sock, [{packet, raw}]),
+				{ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
+				ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
+				{next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
 		end;
 	true ->
+		error_logger:info_report([{reject_protos, Protos}]),
+		UsRef = 1000 + random:uniform(1000),
 		Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_status = error, rdp_error = ssl_required},
 		{ok, RespData} = x224:encode(Resp),
 		{ok, Packet} = tpkt:encode(RespData),
@@ -377,7 +378,7 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
 	{ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
 		channel = Us,
 		shareid = ShareId,
-		sessionid = 100,
+		sessionid = 0,
 		flags = [logon],
 		% always send the address if it's the official OSX client (it won't actually redir
 		% if we don't, even though this is invalid by the spec)
@@ -426,12 +427,20 @@ run_ui({x224_pdu, #x224_dr{}}, D = #data{sslsock = SslSock}) ->
 wait_proxy({data, Bin}, #data{queue = Queue} = Data) ->
 	{next_state, wait_proxy, Data#data{queue = Queue ++ [Bin]}};
 
-wait_proxy({backend_ready, Backend, Backsock}, #data{queue = Queue, backend = Backend} = Data) ->
+wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, backend = Backend, x224 = #x224_state{them = ThemRef}, sock = Sock} = Data) ->
+	io:format("frontend send cc: ~s\n", [x224:pretty_print(TheirCC)]),
+	{ok, RespData} = x224:encode(TheirCC),
+	{ok, Packet} = tpkt:encode(RespData),
+	gen_tcp:send(Sock, Packet),
+
+	inet:setopts(Sock, [{packet, raw}]),
+	{ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
+	ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 	lists:foreach(fun(Bin) ->
 		ssl:send(Backsock, Bin)
 		%gen_fsm:send_event(Backend, {frontend_data, self(), Bin})
 	end, Queue),
-	{next_state, proxy, Data#data{queue = [], backsock = Backsock}}.
+	{next_state, proxy, Data#data{queue = [], backsock = Backsock, sslsock = SslSock}}.
 
 proxy({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backend = Backend} = Data) ->
 	ssl:send(Backsock, Bin),
