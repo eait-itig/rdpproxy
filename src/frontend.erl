@@ -17,17 +17,17 @@
 -include("rdpp.hrl").
 -include("fastpath.hrl").
 
--export([start_link/1]).
--export([wait_control/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, clicky/2, clicky_highlight/2, proxy/2, wait_proxy/2]).
+-export([start_link/2]).
+-export([accept/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, clicky/2, clicky_highlight/2, proxy/2, wait_proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
--spec start_link(Sock :: term()) -> {ok, pid()}.
-start_link(Sock) ->
-	gen_fsm:start_link(?MODULE, [Sock], []).
+-spec start_link(Sock :: term(), Sup :: pid()) -> {ok, pid()}.
+start_link(Sock, Sup) ->
+	gen_fsm:start_link(?MODULE, [Sock, Sup], []).
 
 -record(x224_state, {us=none, them=none}).
 -record(mcs_state, {us=none, them=none, iochan=none, msgchan=none, chans=[]}).
--record(data, {sock, sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}}).
+-record(data, {lsock, sock, sup, sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}}).
 
 send_dpdu(SslSock, McsPkt) ->
 	{ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -48,10 +48,9 @@ send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
 	end.
 
 %% @private
-init([Sock]) ->
-	process_flag(trap_exit, true),
+init([LSock, Sup]) ->
 	random:seed(erlang:now()),
-	{ok, wait_control, #data{sock = Sock, chansavail=lists:seq(1002,1002+35)}}.
+	{ok, accept, #data{sup = Sup, lsock = LSock, chansavail=lists:seq(1002,1002+35)}, 0}.
 
 take_el(El, []) -> {false, []};
 take_el(El, [El | Rest]) -> {true, Rest};
@@ -67,10 +66,12 @@ next_channel(D = #data{chansavail = Cs}, Pref) ->
 		{false, [First | Rest]} -> {First, D#data{chansavail = Rest}}
 	end.
 
-%% @doc Waiting for control of the socket to be given by frontend_listener
-wait_control(control_given, #data{sock = Sock} = Data) ->
+accept(timeout, D = #data{sup = Sup, lsock = LSock}) ->
+	{ok, Sock} = gen_tcp:accept(LSock),
+	% start our replacement in the pool
+	frontend_sup:start_frontend(Sup),
 	inet:setopts(Sock, [{packet, tpkt}, {active, once}, {nodelay, true}]),
-	{next_state, initiation, Data}.
+	{next_state, initiation, D#data{sock = Sock}}.
 
 initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x224 = X224} = Data) ->
 	#x224_cr{src = ThemRef, rdp_cookie = Cookie, rdp_protocols = Protos} = Pkt,
@@ -567,8 +568,11 @@ handle_info({ssl, SslSock, Bin}, proxy, #data{sslsock = SslSock} = Data) ->
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
 	handle_info({tcp, Sock, Bin}, State, Data);
 
+handle_info({ssl_closed, Sock}, State, #data{sock = Sock} = Data) ->
+	{stop, normal, Data};
+
 handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
-	{stop, closed, Data};
+	{stop, normal, Data};
 	%?MODULE:State(disconnect, Data);
 
 handle_info(_Msg, State, Data) ->

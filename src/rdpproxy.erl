@@ -13,7 +13,7 @@
 
 -export([start/0, start/2, stop/1, init/1]).
 
-%% @doc Starts the swarm application.
+%% @doc Starts the rdpproxy application.
 start() ->
 	supervisor:start_link(?MODULE, []).
 
@@ -28,9 +28,13 @@ stop(_State) ->
 %% @private
 init(_Args) ->
 	{ok, {
-		{one_for_one, 20, 60},
+		{one_for_one, 60, 600},
 		[
-			{frontend_listener, {frontend_listener, start_link, [3389]}, permanent, 10, worker, [frontend, frontend_listener]},
-			{session_mgr, {session_mgr, start_link, []}, permanent, 10, worker, [session_mgr]}
+			{frontend_sup,
+				{frontend_sup, start_link, [3389]},
+				permanent, infinity, supervisor, [frontend, frontend_sup]},
+			{session_mgr,
+				{session_mgr, start_link, []},
+				permanent, 10, worker, [session_mgr]}
 		]
 	}}.
