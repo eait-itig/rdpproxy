@@ -272,7 +272,7 @@ decode_tscaps(0, _) -> [];
 decode_tscaps(N, Bin) ->
 	<<Type:16/little, Size:16/little, Rest/binary>> = Bin,
 	Len = Size - 4,
-	<<Data:Len/binary-unit:8, Rem/binary>> = Rest,
+	<<Data:Len/binary, Rem/binary>> = Rest,
 	[decode_tscap(Type, Data) | decode_tscaps(N-1, Rem)].
 
 decode_tscap(16#1, Bin) ->
@@ -306,7 +306,7 @@ decode_tscap(16#2, Bin) ->
 	#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height};
 
 decode_tscap(16#3, Bin) ->
-	<<_TermDesc:16/unit:8, _:32, _:16, _:16, _:16, _:16, _:16, BaseFlags:16/little, OrderSupport:32/binary-unit:8, _/binary>> = Bin,
+	<<_TermDesc:16/unit:8, _:32, _:16, _:16, _:16, _:16, _:16, BaseFlags:16/little, OrderSupport:32/binary, _/binary>> = Bin,
 
 	<<_:8, ExtraFlags:1, SolidPatternBrushOnly:1, ColorIndex:1, _:1, ZeroBoundsDeltas:1, _:1, NegotiateOrders:1, _:1>> = <<BaseFlags:16/big>>,
 
@@ -368,7 +368,7 @@ decode_tscap(16#9, Bin) ->
 	#ts_cap_share{channel = Chan};
 
 decode_tscap(16#d, Bin) ->
-	<<InputFlags:16/little, _:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin:64/binary-unit:8>> = Bin,
+	<<InputFlags:16/little, _:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin:64/binary>> = Bin,
 	<<_:10, FastPath2:1, Unicode:1, FastPath:1, MouseX:1, _:1, Scancodes:1>> = <<InputFlags:16/big>>,
 
 	Flags = if Scancodes == 1 -> [scancodes]; true -> [] end ++
@@ -679,7 +679,7 @@ decode_ts_demand(Chan, Bin) ->
 	case Bin of
 		<<ShareId:32/little, SDLen:16/little, Len:16/little, Rest/binary>> ->
 			case Rest of
-				<<SD:SDLen/binary-unit:8, N:16/little, _:16, CapsBin/binary>> ->
+				<<SD:SDLen/binary, N:16/little, _:16, CapsBin/binary>> ->
 					RealLen = byte_size(CapsBin) + 4,
 					if (Len == RealLen) or (Len + 4 == RealLen) ->
 						Caps = decode_tscaps(N, CapsBin),
@@ -707,7 +707,7 @@ decode_ts_confirm(Chan, Bin) ->
 	case Bin of
 		<<ShareId:32/little, _:16, SDLen:16/little, Len:16/little, Rest/binary>> ->
 			case Rest of
-				<<SD:SDLen/binary-unit:8, N:16/little, _:16, CapsBin/binary>> ->
+				<<SD:SDLen/binary, N:16/little, _:16, CapsBin/binary>> ->
 					RealLen = byte_size(CapsBin) + 4,
 					if (Len == RealLen) ->
 						Caps = decode_tscaps(N, CapsBin),
@@ -1042,7 +1042,8 @@ encode_basic(Rec) ->
 	{Type, Inner} = case Rec of
 		#ts_security{} -> {security, encode_ts_security(Rec)};
 		#ts_license_vc{} -> {license, encode_ts_license_vc(Rec)};
-		#ts_heartbeat{} -> {heartbeat, encode_ts_heartbeat(Rec)}
+		#ts_heartbeat{} -> {heartbeat, encode_ts_heartbeat(Rec)};
+		#ts_info{} -> {info, encode_ts_info(Rec)}
 	end,
 	Flags = encode_sec_flags({Type, SecFlags}),
 	{ok, <<Flags:16/little, 0:16, Inner/binary>>}.
@@ -1096,11 +1097,118 @@ decode_ts_heartbeat(Fl, Bin) ->
 			{error, badpacket}
 	end.
 
+decode_ts_date(Bin) ->
+	<<Year:16/little, Month:16/little, DoW:16/little, Nth:16/little, Hour:16/little, Min:16/little, Sec:16/little, Milli:16/little>> = Bin,
+	{{Year, Month, DoW, Nth}, {Hour, Min, Sec, Milli}}.
+
+decode_ts_ext_info(Bin0, SoFar0 = #ts_info{}) ->
+	maybe([
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<Af:16/little, Len:16/little, AddrStringZero:Len/binary, Rest/binary>> ->
+					case Af of
+						16#00 ->
+							{continue, [Rest, SoFar]};
+						16#02 ->
+							[AddrString | _] = binary:split(AddrStringZero, <<0>>),
+							{ok, IP} = inet:parse_ipv4_address(binary_to_list(AddrString)),
+							{continue, [Rest, SoFar#ts_info{client_address = IP}]};
+						16#17 ->
+							[AddrString | _] = binary:split(AddrStringZero, <<0>>),
+							{ok, IP} = inet:parse_ipv6_address(binary_to_list(AddrString)),
+							{continue, [Rest, SoFar#ts_info{client_address = IP}]};
+						_ ->
+							{return, {error, {bad_client_af, Af}}}
+					end;
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<Len:16/little, ClientDir:Len/binary, Rest/binary>> ->
+					{continue, [Rest, SoFar#ts_info{client_dir = ClientDir}]};
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<Bias:32/little, NameBin:64/binary, DstEndBin:16/binary, Bias:32/little, DstNameBin:64/binary, DstStartBin:16/binary, DstBias:32/little, Rest/binary>> ->
+					DstEnd = decode_ts_date(DstEndBin),
+					DstStart = decode_ts_date(DstStartBin),
+					[Name | _] = binary:split(NameBin, <<0, 0>>),
+					[DstName | _] = binary:split(DstNameBin, <<0, 0>>),
+					Tz = #ts_timezone{bias = Bias, name = Name, dst_name = DstName, dst_bias = DstBias, dst_start = DstStart, dst_end = DstEnd},
+					{continue, [Rest, SoFar#ts_info{timezone = Tz}]};
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<SessionId:32/little, Rest/binary>> ->
+					{continue, [Rest, SoFar#ts_info{session_id = SessionId}]};
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<PerfFlags:32/little, Rest/binary>> ->
+					<<_:23, EnableDesktopComp:1, EnableFontSmoothing:1, DisableCursorSettings:1, DisableCursorShadow:1, _:1, DisableThemes:1, DisableMenuAnim:1, DisableFullWinDrag:1, DisableWallpaper:1>> = <<PerfFlags:32/big>>,
+					FlagAtoms = if DisableWallpaper == 1 -> [no_wallpaper]; true -> [] end ++
+								if DisableFullWinDrag == 1 -> [no_full_win_drag]; true -> [] end ++
+								if DisableMenuAnim == 1 -> [no_menu_anim]; true -> [] end ++
+								if DisableThemes == 1 -> [no_themes]; true -> [] end ++
+								if DisableCursorShadow == 1 -> [no_cursor_shadow]; true -> [] end ++
+								if DisableCursorSettings == 1 -> [no_cursor_settings]; true -> [] end ++
+								if EnableFontSmoothing == 1 -> [font_smoothing]; true -> [] end ++
+								if EnableDesktopComp == 1 -> [composition]; true -> [] end,
+					{continue, [Rest, SoFar#ts_info{perf_flags = FlagAtoms}]};
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<Len:16/little, Cookie:Len/binary, Rest/binary>> ->
+					{continue, [Rest, SoFar#ts_info{reconnect_cookie = Cookie}]};
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<_:16, _:16, Len:16/little, DynTzName:Len/binary, Rest/binary>> ->
+					{continue, [Rest, SoFar#ts_info{dynamic_dst = DynTzName}]};
+				_ ->
+					{return, {ok, SoFar}}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<DynDstDisabled:16/little, Rest/binary>> when DynDstDisabled == 0 ->
+					{continue, [Rest, SoFar#ts_info{flags = [dynamic_dst | SoFar#ts_info.flags]}]};
+				<<_:16, Rest/binary>> ->
+					{continue, [Rest, SoFar]}
+			end
+		end,
+		fun(Bin, SoFar) ->
+			case Bin of
+				<<>> ->
+					{return, {ok, SoFar}};
+				_ ->
+					{return, {ok, SoFar#ts_info{extra = Bin}}}
+			end
+		end
+	], [Bin0, SoFar0]).
+
 decode_ts_info(Fl, Bin) ->
 	case Bin of
-		<<CodePage:32/little, Flags:32/little, DomainLen:16/little, UserNameLen:16/little, PasswordLen:16/little, ShellLen:16/little, WorkDirLen:16/little, Rest/binary>> ->
+		<<CodePage:32/little, Flags:32/little, RawDomainLen:16/little, RawUserNameLen:16/little, RawPasswordLen:16/little, RawShellLen:16/little, RawWorkDirLen:16/little, Rest/binary>> ->
 
-			<<_:10, VideoDisable:1, AudioCapture:1, SavedCreds:1, NoAudio:1, SmartcardPin:1, MouseWheel:1, LogonErrors:1, Rail:1, ForceEncrypt:1, RemoteConsoleAudio:1, CompLevel:4, WindowsKey:1, Compression:1, LogonNotify:1, MaximizeShell:1, Unicode:1, AutoLogon:1, DisableSalute:1, Mouse:1>> = <<Flags:32/big>>,
+			<<_:6, RailHD:1, _:1, _:1, VideoDisable:1, AudioCapture:1, SavedCreds:1, NoAudio:1, SmartcardPin:1, MouseWheel:1, LogonErrors:1, Rail:1, ForceEncrypt:1, RemoteConsoleAudio:1, CompLevel:4, WindowsKey:1, Compression:1, LogonNotify:1, MaximizeShell:1, Unicode:1, AutoLogon:1, _:1, DisableSalute:1, Mouse:1>> = <<Flags:32/big>>,
 			FlagAtoms = if VideoDisable == 1 -> [novideo]; true -> [] end ++
 						if AudioCapture == 1 -> [audio_in]; true -> [] end ++
 						if SavedCreds == 1 -> [saved_creds]; true -> [] end ++
@@ -1118,25 +1226,91 @@ decode_ts_info(Fl, Bin) ->
 						if Unicode == 1 -> [unicode]; true -> [] end ++
 						if AutoLogon == 1 -> [autologon]; true -> [] end ++
 						if DisableSalute == 1 -> [disable_salute]; true -> [] end ++
-						if Mouse == 1 -> [mouse]; true -> [] end,
+						if Mouse == 1 -> [mouse]; true -> [] end ++
+						if RailHD == 1 -> [rail_hd]; true -> [] end,
 			CompLevelAtom = case CompLevel of
 				16#0 -> '8k';
 				16#1 -> '64k';
 				16#2 -> 'rdp6';
 				16#3 -> 'rdp61';
 				16#7 -> 'rdp8';
-				_ -> unknown
+				_ -> CompLevel
 			end,
 
+			NullSize = if Unicode == 1 -> 2; true -> 1 end,
+			DomainLen = RawDomainLen + NullSize,
+			UserNameLen = RawUserNameLen + NullSize,
+			PasswordLen = RawPasswordLen + NullSize,
+			ShellLen = RawShellLen + NullSize,
+			WorkDirLen = RawWorkDirLen + NullSize,
+
 			case Rest of
-				<<Domain:DomainLen/binary-unit:8, UserName:UserNameLen/binary-unit:8, Password:PasswordLen/binary-unit:8, Shell:ShellLen/binary-unit:8, WorkDir:WorkDirLen/binary-unit:8, Rest2/binary>> ->
-					{ok, #ts_info{secflags = Fl, codepage = CodePage, flags = FlagAtoms, compression = CompLevelAtom, domain = Domain, username = UserName, password = Password, shell = Shell, workdir = WorkDir}};
+				<<Domain:DomainLen/binary, UserName:UserNameLen/binary, Password:PasswordLen/binary, Shell:ShellLen/binary, WorkDir:WorkDirLen/binary, ExtraInfo/binary>> ->
+					SoFar = #ts_info{secflags = Fl, codepage = CodePage, flags = FlagAtoms, compression = CompLevelAtom, domain = Domain, username = UserName, password = Password, shell = Shell, workdir = WorkDir, extra = ExtraInfo},
+					case ExtraInfo of
+						<<>> ->
+							{ok, SoFar};
+						_ ->
+							decode_ts_ext_info(ExtraInfo, SoFar)
+					end;
 				_ ->
 					{error, badlength}
 			end;
 		_ ->
 			{error, badpacket}
 	end.
+
+maybe_bin(B, _) when is_binary(B) -> B;
+maybe_bin(undefined, 1) -> <<0, 0>>;
+maybe_bin(undefined, 0) -> <<0>>.
+
+encode_ts_info(#ts_info{codepage = CodePage, flags = FlagAtoms, compression = CompLevelAtom, domain = MaybeDomain, username = MaybeUserName, password = MaybePassword, shell = MaybeShell, workdir = MaybeWorkDir, extra = MaybeExtraInfo}) ->
+	Unicode = case lists:member(unicode, FlagAtoms) of true -> 1; _ -> 0 end,
+	Domain = maybe_bin(MaybeDomain, Unicode),
+	UserName = maybe_bin(MaybeUserName, Unicode),
+	Password = maybe_bin(MaybePassword, Unicode),
+	Shell = maybe_bin(MaybeShell, Unicode),
+	WorkDir = maybe_bin(MaybeWorkDir, Unicode),
+	ExtraInfo = maybe_bin(MaybeExtraInfo, Unicode),
+
+	CompLevel = case CompLevelAtom of
+		'8k' -> 16#0;
+		'64k' -> 16#1;
+		'rdp6' -> 16#2;
+		'rdp61' -> 16#3;
+		'rdp8' -> 16#7;
+		I when is_integer(I) -> I
+	end,
+
+	VideoDisable = case lists:member(novideo, FlagAtoms) of true -> 1; _ -> 0 end,
+	AudioCapture = case lists:member(audio_in, FlagAtoms) of true -> 1; _ -> 0 end,
+	SavedCreds = case lists:member(saved_creds, FlagAtoms) of true -> 1; _ -> 0 end,
+	NoAudio = case lists:member(noaudio, FlagAtoms) of true -> 1; _ -> 0 end,
+	SmartcardPin = case lists:member(smartcard_pin, FlagAtoms) of true -> 1; _ -> 0 end,
+	MouseWheel = case lists:member(mouse_wheel, FlagAtoms) of true -> 1; _ -> 0 end,
+	LogonErrors = case lists:member(logon_errors, FlagAtoms) of true -> 1; _ -> 0 end,
+	Rail = case lists:member(rail, FlagAtoms) of true -> 1; _ -> 0 end,
+	ForceEncrypt = case lists:member(force_encrypt, FlagAtoms) of true -> 1; _ -> 0 end,
+	RemoteConsoleAudio = case lists:member(remote_console_audio, FlagAtoms) of true -> 1; _ -> 0 end,
+	WindowsKey = case lists:member(windows_key, FlagAtoms) of true -> 1; _ -> 0 end,
+	Compression = case lists:member(compression, FlagAtoms) of true -> 1; _ -> 0 end,
+	LogonNotify = case lists:member(logon_notify, FlagAtoms) of true -> 1; _ -> 0 end,
+	MaximizeShell = case lists:member(maximize_shell, FlagAtoms) of true -> 1; _ -> 0 end,
+	AutoLogon = case lists:member(autologon, FlagAtoms) of true -> 1; _ -> 0 end,
+	DisableSalute = case lists:member(disable_salute, FlagAtoms) of true -> 1; _ -> 0 end,
+	Mouse = case lists:member(mouse, FlagAtoms) of true -> 1; _ -> 0 end,
+	RailHD = case lists:member(rail_hd, FlagAtoms) of true -> 1; _ -> 0 end,
+
+	<<Flags:32/big>> = <<0:6, RailHD:1, 0:1, 0:1, VideoDisable:1, AudioCapture:1, SavedCreds:1, NoAudio:1, SmartcardPin:1, MouseWheel:1, LogonErrors:1, Rail:1, ForceEncrypt:1, RemoteConsoleAudio:1, CompLevel:4, WindowsKey:1, Compression:1, LogonNotify:1, MaximizeShell:1, Unicode:1, AutoLogon:1, 0:1, DisableSalute:1, Mouse:1>>,
+
+	NullSize = if Unicode == 1 -> 2; true -> 1 end,
+	DomainLen = byte_size(Domain) - NullSize,
+	UserNameLen = byte_size(UserName) - NullSize,
+	PasswordLen = byte_size(Password) - NullSize,
+	ShellLen = byte_size(Shell) - NullSize,
+	WorkDirLen = byte_size(WorkDir) - NullSize,
+
+	<<CodePage:32/little, Flags:32/little, DomainLen:16/little, UserNameLen:16/little, PasswordLen:16/little, ShellLen:16/little, WorkDirLen:16/little, Domain/binary, UserName/binary, Password/binary, Shell/binary, WorkDir/binary, ExtraInfo/binary>>.
 
 maybe([], Args) -> error(no_return);
 maybe([Fun | Rest], Args) ->

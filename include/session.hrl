@@ -6,4 +6,4 @@
 %% Author: Alex Wilson <alex@uq.edu.au>
 %%
 
--record(session, {cookie=auto, host, port}).
+-record(session, {cookie=auto, host, port, user, password, domain}).

@@ -23,7 +23,8 @@
 -define(GUID_IGNORE, <<16#9C4351A6:32/little, 16#3535:16/little, 16#42AE:16/little, 16#91, 16#0C, 16#CD, 16#FC, 16#E5, 16#76, 16#0B, 16#58>>).
 
 -record(ts_security, {secflags = [], random=[]}).
--record(ts_info, {secflags = [], codepage=0, flags = [mouse, noaudio], compression='8k', domain="", username="", password="", shell="", workdir=""}).
+-record(ts_info, {secflags = [], codepage=0, flags = [mouse, noaudio], compression='8k', domain="", username="", password="", shell="", workdir="", client_address, client_dir, session_id, perf_flags, reconnect_cookie, dynamic_dst, extra, timezone}).
+-record(ts_timezone, {bias, name, dst_name, dst_bias, dst_start, dst_end}).
 -record(ts_license_vc, {secflags = []}).
 -record(ts_heartbeat, {secflags = [], period=30, warning=3, reconnect=5}).
 
