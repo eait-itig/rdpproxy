@@ -12,6 +12,7 @@
 -include("rdpp.hrl").
 -include("kbd.hrl").
 -include("session.hrl").
+-include_lib("cairerl/include/cairerl.hrl").
 
 -export([start_link/1]).
 -export([startup/2, nohighlight/2, highlight/2]).
@@ -33,12 +34,37 @@ init([Frontend]) ->
 	MRef = monitor(process, Frontend),
 	{ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
 
+test_bitmap() ->
+	ColourSetUqPurple = #cairo_set_source_rgba{r=0.28515,g=0.02734,b=0.36719},
+	ColourSetWhite = #cairo_set_source_rgba{r=0.95,g=0.95,b=1.0},
+	Image0 = #cairo_image{width=300,height=30,data = <<>>},
+	Ops = [
+		ColourSetUqPurple,
+		#cairo_rectangle{x=0.0, y=0.0, width=300.0, height=30.0},
+		#cairo_fill{},
+
+		#cairo_translate{y = 25.0, x = 20.0},
+		ColourSetWhite,
+		#cairo_select_font_face{family= <<"sans-serif">>},
+		#cairo_set_font_size{size = 20.0},
+		#cairo_show_text{text = <<"testing",0>>}
+	],
+	{ok, _, Image1} = cairerl_nif:draw(Image0, [], Ops),
+	#cairo_image{data = D, width = W, height = H} = Image1,
+	{ok, Compressed} = rle_nif:compress(D, W, H),
+	#ts_bitmap{size={300,30}, bpp=24, data = Compressed, comp_info =
+		#ts_bitmap_comp_info{flags = [compressed]}}.
+
 startup(timeout, S = #state{frontend = F}) ->
 	{W, H, Bpp} = gen_fsm:sync_send_event(F, get_canvas),
 	Rt = #rect{topleft = {round(W/2 - 50), round(H/2 - 25)},
 				 size = {100, 50}},
 	gen_fsm:send_event(F, {send_update, #ts_update_orders{orders = [
 		#ts_order_opaquerect{dest=Rt#rect.topleft, size=Rt#rect.size, color={255,100,100}}
+	]}}),
+	Bitmap = test_bitmap(),
+	gen_fsm:send_event(F, {send_update, #ts_update_bitmaps{bitmaps = [
+		Bitmap#ts_bitmap{dest = {round(W/2 - 150), round(H/4)}}
 	]}}),
 	{next_state, nohighlight, S#state{w = W, h = H, bpp = Bpp, rect = Rt}}.
 

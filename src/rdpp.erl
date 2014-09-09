@@ -955,16 +955,16 @@ encode_ts_bitmap(#ts_bitmap{dest={X,Y}, size={W,H}, bpp=Bpp, comp_info=CompInfo,
 	#ts_bitmap_comp_info{flags=CompFlags, scan_width=ScanWidth, full_size=FullSize} = CompInfo,
 	Compressed = lists:member(compressed, CompFlags),
 	ComprFlag = case Compressed of true -> 1; _ -> 0 end,
-	NoComprFlag = case Compressed of true -> 0; _ -> 1 end,
+	NoComprFlag = case ScanWidth of undefined -> 1; _ -> 0 end,
 	<<Flags:16/big>> = <<0:5, NoComprFlag:1, 0:9, ComprFlag:1>>,
 	X2 = X + W,
 	Y2 = Y + H,
 	Body = if
-		Compressed ->
+		NoComprFlag == 0 ->
 			CompSize = byte_size(Data),
 			CompHdr = <<0:16, CompSize:16/little, ScanWidth:16/little, FullSize:16/little>>,
 			<<CompHdr/binary, Data/binary>>;
-		not Compressed ->
+		NoComprFlag == 1 ->
 			Data
 	end,
 	BodyLength = byte_size(Body),

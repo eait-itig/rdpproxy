@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -pa ebin/
+%%! -pa ebin/ -pa deps/cairerl/ebin/
 main(_) ->
 	[ok = application:start(X) || X <- [crypto, asn1, public_key, ssl]],
     rdpproxy:start(),
