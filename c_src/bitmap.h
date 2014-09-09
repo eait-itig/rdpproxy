@@ -33,7 +33,7 @@ typedef uint8_t BYTE;
 
 #define CopyMemory memcpy
 
-inline void *
+static inline void *
 _aligned_malloc(size_t s, size_t align)
 {
 	size_t pad = s % align;
@@ -44,13 +44,13 @@ _aligned_malloc(size_t s, size_t align)
 	return ptr;
 }
 
-inline void
+static inline void
 _aligned_free(void *ptr)
 {
 	free(ptr);
 }
 
-inline void
+static inline void
 init_stream(struct stream *s, int size)
 {
 	assert(size < s->bin.size);
@@ -58,26 +58,26 @@ init_stream(struct stream *s, int size)
 	s->end = 0;
 }
 
-inline int
+static inline int
 get_pos(struct stream *s)
 {
 	return s->pos;
 }
 
-inline char *
+static inline char *
 get_end(struct stream *s)
 {
 	return (char *)&s->bin.data[s->end];
 }
 
-inline void
+static inline void
 out_uint8(struct stream *s, uint8_t v)
 {
 	assert(s->pos + 1 < s->bin.size);
 	s->bin.data[s->pos++] = v;
 }
 
-inline void
+static inline void
 out_uint16_le(struct stream *s, uint16_t v)
 {
 	assert(s->pos + 2 < s->bin.size);
@@ -85,7 +85,7 @@ out_uint16_le(struct stream *s, uint16_t v)
 	s->bin.data[s->pos++] = (v >> 8) & 0xf;
 }
 
-inline void
+static inline void
 out_uint8a(struct stream *s, char *data, int n)
 {
 	assert(s->pos + n < s->bin.size);
@@ -93,13 +93,13 @@ out_uint8a(struct stream *s, char *data, int n)
 	s->pos += n;
 }
 
-inline char *
+static inline char *
 get_ptr(struct stream *s)
 {
 	return (char *)&s->bin.data[s->pos];
 }
 
-inline char *
+static inline char *
 get_data(struct stream *s)
 {
 	return (char *)s->bin.data;
