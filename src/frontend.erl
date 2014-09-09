@@ -38,9 +38,9 @@ send_dpdu(SslSock, McsPkt) ->
 send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
 	#ts_cap_general{flags = Flags} = lists:keyfind(ts_cap_general, 1, Caps),
 	case lists:member(fastpath, Flags) of
-		%true ->
-		%	Bin = fastpath:encode_output(#fp_pdu{flags=[], contents=[TsUpdate]}),
-		%	ok = ssl:send(SslSock, Bin);
+		true ->
+			Bin = fastpath:encode_output(#fp_pdu{flags=[salted_mac], contents=[TsUpdate]}),
+			ok = ssl:send(SslSock, Bin);
 		_ ->
 			#data{shareid = ShareId, mcs = #mcs_state{us = Us, iochan = IoChan}} = Data,
 			{ok, Bin} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = TsUpdate}),

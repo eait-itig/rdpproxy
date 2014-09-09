@@ -20,7 +20,6 @@
 struct stream {
 	ErlNifBinary bin;
 	int pos;
-	int end;
 };
 
 typedef uint32_t UINT32;
@@ -31,7 +30,7 @@ typedef uint8_t BYTE;
 #define TRUE 1
 #define FALSE 0
 
-#define CopyMemory memcpy
+#define CopyMemory memmove
 
 static inline void *
 _aligned_malloc(size_t s, size_t align)
@@ -55,19 +54,12 @@ init_stream(struct stream *s, int size)
 {
 	assert(size < s->bin.size);
 	s->pos = 0;
-	s->end = 0;
 }
 
 static inline int
 get_pos(struct stream *s)
 {
 	return s->pos;
-}
-
-static inline char *
-get_end(struct stream *s)
-{
-	return (char *)&s->bin.data[s->end];
 }
 
 static inline void
@@ -81,8 +73,8 @@ static inline void
 out_uint16_le(struct stream *s, uint16_t v)
 {
 	assert(s->pos + 2 < s->bin.size);
-	s->bin.data[s->pos++] = v & 0xf;
-	s->bin.data[s->pos++] = (v >> 8) & 0xf;
+	s->bin.data[s->pos++] = v & 0xff;
+	s->bin.data[s->pos++] = (v >> 8) & 0xff;
 }
 
 static inline void

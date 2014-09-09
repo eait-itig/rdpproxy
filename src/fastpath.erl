@@ -98,6 +98,8 @@ decode_input(Binary) ->
 decode_output(Binary) ->
 	decode(Binary, fun decode_out_updates/1).
 
+-define(FRAGMENT_SIZE, (1 bsl 15)).
+
 encode_update(#ts_update_orders{orders = Orders}) ->
 	Count = length(Orders),
 	OrdersBin = lists:foldl(fun(Order, Bin) ->
@@ -109,10 +111,23 @@ encode_update(#ts_update_orders{orders = Orders}) ->
 
 encode_update(Ub = #ts_update_bitmaps{bitmaps = Bitmaps}) ->
 	Inner = rdpp:encode_ts_update_bitmaps(Ub),
-	encode_update({16#01, single, Inner});
+	encode_update({16#01, single, <<1:16/little, Inner/binary>>});
+
+encode_update({Type, single, Data}) when byte_size(Data) > ?FRAGMENT_SIZE ->
+	Part = binary:part(Data, {0, ?FRAGMENT_SIZE}),
+	Rest = binary:part(Data, {?FRAGMENT_SIZE, byte_size(Data) - ?FRAGMENT_SIZE}),
+	encode_update({Type, first, Part}) ++
+		encode_update({Type, last, Rest});
+
+encode_update({Type, last, Data}) when byte_size(Data) > ?FRAGMENT_SIZE ->
+	Part = binary:part(Data, {0, ?FRAGMENT_SIZE}),
+	Rest = binary:part(Data, {?FRAGMENT_SIZE, byte_size(Data) - ?FRAGMENT_SIZE}),
+	encode_update({Type, next, Part}) ++
+		encode_update({Type, last, Rest});
 
 encode_update({Type, Fragment, Data}) ->
-	Compression = 0,
+	Compression = 2,
+	ComprFlags = 0,
 	Fragmentation = case Fragment of
 		single -> 0;
 		last -> 1;
@@ -120,16 +135,14 @@ encode_update({Type, Fragment, Data}) ->
 		next -> 3
 	end,
 	Size = byte_size(Data),
-	<<Compression:2, Fragmentation:2, Type:4, Size:16/little, Data/binary>>.
+	[<<Compression:2, Fragmentation:2, Type:4, ComprFlags:8, Size:16/little, Data/binary>>].
 
-encode_output(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = Contents}) when is_list(Contents) ->
-	ContentsBin = lists:foldl(
-		fun(Update, Bin) when is_binary(Update) ->
-			<<Bin/binary, Update/binary>>;
-		(Update, Bin) ->
-			B = encode_update(Update),
-			<<Bin/binary, B/binary>>
-		end, <<>>, Contents),
+encode_output(Pdu = #fp_pdu{contents = [Update]}) ->
+	Fragments = encode_update(Update),
+	iolist_to_binary(lists:map(fun(Fragment) ->
+		encode_output(Pdu#fp_pdu{contents = Fragment})
+	end, Fragments));
+encode_output(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = ContentsBin}) when is_binary(ContentsBin) ->
 	Encrypted = case lists:member(encrypted, Flags) of true -> 1; _ -> 0 end,
 	SaltedMAC = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
 	LargeSize = ((byte_size(ContentsBin) + 12) >= 1 bsl 8),

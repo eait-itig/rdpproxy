@@ -168,7 +168,7 @@ static INLINE UINT32 ExtractRunLength(UINT32 code, BYTE* pbOrderHdr, UINT32* adv
 #define UNROLL_COUNT 4
 #define UNROLL(_exp) do { _exp _exp _exp _exp } while (0)
 
-#undef DESTWRITEPIXEL
+/*#undef DESTWRITEPIXEL
 #undef DESTREADPIXEL
 #undef SRCREADPIXEL
 #undef DESTNEXTPIXEL
@@ -206,7 +206,7 @@ static INLINE UINT32 ExtractRunLength(UINT32 code, BYTE* pbOrderHdr, UINT32* adv
 #define WRITEFIRSTLINEFGBGIMAGE WriteFirstLineFgBgImage16to16
 #define RLEDECOMPRESS RleDecompress16to16
 #define RLEEXTRA
-#include "bitmap_incl.c"
+#include "bitmap_incl.c"*/
 
 #undef DESTWRITEPIXEL
 #undef DESTREADPIXEL
@@ -292,7 +292,7 @@ BOOL bitmap_decompress(BYTE* srcData, BYTE* dstData, int width, int height, int 
 	BYTE* TmpBfr;
 	/*BYTE* pDstData;*/
 
-	if (srcBpp == 16 && dstBpp == 16)
+	/*if (srcBpp == 16 && dstBpp == 16)
 	{
 		TmpBfr = (BYTE*) _aligned_malloc(width * height * 2, 16);
 		RleDecompress16to16(srcData, size, TmpBfr, width * 2, width, height);
@@ -317,7 +317,7 @@ BOOL bitmap_decompress(BYTE* srcData, BYTE* dstData, int width, int height, int 
 		freerdp_bitmap_flip(TmpBfr, dstData, width, height);
 		_aligned_free(TmpBfr);
 	}
-	else if (srcBpp == 24 && dstBpp == 32)
+	else*/ if (srcBpp == 24 && dstBpp == 32)
 	{
 		TmpBfr = (BYTE*) _aligned_malloc(width * height * 4, 16);
 		RleDecompress24to32(srcData, size, TmpBfr, width * 4, width, height);
