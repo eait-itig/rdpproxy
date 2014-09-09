@@ -43,15 +43,17 @@ test_bitmap() ->
 		#cairo_rectangle{x=0.0, y=0.0, width=300.0, height=30.0},
 		#cairo_fill{},
 
-		#cairo_translate{y = 25.0, x = 20.0},
+		#cairo_translate{y = 15.0, x = 20.0},
 		ColourSetWhite,
 		#cairo_select_font_face{family= <<"sans-serif">>},
 		#cairo_set_font_size{size = 20.0},
-		#cairo_show_text{text = <<"testing",0>>}
+		#cairo_show_text{text = <<"testing fonts and bitmaps",0>>}
 	],
 	{ok, _, Image1} = cairerl_nif:draw(Image0, [], Ops),
 	#cairo_image{data = D, width = W, height = H} = Image1,
 	{ok, Compressed} = rle_nif:compress(D, W, H),
+	io:format("compressed size = ~B\n", [byte_size(Compressed)]),
+	io:format("uncompressed size = ~B\n", [byte_size(D)]),
 	#ts_bitmap{size={300,30}, bpp=24, data = Compressed, comp_info =
 		#ts_bitmap_comp_info{flags = [compressed]}}.
 
@@ -60,6 +62,7 @@ startup(timeout, S = #state{frontend = F}) ->
 	Rt = #rect{topleft = {round(W/2 - 50), round(H/2 - 25)},
 				 size = {100, 50}},
 	gen_fsm:send_event(F, {send_update, #ts_update_orders{orders = [
+		#ts_order_opaquerect{dest={0,0}, size={W,H}, color={16#49,16#07,16#5e}},
 		#ts_order_opaquerect{dest=Rt#rect.topleft, size=Rt#rect.size, color={255,100,100}}
 	]}}),
 	Bitmap = test_bitmap(),

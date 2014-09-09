@@ -132,6 +132,33 @@ encode_output(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = Con
 		end, <<>>, Contents),
 	Encrypted = case lists:member(encrypted, Flags) of true -> 1; _ -> 0 end,
 	SaltedMAC = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
+	LargeSize = ((byte_size(ContentsBin) + 12) >= 1 bsl 8),
+	HeaderLen = 1 + (if LargeSize -> 2; true -> 1 end) +
+				(if Encrypted == 1 -> 8; true -> 0 end),
+	TotalSize = HeaderLen + byte_size(ContentsBin),
+	Header0 = <<Encrypted:1, SaltedMAC:1, 0:4, ?ACT_FASTPATH:2>>,
+	Header1 = if LargeSize ->
+		<<Header0/binary, 1:1, TotalSize:15/big>>;
+	true ->
+		<<Header0/binary, 0:1, TotalSize:7>>
+	end,
+	Header2 = if (Encrypted == 1) ->
+		<<Header1/binary, Signature/binary>>;
+	true ->
+		Header1
+	end,
+	<<Header2/binary, ContentsBin/binary>>.
+
+encode_input(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = Contents}) when is_list(Contents) ->
+	ContentsBin = lists:foldl(
+		fun(Update, Bin) when is_binary(Update) ->
+			<<Bin/binary, Update/binary>>;
+		(Update, Bin) ->
+			B = encode_update(Update),
+			<<Bin/binary, B/binary>>
+		end, <<>>, Contents),
+	Encrypted = case lists:member(encrypted, Flags) of true -> 1; _ -> 0 end,
+	SaltedMAC = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
 	LargeN = (length(Contents) >= 1 bsl 5),
 	LargeSize = ((byte_size(ContentsBin) + 12) >= 1 bsl 8),
 	HeaderLen = 1 + (if LargeSize -> 2; true -> 1 end) +
