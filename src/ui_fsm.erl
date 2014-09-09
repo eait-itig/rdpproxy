@@ -34,8 +34,55 @@ init([Frontend]) ->
 	MRef = monitor(process, Frontend),
 	{ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
 
+slice_bitmap(_I, _Xs, []) -> [];
+slice_bitmap(_I, _Xs, [_Y]) -> [];
+slice_bitmap(I = #cairo_image{}, Xs, [FromY, ToY | RestY]) ->
+	slice_bitmap_x(I, Xs, [FromY, ToY | RestY]) ++
+	slice_bitmap(I, Xs, [ToY | RestY]).
+slice_bitmap_x(_I, [], _) -> [];
+slice_bitmap_x(_I, [_X], _) -> [];
+slice_bitmap_x(I = #cairo_image{}, [FromX, ToX | RestX], [FromY, ToY | RestY]) ->
+	Image0 = #cairo_image{width = ToX - FromX, height = ToY - FromY, data = <<>>},
+	{ok, _, Image1} = cairerl_nif:draw(Image0, [], [
+		#cairo_pattern_create_for_surface{tag=img, image=I},
+		#cairo_pattern_translate{tag=img, x=float(FromX), y=float(FromY)},
+		#cairo_set_source{tag=img},
+		#cairo_rectangle{width = float(ToX - FromX), height = float(ToY - FromY)},
+		#cairo_fill{}
+	]),
+	[{FromX, FromY, Image1} | slice_bitmap_x(I, [ToX | RestX], [FromY, ToY | RestY])].
+
+divide_bitmap(I = #cairo_image{}) ->
+	divide_bitmap(I, {0,0}).
+divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
+		when (W * H > 10000) ->
+	XInt = 4 * (round(math:sqrt(W / H * 10000)) div 4),
+	YInt = 4 * (round(math:sqrt(H / W * 10000)) div 4),
+	XIntervals = lists:seq(0, W, XInt) ++ [W],
+	YIntervals = lists:seq(0, H, YInt) ++ [H],
+	Slices = slice_bitmap(I, XIntervals, YIntervals),
+	lists:flatmap(fun({X, Y, Slice}) ->
+		divide_bitmap(Slice, {X0 + X, Y0 + Y})
+	end, Slices);
+divide_bitmap(I = #cairo_image{data = D, width = W, height = H}, {X,Y}) ->
+	{ok, Compr} = rle_nif:compress(D, W, H),
+	[#ts_bitmap{dest={X,Y}, size={W,H}, bpp=24, data = Compr, comp_info =
+		#ts_bitmap_comp_info{flags = [compressed]}}].
+
+uq_logo_bitmap() ->
+	{ok, Logo} = cairerl_nif:png_read("uq-logo.png"),
+	#cairo_image{width = W, height = H} = Logo,
+	Image0 = #cairo_image{width=W, height=H, data = <<>>},
+	{ok, _, Image1} = cairerl_nif:draw(Image0, [], [
+		#cairo_pattern_create_for_surface{tag=uqlogo, image=Logo},
+		#cairo_set_source{tag=uqlogo},
+		#cairo_rectangle{x=0.0,y=0.0,width=float(W),height=float(H)},
+		#cairo_fill{}
+		]),
+	Image1.
+
 test_bitmap() ->
-	ColourSetUqPurple = #cairo_set_source_rgba{r=0.28515,g=0.02734,b=0.36719},
+	ColourSetUqPurple = #cairo_set_source_rgba{r=16#49 / 256,g = 16#07 / 256,b = 16#5e / 256},
 	ColourSetWhite = #cairo_set_source_rgba{r=0.95,g=0.95,b=1.0},
 	Image0 = #cairo_image{width=300,height=30,data = <<>>},
 	Ops = [
@@ -43,19 +90,14 @@ test_bitmap() ->
 		#cairo_rectangle{x=0.0, y=0.0, width=300.0, height=30.0},
 		#cairo_fill{},
 
-		#cairo_translate{y = 15.0, x = 20.0},
+		#cairo_translate{y = 20.0, x = 20.0},
 		ColourSetWhite,
 		#cairo_select_font_face{family= <<"sans-serif">>},
 		#cairo_set_font_size{size = 20.0},
-		#cairo_show_text{text = <<"testing fonts and bitmaps",0>>}
+		#cairo_show_text{text = <<"something is fucky",0>>}
 	],
 	{ok, _, Image1} = cairerl_nif:draw(Image0, [], Ops),
-	#cairo_image{data = D, width = W, height = H} = Image1,
-	{ok, Compressed} = rle_nif:compress(D, W, H),
-	io:format("compressed size = ~B\n", [byte_size(Compressed)]),
-	io:format("uncompressed size = ~B\n", [byte_size(D)]),
-	#ts_bitmap{size={300,30}, bpp=24, data = Compressed, comp_info =
-		#ts_bitmap_comp_info{flags = [compressed]}}.
+	Image1.
 
 startup(timeout, S = #state{frontend = F}) ->
 	{W, H, Bpp} = gen_fsm:sync_send_event(F, get_canvas),
@@ -65,10 +107,14 @@ startup(timeout, S = #state{frontend = F}) ->
 		#ts_order_opaquerect{dest={0,0}, size={W,H}, color={16#49,16#07,16#5e}},
 		#ts_order_opaquerect{dest=Rt#rect.topleft, size=Rt#rect.size, color={255,100,100}}
 	]}}),
-	Bitmap = test_bitmap(),
-	gen_fsm:send_event(F, {send_update, #ts_update_bitmaps{bitmaps = [
-		Bitmap#ts_bitmap{dest = {round(W/2 - 150), round(H/4)}}
-	]}}),
+	LogoBitmap = #cairo_image{width = LogoW, height = LogoH} = uq_logo_bitmap(),
+	TextBitmap = test_bitmap(),
+	gen_fsm:send_event(F, {send_update, #ts_update_bitmaps{
+		bitmaps = divide_bitmap(LogoBitmap, {round(W/2 - LogoW/2), round(H/4 - LogoH/2)})
+	}}),
+	gen_fsm:send_event(F, {send_update, #ts_update_bitmaps{
+		bitmaps = divide_bitmap(TextBitmap, {round(W/2 - 120), round(H/4 + LogoH/2 + 10)})
+	}}),
 	{next_state, nohighlight, S#state{w = W, h = H, bpp = Bpp, rect = Rt}}.
 
 nohighlight({input, F, Evt}, S = #state{frontend = F, w = W, h = H, rect = Rt}) ->

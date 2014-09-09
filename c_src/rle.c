@@ -100,11 +100,11 @@ compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		goto fail;
 	}
 
-	assert(enif_alloc_binary(128*1024, &out.bin));
-	assert(enif_alloc_binary(128*1024, &temp.bin));
+	assert(enif_alloc_binary(1*1024*1024, &out.bin));
+	assert(enif_alloc_binary(1*1024*1024, &temp.bin));
 
 	ret = xrdp_bitmap_compress((char *)in.data, w, h,
-		&out, 24, 128*1024, &temp);
+		&out, 24, 1*1024*1024, &temp);
 	if (ret <= 0) {
 		err = enif_make_atom(env, "no_lines_sent");
 		goto fail;
