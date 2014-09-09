@@ -90,10 +90,16 @@ test_bitmap() ->
 		#cairo_rectangle{x=0.0, y=0.0, width=300.0, height=30.0},
 		#cairo_fill{},
 
-		#cairo_translate{y = 20.0, x = 20.0},
 		ColourSetWhite,
 		#cairo_select_font_face{family= <<"sans-serif">>},
 		#cairo_set_font_size{size = 20.0},
+		#cairo_text_extents{text = <<"something is fucky",0>>, tag = txte},
+		#cairo_tag_deref{tag=txte, field=width, out_tag=txtw},
+		#cairo_tag_deref{tag=txte, field=height, out_tag=txth},
+		#cairo_translate{x = 150.0, y = 15.0},
+		#cairo_scale{x = -0.5, y = 0.5},
+		#cairo_translate{x = txtw, y = txth},
+		#cairo_scale{x = -2.0, y = 2.0},
 		#cairo_show_text{text = <<"something is fucky",0>>}
 	],
 	{ok, _, Image1} = cairerl_nif:draw(Image0, [], Ops),
@@ -113,7 +119,7 @@ startup(timeout, S = #state{frontend = F}) ->
 		bitmaps = divide_bitmap(LogoBitmap, {round(W/2 - LogoW/2), round(H/4 - LogoH/2)})
 	}}),
 	gen_fsm:send_event(F, {send_update, #ts_update_bitmaps{
-		bitmaps = divide_bitmap(TextBitmap, {round(W/2 - 120), round(H/4 + LogoH/2 + 10)})
+		bitmaps = divide_bitmap(TextBitmap, {round(W/2 - 150), round(H/4 + LogoH/2)})
 	}}),
 	{next_state, nohighlight, S#state{w = W, h = H, bpp = Bpp, rect = Rt}}.
 
