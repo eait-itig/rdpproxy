@@ -109,7 +109,6 @@ compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		err = enif_make_atom(env, "no_lines_sent");
 		goto fail;
 	}
-	fprintf(stderr, "returning %d lines\n", ret);
 
 	enif_release_binary(&temp.bin);
 	assert(enif_alloc_binary(out.pos, &temp.bin));

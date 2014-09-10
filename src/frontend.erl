@@ -397,6 +397,12 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
 	ssl:close(SslSock),
 	{stop, normal, D};
 
+run_ui(close, D = #data{sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = IoChan}, shareid = ShareId}) ->
+	{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
+	send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+	ssl:close(SslSock),
+	{stop, normal, D};
+
 run_ui({fp_pdu, #fp_pdu{contents = Evts}}, D = #data{uis = Uis}) ->
 	lists:foreach(fun(Evt) ->
 		lists:foreach(fun(Ui) ->

@@ -145,10 +145,11 @@ encode_output(Pdu = #fp_pdu{contents = [Update]}) ->
 encode_output(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = ContentsBin}) when is_binary(ContentsBin) ->
 	Encrypted = case lists:member(encrypted, Flags) of true -> 1; _ -> 0 end,
 	SaltedMAC = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
-	LargeSize = ((byte_size(ContentsBin) + 12) >= 1 bsl 8),
+	LargeSize = ((byte_size(ContentsBin) + 10) >= 1 bsl 7),
 	HeaderLen = 1 + (if LargeSize -> 2; true -> 1 end) +
 				(if Encrypted == 1 -> 8; true -> 0 end),
 	TotalSize = HeaderLen + byte_size(ContentsBin),
+	io:format("using largesize = ~p, for totalsize ~p\n", [LargeSize, TotalSize]),
 	Header0 = <<Encrypted:1, SaltedMAC:1, 0:4, ?ACT_FASTPATH:2>>,
 	Header1 = if LargeSize ->
 		<<Header0/binary, 1:1, TotalSize:15/big>>;
