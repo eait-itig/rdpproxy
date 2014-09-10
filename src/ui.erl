@@ -475,6 +475,51 @@ textinput_calc_xs(SoFar, <<Next,Rest/binary>>, Sz = {W, H}) ->
 textinput_handler({init, Placeholder}, Wd = #widget{}) ->
 	textinput_handler(redraw_base,
 		Wd#widget{tags = [focusable], state = #textinput_state{placeholder = Placeholder}});
+textinput_handler(#ts_inpevt_key{code = 54, action = down}, Wd = #widget{tags = T}) ->
+	case lists:member(shift_held, T) of
+		true -> {ok, Wd, []};
+		false -> {ok, Wd#widget{tags = [shift_held | T]}, []}
+	end;
+textinput_handler(#ts_inpevt_key{code = 54, action = up}, Wd = #widget{tags = T}) ->
+	case lists:member(shift_held, T) of
+		true -> {ok, Wd#widget{tags = T -- [shift_held]}, []};
+		false -> {ok, Wd, []}
+	end;
+textinput_handler(#ts_inpevt_key{code = 14, action = up}, Wd = #widget{state = S}) ->
+	#textinput_state{xs = Xs0, text = Text0, cursor = Cursor0} = S,
+	case Cursor0 of
+		N when N > 0 ->
+			TextBefore = binary:part(Text0, {0, Cursor0-1}),
+			XsBefore = lists:sublist(Xs0, Cursor0),
+			TextAfter = binary:part(Text0, {Cursor0, byte_size(Text0) - Cursor0}),
+			Xs1 = XsBefore ++ textinput_calc_xs(TextBefore, TextAfter, Wd#widget.size),
+			Text1 = <<TextBefore/binary, TextAfter/binary>>,
+			Cursor1 = Cursor0 - 1,
+			S2 = S#textinput_state{xs = Xs1, text = Text1, cursor = Cursor1},
+			textinput_handler(redraw_text, Wd#widget{state = S2});
+		_ ->
+			{ok, Wd, []}
+	end;
+textinput_handler(#ts_inpevt_key{code = Code, action = up}, Wd = #widget{tags = T, state = S})
+		when (Code >= 30) andalso (Code =< 30 + ($z - $a)) ->
+	Char = case lists:member(shift_held, T) of
+		true -> Code - 30 + $A;
+		false -> Code - 30 + $a
+	end,
+
+	#textinput_state{xs = Xs0, text = Text0, cursor = Cursor0} = S,
+	TextBefore = binary:part(Text0, {0, Cursor0}),
+	XsBefore = lists:sublist(Xs0, Cursor0 + 1),
+
+	TextAfter0 = binary:part(Text0, {Cursor0, byte_size(Text0) - Cursor0}),
+	TextAfter1 = <<Char, TextAfter0/binary>>,
+
+	Xs1 = XsBefore ++ textinput_calc_xs(TextBefore, TextAfter1, Wd#widget.size),
+	Text1 = <<TextBefore/binary, TextAfter1/binary>>,
+	Cursor1 = Cursor0 + 1,
+
+	S2 = S#textinput_state{xs = Xs1, text = Text1, cursor = Cursor1},
+	textinput_handler(redraw_text, Wd#widget{state = S2});
 textinput_handler(#ts_inpevt_mouse{action = down, buttons = [1]}, Wd = #widget{tags = T}) ->
 	case lists:member(focus, T) of
 		true -> {ok, Wd, []};
