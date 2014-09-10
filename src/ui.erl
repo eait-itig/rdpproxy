@@ -475,12 +475,14 @@ textinput_calc_xs(SoFar, <<Next,Rest/binary>>, Sz = {W, H}) ->
 textinput_handler({init, Placeholder}, Wd = #widget{}) ->
 	textinput_handler(redraw_base,
 		Wd#widget{tags = [focusable], state = #textinput_state{placeholder = Placeholder}});
-textinput_handler(#ts_inpevt_key{code = 54, action = down}, Wd = #widget{tags = T}) ->
+textinput_handler(#ts_inpevt_key{code = ShiftKey, action = down}, Wd = #widget{tags = T})
+		when (ShiftKey == 42) orelse (ShiftKey == 54) ->
 	case lists:member(shift_held, T) of
 		true -> {ok, Wd, []};
 		false -> {ok, Wd#widget{tags = [shift_held | T]}, []}
 	end;
-textinput_handler(#ts_inpevt_key{code = 54, action = up}, Wd = #widget{tags = T}) ->
+textinput_handler(#ts_inpevt_key{code = ShiftKey, action = up}, Wd = #widget{tags = T})
+		when (ShiftKey == 42) orelse (ShiftKey == 54) ->
 	case lists:member(shift_held, T) of
 		true -> {ok, Wd#widget{tags = T -- [shift_held]}, []};
 		false -> {ok, Wd, []}

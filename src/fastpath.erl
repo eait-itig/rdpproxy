@@ -149,7 +149,6 @@ encode_output(Pdu = #fp_pdu{flags = Flags, signature = Signature, contents = Con
 	HeaderLen = 1 + (if LargeSize -> 2; true -> 1 end) +
 				(if Encrypted == 1 -> 8; true -> 0 end),
 	TotalSize = HeaderLen + byte_size(ContentsBin),
-	io:format("using largesize = ~p, for totalsize ~p\n", [LargeSize, TotalSize]),
 	Header0 = <<Encrypted:1, SaltedMAC:1, 0:4, ?ACT_FASTPATH:2>>,
 	Header1 = if LargeSize ->
 		<<Header0/binary, 1:1, TotalSize:15/big>>;
