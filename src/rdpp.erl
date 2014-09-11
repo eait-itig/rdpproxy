@@ -825,6 +825,7 @@ decode_sharedata(Chan, Bin) ->
 					39 -> decode_ts_fontlist(Rest);
 					40 -> decode_ts_fontmap(Rest);
 					28 -> decode_ts_input(Rest);
+					36 -> decode_ts_shutdown(Rest);
 					_ -> {PduType, Rest}
 				end,
 				{ok, #ts_sharedata{channel = Chan, shareid = ShareId, priority = Prio, flags = FlagAtoms, data = Inner}};
@@ -993,7 +994,7 @@ decode_ts_inpevt(16#0004, Bin) ->
 	Action = if Release == 1 -> up; true -> down end,
 	FlagAtoms = if AlreadyDown == 1 -> [already_down]; true -> [] end ++
 				if Extended == 1 -> [extended]; true -> [] end,
-	{#ts_inpevt_key{code = KeyCode, action = Action, flags = FlagAtoms}, Rest};
+	{#ts_inpevt_key{code = kbd:process_scancode(KeyCode), action = Action, flags = FlagAtoms}, Rest};
 
 decode_ts_inpevt(16#0005, Bin) ->
 	<<Flags:16/little, KeyCode:16/little, _:16, Rest/binary>> = Bin,
@@ -1032,6 +1033,14 @@ decode_ts_inpevts(N, Bin) ->
 	<<Time:32/little, Type:16/little, Rest/binary>> = Bin,
 	{Next, Rem} = decode_ts_inpevt(Type, Rest),
 	[Next | decode_ts_inpevts(N - 1, Rem)].
+
+padding_only(Bin) ->
+	Sz = bit_size(Bin),
+	<<0:Sz>> = Bin.
+
+decode_ts_shutdown(Bin) ->
+	padding_only(Bin),
+	#ts_shutdown{}.
 
 decode_ts_input(Bin) ->
 	<<N:16/little, _:16, Evts/binary>> = Bin,

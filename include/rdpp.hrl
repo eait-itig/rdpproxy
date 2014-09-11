@@ -55,6 +55,7 @@
 
 -record(ts_sharedata, {channel, priority=high, comptype=none, flags=[], shareid, data={}}).
 -record(ts_sync, {user}).
+-record(ts_shutdown, {}).
 -record(ts_control, {action, grantid, controlid}).
 -record(ts_fontlist, {}).
 -record(ts_fontmap, {}).

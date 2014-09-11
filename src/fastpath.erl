@@ -53,7 +53,7 @@ decode_inp_events(<<Code:3, Flags:5, Rest/binary>>) ->
 			FlagAtoms = if Extended == 1 -> [extended]; true -> [] end,
 			Action = if Release == 1 -> up; true -> down end,
 			<<ScanCode:8, Rem/binary>> = Rest,
-			[#ts_inpevt_key{flags = FlagAtoms, action = Action, code = ScanCode} | decode_inp_events(Rem)];
+			[#ts_inpevt_key{flags = FlagAtoms, action = Action, code = kbd:process_scancode(ScanCode)} | decode_inp_events(Rem)];
 		?FP_INP_MOUSEX ->
 			<<PointerFlags:16/little, X:16/little, Y:16/little, Rem/binary>> = Rest,
 			<<Down:1, _:13, Button5:1, Button4:1>> = <<PointerFlags:16/big>>,

@@ -283,10 +283,9 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
 					#ts_cap_vchannel{},
 					#ts_cap_font{},
 					#ts_cap_bitmap_codecs{codecs = [
-						#ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]},
-						#ts_cap_bitmap_codec{codec = jpeg, id = 0, properties = [{quality, 85}]}
+						#ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]}
 					]},
-					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height},
+					#ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,subsampling,skip_alpha,multirect]},
 					#ts_cap_order{},
 					#ts_cap_pointer{},
 					#ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
@@ -411,7 +410,7 @@ run_ui({fp_pdu, #fp_pdu{contents = Evts}}, D = #data{uis = Uis}) ->
 	end, Evts),
 	{next_state, run_ui, D};
 
-run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = #data{mcs = #mcs_state{them = Them, iochan = IoChan}, shareid = ShareId, uis = Uis}) ->
+run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = #data{mcs = #mcs_state{them = Them, us = Us, iochan = IoChan}, shareid = ShareId, sslsock = SslSock, uis = Uis}) ->
 	case rdpp:decode_sharecontrol(RdpData) of
 		{ok, #ts_sharedata{shareid = ShareId, data = #ts_input{events = Evts}}} ->
 			lists:foreach(fun(Evt) ->
@@ -420,6 +419,12 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
 				end, Uis)
 			end, Evts),
 			{next_state, run_ui, D};
+
+		{ok, #ts_sharedata{shareid = ShareId, data = #ts_shutdown{}}} ->
+			{ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
+			send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+			ssl:close(SslSock),
+			{stop, normal, D};
 
 		{ok, #ts_sharedata{} = SD} ->
 			error_logger:info_report(["frontend rx: ", rdpp:pretty_print(SD)]),
@@ -522,7 +527,7 @@ handle_info({ssl, SslSock, Bin}, State, #data{sslsock = SslSock} = Data)
 	case rdpp:decode_server(Bin) of
 		{ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
 			case rdpp:decode_basic(RdpData0) of
-				{ok, TsInfo0 = #ts_info{}} ->
+				{ok, TsInfo0 = #ts_info{secflags = []}} ->
 					#data{session = #session{user = User, password = Password, domain = Domain}} = Data,
 					TsInfo1 = TsInfo0#ts_info{flags = [autologon, unicode | TsInfo0#ts_info.flags]},
 					Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
