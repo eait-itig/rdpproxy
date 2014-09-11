@@ -13,20 +13,20 @@
 -export([initial_listeners/1]).
 
 start_link(Port) ->
-	supervisor:start_link(?MODULE, [Port]).
+    supervisor:start_link(?MODULE, [Port]).
 
 start_frontend(Sup) ->
-	supervisor:start_child(Sup, []).
+    supervisor:start_child(Sup, []).
 
 %% @private
 initial_listeners(Sup) ->
-	[start_frontend(Sup) || _ <- lists:seq(1,20)],
-	ok.
+    [start_frontend(Sup) || _ <- lists:seq(1,20)],
+    ok.
 
 init([Port]) ->
-	{ok, ListenSocket} = gen_tcp:listen(Port, [binary, {active, false}, {reuseaddr, true}]),
-	spawn_link(?MODULE, initial_listeners, [self()]),
-	Server = {undefined,
-		{frontend, start_link, [ListenSocket, self()]},
-		transient, 1000, worker, [frontend]},
-	{ok, {{simple_one_for_one, 60, 600}, [Server]}}.
+    {ok, ListenSocket} = gen_tcp:listen(Port, [binary, {active, false}, {reuseaddr, true}]),
+    spawn_link(?MODULE, initial_listeners, [self()]),
+    Server = {undefined,
+        {frontend, start_link, [ListenSocket, self()]},
+        transient, 1000, worker, [frontend]},
+    {ok, {{simple_one_for_one, 60, 600}, [Server]}}.

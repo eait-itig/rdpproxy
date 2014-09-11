@@ -27,8 +27,8 @@ init() ->
 
 -spec compress(Pixels :: bitmap(), Width :: integer(), Height :: integer()) -> {ok, rle_bitmap()} | {error, term()}.
 compress(_Pixels, _Width, _Height) ->
-	error(bad_nif).
+    error(bad_nif).
 
 -spec uncompress(Compressed :: rle_bitmap(), Width :: integer(), Height :: integer()) -> {ok, bitmap()} | {error, term()}.
 uncompress(_Compr, _W, _H) ->
-	error(bad_nif).
+    error(bad_nif).

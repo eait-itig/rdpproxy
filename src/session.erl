@@ -14,27 +14,27 @@
 
 -spec start_link(Frontend :: pid()) -> {ok, pid()}.
 start_link(Frontend) ->
-	gen_fsm:start_link(?MODULE, [Frontend], []).
+    gen_fsm:start_link(?MODULE, [Frontend], []).
 
 -record(data, {frontend}).
 
 %% @private
 init([Frontend]) ->
-	process_flag(trap_exit, true),
-	{ok, connected, #data{frontend = Frontend}}.
+    process_flag(trap_exit, true),
+    {ok, connected, #data{frontend = Frontend}}.
 
 %% @private
 handle_info({'EXIT', Pid, Reason}, State, Data) ->
-	{next_state, State, Data};
+    {next_state, State, Data};
 
 handle_info(_Msg, State, Data) ->
-	{next_state, State, Data}.
+    {next_state, State, Data}.
 
 %% @private
 terminate(_Reason, _State) ->
-	ok.
+    ok.
 
 %% @private
 % default handler
 code_change(_OldVsn, State, _Extra) ->
-	{ok, State}.
+    {ok, State}.
