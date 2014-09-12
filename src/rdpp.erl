@@ -11,6 +11,7 @@
 -include("kbd.hrl").
 -include("x224.hrl").
 -include("rdpp.hrl").
+-include("rdpp_bitfields.hrl").
 
 -export([decode_client/1, decode_server/1, decode_connseq/1]).
 -export([encode_protocol_flags/1, decode_protocol_flags/1]).
@@ -151,70 +152,69 @@ decoder_mcs_cr(Pdu, McsData, Rem) ->
             {continue, [Pdu, McsData, Rem]}
     end.
 
+decode_bit_flags(<<>>, _) -> sets:new();
+decode_bit_flags(Bits, [{skip,N} | RestAtoms]) ->
+    <<_Flags:N, Rest/bitstring>> = Bits,
+    decode_bit_flags(Rest, RestAtoms);
+decode_bit_flags(<<_Flag:1, Rest/bitstring>>, [skip | RestAtoms]) ->
+    decode_bit_flags(Rest, RestAtoms);
+decode_bit_flags(Bits, [{FlagAtom, Width} | RestAtoms]) ->
+    <<Flag:Width/little, Rest/bitstring>> = Bits,
+    case Flag of
+        1 -> sets:add_element(FlagAtom, decode_bit_flags(Rest, RestAtoms));
+        0 -> decode_bit_flags(Rest, RestAtoms)
+    end;
+decode_bit_flags(<<Flag:1, Rest/bitstring>>, [FlagAtom | RestAtoms]) ->
+    case Flag of
+        1 -> sets:add_element(FlagAtom, decode_bit_flags(Rest, RestAtoms));
+        0 -> decode_bit_flags(Rest, RestAtoms)
+    end.
+
+encode_bit_flags(_FlagSet, []) -> <<>>;
+encode_bit_flags(FlagSet, [{skip, N} | RestAtoms]) ->
+    RestBin = encode_bit_flags(FlagSet, RestAtoms),
+    <<0:N, RestBin/bitstring>>;
+encode_bit_flags(FlagSet, [skip | RestAtoms]) ->
+    RestBin = encode_bit_flags(FlagSet, RestAtoms),
+    <<0:1, RestBin/bitstring>>;
+encode_bit_flags(FlagSet, [{FlagAtom, Width} | RestAtoms]) ->
+    RestBin = encode_bit_flags(FlagSet, RestAtoms),
+    case sets:is_element(FlagAtom, FlagSet) of
+        true -> <<1:Width/little, RestBin/bitstring>>;
+        false -> <<0:Width/little, RestBin/bitstring>>
+    end;
+encode_bit_flags(FlagSet, [FlagAtom | RestAtoms]) ->
+    RestBin = encode_bit_flags(FlagSet, RestAtoms),
+    case sets:is_element(FlagAtom, FlagSet) of
+        true -> <<1:1, RestBin/bitstring>>;
+        false -> <<0:1, RestBin/bitstring>>
+    end.
+
 -spec encode_protocol_flags([atom()]) -> integer().
 encode_protocol_flags(Protocols) ->
-    CredSSPEarly = case lists:member(credssp_early, Protocols) of true -> 1; _ -> 0 end,
-    CredSSP = case lists:member(credssp, Protocols) of true -> 1; _ -> 0 end,
-    Ssl = case lists:member(ssl, Protocols) of true -> 1; _ -> 0 end,
-    <<Prots:32/big>> = <<0:28, CredSSPEarly:1, 0:1, CredSSP:1, Ssl:1>>,
+    <<Prots:32/big>> = encode_bit_flags(sets:from_list(Protocols), ?cc_prot_flags),
     Prots.
 
 -spec decode_protocol_flags(integer()) -> [atom()].
 decode_protocol_flags(Protocols) ->
-    <<_:28, CredSSPEarly:1, _:1, CredSSP:1, Ssl:1>> = <<Protocols:32/big>>,
-    Prots = if CredSSPEarly == 1 -> [credssp_early]; true -> [] end ++
-            if CredSSP == 1 -> [credssp]; true -> [] end ++
-            if Ssl == 1 -> [ssl]; true -> [] end,
-    Prots.
+    FlagSet = decode_bit_flags(<<Protocols:32/big>>, ?cc_prot_flags),
+    sets:to_list(FlagSet).
 
 -spec decode_sec_flags(integer()) -> {Type :: atom(), Flags :: [atom()]}.
 decode_sec_flags(Flags) ->
-    <<FlagsHiValid:1, Heartbeat:1, AutodetectRsp:1, AutodetectReq:1, SaltedMAC:1, RedirectionPkt:1, EncryptLicense:1, _:1, LicensePkt:1, InfoPkt:1, IgnoreSeqno:1, ResetSeqno:1, Encrypt:1, MultitransRsp:1, MultitransReq:1, SecExchPkt:1>> = <<Flags:16/big>>,
-
-    Type = if
-        AutodetectRsp == 1 -> autodetect_rsp;
-        AutodetectReq == 1 -> autodetect_req;
-        RedirectionPkt == 1 -> redirection;
-        LicensePkt == 1 -> license;
-        InfoPkt == 1 -> info;
-        MultitransRsp == 1 -> multitrans_rsp;
-        MultitransReq == 1 -> multitrans_req;
-        SecExchPkt == 1 -> security;
-        Heartbeat == 1 -> heartbeat;
-        true -> unknown
+    FlagSet = decode_bit_flags(<<Flags:16/big>>, ?sec_flags),
+    TypesSet = sets:from_list(?sec_types),
+    TypeSet = sets:intersection(FlagSet, TypesSet),
+    Type = case sets:to_list(TypeSet) of
+        [T] -> T;
+        [] -> unknown
     end,
-
-    FlagAtoms = if FlagsHiValid == 1 -> [flagshi_valid]; true -> [] end ++
-                if SaltedMAC == 1 -> [salted_mac]; true -> [] end ++
-                if EncryptLicense == 1 -> [encrypt_license]; true -> [] end ++
-                if IgnoreSeqno == 1 -> [ignore_seqno]; true -> [] end ++
-                if ResetSeqno == 1 -> [reset_seqno]; true -> [] end ++
-                if Encrypt == 1 -> [encrypt]; true -> [] end,
-    {Type, FlagAtoms}.
+    {Type, sets:to_list(sets:subtract(FlagSet, TypesSet))}.
 
 -spec encode_sec_flags({Type :: atom(), Flags :: [atom()]}) -> integer().
 encode_sec_flags({Type, Flags}) ->
-    {AutodetectRsp, AutodetectReq, RedirectionPkt, LicensePkt, InfoPkt, MultitransRsp, MultitransReq, SecExchPkt, Heartbeat} = case Type of
-        autodetect_rsp ->   {1, 0, 0, 0, 0, 0, 0, 0, 0};
-        autodetect_req ->   {0, 1, 0, 0, 0, 0, 0, 0, 0};
-        redirection ->      {0, 0, 1, 0, 0, 0, 0, 0, 0};
-        license ->          {0, 0, 0, 1, 0, 0, 0, 0, 0};
-        info ->             {0, 0, 0, 0, 1, 0, 0, 0, 0};
-        multitrans_rsp ->   {0, 0, 0, 0, 0, 1, 0, 0, 0};
-        multitrans_req ->   {0, 0, 0, 0, 0, 0, 1, 0, 0};
-        security ->         {0, 0, 0, 0, 0, 0, 0, 1, 0};
-        heartbeat ->        {0, 0, 0, 0, 0, 0, 0, 0, 1};
-        _ ->                {0, 0, 0, 0, 0, 0, 0, 0, 0}
-    end,
-
-    FlagsHiValid = case lists:member(flagshi_valid, Flags) of true -> 1; _ -> 0 end,
-    SaltedMAC = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
-    EncryptLicense = case lists:member(encrypt_license, Flags) of true -> 1; _ -> 0 end,
-    IgnoreSeqno = case lists:member(ignore_seqno, Flags) of true -> 1; _ -> 0 end,
-    ResetSeqno = case lists:member(reset_seqno, Flags) of true -> 1; _ -> 0 end,
-    Encrypt = case lists:member(encrypt, Flags) of true -> 1; _ -> 0 end,
-
-    <<Out:16/big>> = <<FlagsHiValid:1, Heartbeat:1, AutodetectRsp:1, AutodetectReq:1, SaltedMAC:1, RedirectionPkt:1, EncryptLicense:1, 0:1, LicensePkt:1, InfoPkt:1, IgnoreSeqno:1, ResetSeqno:1, Encrypt:1, MultitransRsp:1, MultitransReq:1, SecExchPkt:1>>,
+    FlagSet = sets:from_list([Type | Flags]),
+    <<Out:16/big>> = encode_bit_flags(FlagSet, ?sec_flags),
     Out.
 
 encode_sharecontrol(Pdu) ->
@@ -277,69 +277,24 @@ decode_tscaps(N, Bin) ->
 
 decode_tscap(16#1, Bin) ->
     <<MajorNum:16/little, MinorNum:16/little, _:16, _:16, _:16, ExtraFlags:16/little, _:16, _:16, _:16, RefreshRect:8, SuppressOutput:8>> = Bin,
-    <<_:5, ShortBitmapHdr:1, _:5, SaltedMac:1, AutoRecon:1, LongCreds:1, _:1, FastPath:1>> = <<ExtraFlags:16/big>>,
 
     Major = case MajorNum of 1 -> windows; 2 -> os2; 3 -> macintosh; 4 -> unix; _ -> other end,
     Minor = case MinorNum of 1 -> win31x; 2 -> win95; 3 -> winnt; 4 -> os2v21; 5 -> powerpc; 6 -> macintosh; 7 -> native_x11; 8 -> pseudo_x11; _ -> other end,
 
-    Flags = if RefreshRect == 1 -> [refresh_rect]; true -> [] end ++
-            if SuppressOutput == 1 -> [suppress_output]; true -> [] end ++
-            if ShortBitmapHdr == 1 -> [short_bitmap_hdr]; true -> [] end ++
-            if SaltedMac == 1 -> [salted_mac]; true -> [] end ++
-            if AutoRecon == 1 -> [autoreconnect]; true -> [] end ++
-            if LongCreds == 1 -> [long_creds]; true -> [] end ++
-            if FastPath == 1 -> [fastpath]; true -> [] end,
+    FlagSet = decode_bit_flags(<<ExtraFlags:16/big, RefreshRect:1, SuppressOutput:1>>, ?ts_cap_general_flags),
 
-    #ts_cap_general{os = [Major, Minor], flags = Flags};
+    #ts_cap_general{os = [Major, Minor], flags = sets:to_list(FlagSet)};
 
 decode_tscap(16#2, Bin) ->
     <<Bpp:16/little, _:16, _:16, _:16, Width:16/little, Height:16/little, _:16, Resize:16/little, Compression:16/little, _:8, DrawingFlags:8, Multirect:16/little, _:16>> = Bin,
-    <<_:4, SkipAlpha:1, Subsampling:1, DynamicBpp:1, _:1>> = <<DrawingFlags:8>>,
-
-    Flags = if Resize == 1 -> [resize]; true -> [] end ++
-            if Compression == 1 -> [compression]; true -> [] end ++
-            if DynamicBpp == 1 -> [dynamic_bpp]; true -> [] end ++
-            if Subsampling == 1 -> [subsampling]; true -> [] end ++
-            if SkipAlpha == 1 -> [skip_alpha]; true -> [] end ++
-            if Multirect == 1 -> [multirect]; true -> [] end,
-
-    #ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height};
+    FlagSet = decode_bit_flags(<<DrawingFlags:8, Resize:1, Compression:1, Multirect:1>>, ?ts_cap_bitmap_flags),
+    #ts_cap_bitmap{bpp = Bpp, flags = sets:to_list(FlagSet), width = Width, height = Height};
 
 decode_tscap(16#3, Bin) ->
     <<_TermDesc:16/unit:8, _:32, _:16, _:16, _:16, _:16, _:16, BaseFlags:16/little, OrderSupport:32/binary, _/binary>> = Bin,
-
-    <<_:8, ExtraFlags:1, SolidPatternBrushOnly:1, ColorIndex:1, _:1, ZeroBoundsDeltas:1, _:1, NegotiateOrders:1, _:1>> = <<BaseFlags:16/big>>,
-
-    <<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, _, _, DrawNineGrid, LineTo, MultiDrawNineGrid, _, SaveBitmap, _, _, _, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, _, FastGlyph, EllipseSC, EllipseCB, Index, _, _, _, _>> = OrderSupport,
-
-    Flags = if SolidPatternBrushOnly == 1 -> [solid_pattern_brush_only]; true -> [] end ++
-            if ColorIndex == 1 -> [colorindex]; true -> [] end ++
-            if ZeroBoundsDeltas == 1 -> ['zeroboundsdeltas']; true -> [] end ++
-            if NegotiateOrders == 1 -> [negotiate]; true -> [] end,
-
-    Orders = if DstBlt == 1 -> [dstblt]; true -> [] end ++
-             if PatBlt == 1 -> [patblt]; true -> [] end ++
-             if ScrBlt == 1 -> [scrblt]; true -> [] end ++
-             if MemBlt == 1 -> [memblt]; true -> [] end ++
-             if Mem3Blt == 1 -> [mem3blt]; true -> [] end ++
-             if DrawNineGrid == 1 -> [drawninegrid]; true -> [] end ++
-             if LineTo == 1 -> [lineto]; true -> [] end ++
-             if MultiDrawNineGrid == 1 -> [multidrawninegrid]; true -> [] end ++
-             if SaveBitmap == 1 -> [savebitmap]; true -> [] end ++
-             if MultiDstBlt == 1 -> [multidstblt]; true -> [] end ++
-             if MultiPatBlt == 1 -> [multipatblt]; true -> [] end ++
-             if MultiScrBlt == 1 -> [multiscrblt]; true -> [] end ++
-             if MultiOpaqueRect == 1 -> [multiopaquerect]; true -> [] end ++
-             if FastIndex == 1 -> [fastindex]; true -> [] end ++
-             if PolygonSC == 1 -> [polygonsc]; true -> [] end ++
-             if PolygonCB == 1 -> [polygoncb]; true -> [] end ++
-             if Polyline == 1 -> [polyline]; true -> [] end ++
-             if FastGlyph == 1 -> [fastglyph]; true -> [] end ++
-             if EllipseSC == 1 -> [ellipsesc]; true -> [] end ++
-             if EllipseCB == 1 -> [ellipsecb]; true -> [] end ++
-             if Index == 1 -> [index]; true -> [] end,
-
-    #ts_cap_order{flags = Flags, orders = Orders};
+    FlagSet = decode_bit_flags(<<BaseFlags:16/big>>, ?ts_cap_order_flags),
+    OrderSet = decode_bit_flags(OrderSupport, ?ts_cap_orders),
+    #ts_cap_order{flags = sets:to_list(FlagSet), orders = sets:to_list(OrderSet)};
 
 decode_tscap(16#5, Bin) ->
     <<Flags:16/little, RemoteDetach:16/little, Control:16/little, Detach:16/little>> = Bin,
@@ -369,15 +324,8 @@ decode_tscap(16#9, Bin) ->
 
 decode_tscap(16#d, Bin) ->
     <<InputFlags:16/little, _:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin:64/binary>> = Bin,
-    <<_:10, FastPath2:1, Unicode:1, FastPath:1, MouseX:1, _:1, Scancodes:1>> = <<InputFlags:16/big>>,
-
-    Flags = if Scancodes == 1 -> [scancodes]; true -> [] end ++
-            if MouseX == 1 -> [mousex]; true -> [] end ++
-            if FastPath == 1 -> [fastpath]; true -> [] end ++
-            if Unicode == 1 -> [unicode]; true -> [] end ++
-            if FastPath2 == 1 -> [fastpath2]; true -> [] end,
-
-    #ts_cap_input{flags = Flags, ime = ImeBin, kbd_layout = Layout, kbd_type = Type, kbd_sub_type = SubType, kbd_fun_keys = FunKeys};
+    FlagSet = decode_bit_flags(<<InputFlags:16/big>>, ?ts_cap_input_flags),
+    #ts_cap_input{flags = sets:to_list(FlagSet), ime = ImeBin, kbd_layout = Layout, kbd_type = Type, kbd_sub_type = SubType, kbd_fun_keys = FunKeys};
 
 decode_tscap(16#e, Bin) ->
     case Bin of
@@ -507,17 +455,7 @@ decode_tscap(Type, Bin) ->
 encode_tscap(#ts_cap_general{os = [Major,Minor], flags=Flags}) ->
     MajorNum = case Major of windows -> 1; os2 -> 2; macintosh -> 3; unix -> 4; _ -> 0 end,
     MinorNum = case Minor of win31x -> 1; win95 -> 2; winnt -> 3; os2v21 -> 4; powerpc -> 5; macintosh -> 6; native_x11 -> 7; pseudo_x11 -> 8; _ -> 0 end,
-
-    FastPath = case lists:member(fastpath, Flags) of true -> 1; _ -> 0 end,
-    ShortBitmapHdr = case lists:member(short_bitmap_hdr, Flags) of true -> 1; _ -> 0 end,
-    LongCreds = case lists:member(long_creds, Flags) of true -> 1; _ -> 0 end,
-    AutoRecon = case lists:member(autoreconnect, Flags) of true -> 1; _ -> 0 end,
-    SaltedMac = case lists:member(salted_mac, Flags) of true -> 1; _ -> 0 end,
-
-    RefreshRect = case lists:member(refresh_rect, Flags) of true -> 1; _ -> 0 end,
-    SuppressOutput = case lists:member(suppress_output, Flags) of true -> 1; _ -> 0 end,
-
-    <<ExtraFlags:16/big>> = <<0:5, ShortBitmapHdr:1, 0:5, SaltedMac:1, AutoRecon:1, LongCreds:1, 0:1, FastPath:1>>,
+    <<ExtraFlags:16/big, RefreshRect:1, SuppressOutput:1>> = encode_bit_flags(sets:from_list(Flags), ?ts_cap_general_flags),
     Inner = <<MajorNum:16/little, MinorNum:16/little, 16#200:16/little, 0:16, 0:16, ExtraFlags:16/little, 0:16, 0:16, 0:16, RefreshRect:8, SuppressOutput:8>>,
     encode_tscap({16#01, Inner});
 
@@ -529,52 +467,14 @@ encode_tscap(#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize}) ->
     encode_tscap({16#14, Inner});
 
 encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height}) ->
-    Resize = case lists:member(resize, Flags) of true -> 1; _ -> 0 end,
-    Compression = case lists:member(compression, Flags) of true -> 1; _ -> 0 end,
-    DynamicBpp = case lists:member(dynamic_bpp, Flags) of true -> 1; _ -> 0 end,
-    Subsampling = case lists:member(subsampling, Flags) of true -> 1; _ -> 0 end,
-    SkipAlpha = case lists:member(skip_alpha, Flags) of true -> 1; _ -> 0 end,
-    Multirect = case lists:member(multirect, Flags) of true -> 1; _ -> 0 end,
-
-    <<DrawingFlags:8>> = <<0:4, SkipAlpha:1, Subsampling:1, DynamicBpp:1, 0:1>>,
-
+    <<DrawingFlags:8, Resize:1, Compression:1, Multirect:1>> = encode_bit_flags(sets:from_list(Flags), ?ts_cap_bitmap_flags),
     Inner = <<Bpp:16/little, 1:16/little, 1:16/little, 1:16/little, Width:16/little, Height:16/little, 0:16, Resize:16/little, Compression:16/little, 0:8, DrawingFlags:8, Multirect:16/little, 0:16>>,
     % this is different in the example versus spec
     encode_tscap({16#02, Inner});
 
 encode_tscap(#ts_cap_order{flags = Flags, orders = Orders}) ->
-    DstBlt = case lists:member(dstblt, Orders) of true -> 1; _ -> 0 end,
-    DstBlt = case lists:member(dstblt, Orders) of true -> 1; _ -> 0 end,
-    PatBlt = case lists:member(patblt, Orders) of true -> 1; _ -> 0 end,
-    ScrBlt = case lists:member(scrblt, Orders) of true -> 1; _ -> 0 end,
-    MemBlt = case lists:member(memblt, Orders) of true -> 1; _ -> 0 end,
-    Mem3Blt = case lists:member(mem3blt, Orders) of true -> 1; _ -> 0 end,
-    DrawNineGrid = case lists:member(drawninegrid, Orders) of true -> 1; _ -> 0 end,
-    LineTo = case lists:member(lineto, Orders) of true -> 1; _ -> 0 end,
-    MultiDrawNineGrid = case lists:member(multidrawninegrid, Orders) of true -> 1; _ -> 0 end,
-    SaveBitmap = case lists:member(savebitmap, Orders) of true -> 1; _ -> 0 end,
-    MultiDstBlt = case lists:member(multidstblt, Orders) of true -> 1; _ -> 0 end,
-    MultiPatBlt = case lists:member(multipatblt, Orders) of true -> 1; _ -> 0 end,
-    MultiScrBlt = case lists:member(multiscrblt, Orders) of true -> 1; _ -> 0 end,
-    MultiOpaqueRect = case lists:member(multiopaquerect, Orders) of true -> 1; _ -> 0 end,
-    FastIndex = case lists:member(fastindex, Orders) of true -> 1; _ -> 0 end,
-    PolygonSC = case lists:member(polygonsc, Orders) of true -> 1; _ -> 0 end,
-    PolygonCB = case lists:member(polygoncb, Orders) of true -> 1; _ -> 0 end,
-    Polyline = case lists:member(polyline, Orders) of true -> 1; _ -> 0 end,
-    FastGlyph = case lists:member(fastglyph, Orders) of true -> 1; _ -> 0 end,
-    EllipseSC = case lists:member(ellipsesc, Orders) of true -> 1; _ -> 0 end,
-    EllipseCB = case lists:member(ellipsecb, Orders) of true -> 1; _ -> 0 end,
-    Index = case lists:member(index, Orders) of true -> 1; _ -> 0 end,
-
-    OrderSupport = <<DstBlt, PatBlt, ScrBlt, MemBlt, Mem3Blt, 0, 0, DrawNineGrid, LineTo, MultiDrawNineGrid, 0, SaveBitmap, 0, 0, 0, MultiDstBlt, MultiPatBlt, MultiScrBlt, MultiOpaqueRect, FastIndex, PolygonSC, PolygonCB, Polyline, 0, FastGlyph, EllipseSC, EllipseCB, Index, 0, 0, 0, 0>>,
-
-    SolidPatternBrushOnly = case lists:member(solid_pattern_brush_only, Flags) of true -> 1; _ -> 0 end,
-    ColorIndex = case lists:member(colorindex, Flags) of true -> 1; _ -> 0 end,
-    ZeroBoundsDeltas = case lists:member(zeroboundsdeltas, Flags) of true -> 1; _ -> 0 end,
-    NegotiateOrders = case lists:member(negotiate, Flags) of true -> 1; _ -> 0 end,
-
-    <<BaseFlags:16/big>> = <<0:8, 0:1, SolidPatternBrushOnly:1, ColorIndex:1, 0:1, ZeroBoundsDeltas:1, 0:1, NegotiateOrders:1, 0:1>>,
-
+    OrderSupport = encode_bit_flags(sets:from_list(Orders), ?ts_cap_orders),
+    <<BaseFlags:16/big>> = encode_bit_flags(sets:from_list(Flags), ?ts_cap_order_flags),
     Inner = <<0:16/unit:8, 16#40420f00:32/big, 1:16/little, 20:16/little, 0:16, 1:16/little, 0:16, BaseFlags:16/little, OrderSupport/binary, 16#06a1:16/big, 0:16, 16#40420f00:32/big, 230400:32/little, 1:16/little, 0:16, 0:16, 0:16>>,
     encode_tscap({16#03, Inner});
 
@@ -607,15 +507,8 @@ encode_tscap(#ts_cap_pointer{flags = Flags, cache_size = CacheSize}) ->
     encode_tscap({16#08, Inner});
 
 encode_tscap(#ts_cap_input{flags=Flags, kbd_layout=Layout, kbd_type=Type, kbd_sub_type=SubType, kbd_fun_keys=FunKeys, ime=Ime}) ->
-    Scancodes = case lists:member(scancodes, Flags) of true -> 1; _ -> 0 end,
-    MouseX = case lists:member(mousex, Flags) of true -> 1; _ -> 0 end,
-    FastPath = case lists:member(fastpath, Flags) of true -> 1; _ -> 0 end,
-    Unicode = case lists:member(unicode, Flags) of true -> 1; _ -> 0 end,
-    FastPath2 = case lists:member(fastpath2, Flags) of true -> 1; _ -> 0 end,
     ImeBin = zero_pad(Ime, 64),
-
-    <<InputFlags:16/big>> = <<0:10, FastPath2:1, Unicode:1, FastPath:1, MouseX:1, 0:1, Scancodes:1>>,
-
+    <<InputFlags:16/big>> = encode_bit_flags(sets:from_list(Flags), ?ts_cap_input_flags),
     Inner = <<InputFlags:16/little, 0:16, Layout:32/little, Type:32/little, SubType:32/little, FunKeys:32/little, ImeBin/binary>>,
     encode_tscap({16#0d, Inner});
 
@@ -981,12 +874,8 @@ encode_ts_update_bitmaps(#ts_update_bitmaps{bitmaps = Bitmaps}) ->
 
 decode_ts_inpevt(16#0000, Bin) ->
     <<_:16, Flags:16/little, Rest/binary>> = Bin,
-    <<_:12, KanaLock:1, CapsLock:1, NumLock:1, ScrollLock:1>> = <<Flags:16/big>>,
-    FlagAtoms = if KanaLock == 1 -> [kanalock]; true -> [] end ++
-                if CapsLock == 1 -> [capslock]; true -> [] end ++
-                if NumLock == 1 -> [numlock]; true -> [] end ++
-                if ScrollLock == 1 -> [scrolllock]; true -> [] end,
-    {#ts_inpevt_sync{flags=FlagAtoms}, Rest};
+    FlagSet = decode_bit_flags(<<Flags:16/big>>, ?ts_inpevt_sync_flags),
+    {#ts_inpevt_sync{flags=sets:to_list(FlagSet)}, Rest};
 
 decode_ts_inpevt(16#0004, Bin) ->
     <<Flags:16/little, KeyCode:16/little, _:16, Rest/binary>> = Bin,
@@ -1060,7 +949,8 @@ encode_basic(Rec) ->
 decode_basic(Bin) ->
     case Bin of
         <<Flags:16/little, _:16, Rest/binary>> ->
-            case decode_sec_flags(Flags) of
+            case (catch decode_sec_flags(Flags)) of
+                {'EXIT', _} -> {error, badpacket};
                 {security, Fl} -> decode_ts_security(Fl, Rest);
                 {info, Fl} -> decode_ts_info(Fl, Rest);
                 {heartbeat, Fl} -> decode_ts_heartbeat(Fl, Rest);
@@ -1165,16 +1055,8 @@ decode_ts_ext_info(Bin0, SoFar0 = #ts_info{}) ->
         fun(Bin, SoFar) ->
             case Bin of
                 <<PerfFlags:32/little, Rest/binary>> ->
-                    <<_:23, EnableDesktopComp:1, EnableFontSmoothing:1, DisableCursorSettings:1, DisableCursorShadow:1, _:1, DisableThemes:1, DisableMenuAnim:1, DisableFullWinDrag:1, DisableWallpaper:1>> = <<PerfFlags:32/big>>,
-                    FlagAtoms = if DisableWallpaper == 1 -> [no_wallpaper]; true -> [] end ++
-                                if DisableFullWinDrag == 1 -> [no_full_win_drag]; true -> [] end ++
-                                if DisableMenuAnim == 1 -> [no_menu_anim]; true -> [] end ++
-                                if DisableThemes == 1 -> [no_themes]; true -> [] end ++
-                                if DisableCursorShadow == 1 -> [no_cursor_shadow]; true -> [] end ++
-                                if DisableCursorSettings == 1 -> [no_cursor_settings]; true -> [] end ++
-                                if EnableFontSmoothing == 1 -> [font_smoothing]; true -> [] end ++
-                                if EnableDesktopComp == 1 -> [composition]; true -> [] end,
-                    {continue, [Rest, SoFar#ts_info{perf_flags = FlagAtoms}]};
+                    FlagSet = decode_bit_flags(<<PerfFlags:32/big>>, ?ts_info_perf_flags),
+                    {continue, [Rest, SoFar#ts_info{perf_flags = sets:to_list(FlagSet)}]};
                 _ ->
                     {return, {ok, SoFar}}
             end
@@ -1217,26 +1099,9 @@ decode_ts_info(Fl, Bin) ->
     case Bin of
         <<CodePage:32/little, Flags:32/little, RawDomainLen:16/little, RawUserNameLen:16/little, RawPasswordLen:16/little, RawShellLen:16/little, RawWorkDirLen:16/little, Rest/binary>> ->
 
-            <<_:6, RailHD:1, _:1, _:1, VideoDisable:1, AudioCapture:1, SavedCreds:1, NoAudio:1, SmartcardPin:1, MouseWheel:1, LogonErrors:1, Rail:1, ForceEncrypt:1, RemoteConsoleAudio:1, CompLevel:4, WindowsKey:1, Compression:1, LogonNotify:1, MaximizeShell:1, Unicode:1, AutoLogon:1, _:1, DisableSalute:1, Mouse:1>> = <<Flags:32/big>>,
-            FlagAtoms = if VideoDisable == 1 -> [novideo]; true -> [] end ++
-                        if AudioCapture == 1 -> [audio_in]; true -> [] end ++
-                        if SavedCreds == 1 -> [saved_creds]; true -> [] end ++
-                        if NoAudio == 1 -> [noaudio]; true -> [] end ++
-                        if SmartcardPin == 1 -> [smartcard_pin]; true -> [] end ++
-                        if MouseWheel == 1 -> [mouse_wheel]; true -> [] end ++
-                        if LogonErrors == 1 -> [logon_errors]; true -> [] end ++
-                        if Rail == 1 -> [rail]; true -> [] end ++
-                        if ForceEncrypt == 1 -> [force_encrypt]; true -> [] end ++
-                        if RemoteConsoleAudio == 1 -> [remote_console_audio]; true -> [] end ++
-                        if WindowsKey == 1 -> [windows_key]; true -> [] end ++
-                        if Compression == 1 -> [compression]; true -> [] end ++
-                        if LogonNotify == 1 -> [logon_notify]; true -> [] end ++
-                        if MaximizeShell == 1 -> [maximize_shell]; true -> [] end ++
-                        if Unicode == 1 -> [unicode]; true -> [] end ++
-                        if AutoLogon == 1 -> [autologon]; true -> [] end ++
-                        if DisableSalute == 1 -> [disable_salute]; true -> [] end ++
-                        if Mouse == 1 -> [mouse]; true -> [] end ++
-                        if RailHD == 1 -> [rail_hd]; true -> [] end,
+            FlagSet = decode_bit_flags(<<Flags:32/big>>, ?ts_info_flags),
+            <<_:19, CompLevel:4, _:9>> = <<Flags:32/big>>,
+
             CompLevelAtom = case CompLevel of
                 16#0 -> '8k';
                 16#1 -> '64k';
@@ -1246,7 +1111,7 @@ decode_ts_info(Fl, Bin) ->
                 _ -> CompLevel
             end,
 
-            NullSize = if Unicode == 1 -> 2; true -> 1 end,
+            NullSize = case sets:is_element(unicode, FlagSet) of true -> 2; false -> 1 end,
             DomainLen = RawDomainLen + NullSize,
             UserNameLen = RawUserNameLen + NullSize,
             PasswordLen = RawPasswordLen + NullSize,
@@ -1255,7 +1120,7 @@ decode_ts_info(Fl, Bin) ->
 
             case Rest of
                 <<Domain:DomainLen/binary, UserName:UserNameLen/binary, Password:PasswordLen/binary, Shell:ShellLen/binary, WorkDir:WorkDirLen/binary, ExtraInfo/binary>> ->
-                    SoFar = #ts_info{secflags = Fl, codepage = CodePage, flags = FlagAtoms, compression = CompLevelAtom, domain = Domain, username = UserName, password = Password, shell = Shell, workdir = WorkDir, extra = ExtraInfo},
+                    SoFar = #ts_info{secflags = Fl, codepage = CodePage, flags = sets:to_list(FlagSet), compression = CompLevelAtom, domain = Domain, username = UserName, password = Password, shell = Shell, workdir = WorkDir, extra = ExtraInfo},
                     case ExtraInfo of
                         <<>> ->
                             {ok, SoFar};
@@ -1291,26 +1156,8 @@ encode_ts_info(#ts_info{codepage = CodePage, flags = FlagAtoms, compression = Co
         I when is_integer(I) -> I
     end,
 
-    VideoDisable = case lists:member(novideo, FlagAtoms) of true -> 1; _ -> 0 end,
-    AudioCapture = case lists:member(audio_in, FlagAtoms) of true -> 1; _ -> 0 end,
-    SavedCreds = case lists:member(saved_creds, FlagAtoms) of true -> 1; _ -> 0 end,
-    NoAudio = case lists:member(noaudio, FlagAtoms) of true -> 1; _ -> 0 end,
-    SmartcardPin = case lists:member(smartcard_pin, FlagAtoms) of true -> 1; _ -> 0 end,
-    MouseWheel = case lists:member(mouse_wheel, FlagAtoms) of true -> 1; _ -> 0 end,
-    LogonErrors = case lists:member(logon_errors, FlagAtoms) of true -> 1; _ -> 0 end,
-    Rail = case lists:member(rail, FlagAtoms) of true -> 1; _ -> 0 end,
-    ForceEncrypt = case lists:member(force_encrypt, FlagAtoms) of true -> 1; _ -> 0 end,
-    RemoteConsoleAudio = case lists:member(remote_console_audio, FlagAtoms) of true -> 1; _ -> 0 end,
-    WindowsKey = case lists:member(windows_key, FlagAtoms) of true -> 1; _ -> 0 end,
-    Compression = case lists:member(compression, FlagAtoms) of true -> 1; _ -> 0 end,
-    LogonNotify = case lists:member(logon_notify, FlagAtoms) of true -> 1; _ -> 0 end,
-    MaximizeShell = case lists:member(maximize_shell, FlagAtoms) of true -> 1; _ -> 0 end,
-    AutoLogon = case lists:member(autologon, FlagAtoms) of true -> 1; _ -> 0 end,
-    DisableSalute = case lists:member(disable_salute, FlagAtoms) of true -> 1; _ -> 0 end,
-    Mouse = case lists:member(mouse, FlagAtoms) of true -> 1; _ -> 0 end,
-    RailHD = case lists:member(rail_hd, FlagAtoms) of true -> 1; _ -> 0 end,
-
-    <<Flags:32/big>> = <<0:6, RailHD:1, 0:1, 0:1, VideoDisable:1, AudioCapture:1, SavedCreds:1, NoAudio:1, SmartcardPin:1, MouseWheel:1, LogonErrors:1, Rail:1, ForceEncrypt:1, RemoteConsoleAudio:1, CompLevel:4, WindowsKey:1, Compression:1, LogonNotify:1, MaximizeShell:1, Unicode:1, AutoLogon:1, 0:1, DisableSalute:1, Mouse:1>>,
+    <<BeforeComp:19/bitstring, _:4, AfterComp:9/bitstring>> = encode_bit_flags(sets:from_list(FlagAtoms), ?ts_info_flags),
+    <<Flags:32/big>> = <<BeforeComp/bitstring, CompLevel:4, AfterComp/bitstring>>,
 
     NullSize = if Unicode == 1 -> 2; true -> 1 end,
     DomainLen = byte_size(Domain) - NullSize,
