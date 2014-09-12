@@ -150,15 +150,15 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
                 #tsud_net{channels = ReqChans} ->
                     {D4, ChansRev} = lists:foldl(fun(Chan, {DD, Cs}) ->
                         case lists:member(init, Chan#tsud_net_channel.flags) of
-                            true ->
+                            _ ->
                                 {C, DD2} = next_channel(DD),
                                 Mcs0 = DD2#data.mcs,
                                 Mcs1 = Mcs0#mcs_state{
                                     chans = [{C, Chan} | Mcs0#mcs_state.chans]},
                                 DD3 = DD2#data{mcs = Mcs1},
-                                {DD3, [C | Cs]};
-                            _ ->
-                                {DD, [0 | Cs]}
+                                {DD3, [C | Cs]}%;
+                            %_ ->
+                            %    {DD, [0 | Cs]}
                         end
                     end, {D3, []}, ReqChans),
                     Chans = lists:reverse(ChansRev),
