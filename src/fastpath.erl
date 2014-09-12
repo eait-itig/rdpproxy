@@ -98,7 +98,7 @@ decode_input(Binary) ->
 decode_output(Binary) ->
     decode(Binary, fun decode_out_updates/1).
 
--define(FRAGMENT_SIZE, 1400).
+-define(FRAGMENT_SIZE, 4096).
 
 encode_update(#ts_update_orders{orders = Orders}) ->
     Count = length(Orders),

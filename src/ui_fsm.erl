@@ -49,12 +49,14 @@ slice_bitmap_x(I = #cairo_image{}, [FromX, ToX | RestX], [FromY, ToY | RestY]) -
     ]),
     [{FromX, FromY, Image1} | slice_bitmap_x(I, [ToX | RestX], [FromY, ToY | RestY])].
 
+-define(BITMAP_SLICE_TGT, (41000 div 4)).
+
 divide_bitmap(I = #cairo_image{}) ->
     divide_bitmap(I, {0,0}).
 divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
-        when (W * H > 10000) ->
-    XInt = lists:max([4, 4 * (round(math:sqrt(W / H * 10000)) div 4)]),
-    YInt = lists:max([4, 4 * (round(math:sqrt(H / W * 10000)) div 4)]),
+        when (W * H > ?BITMAP_SLICE_TGT) ->
+    XInt = lists:max([4, 4 * (round(math:sqrt(W / H * ?BITMAP_SLICE_TGT)) div 4)]),
+    YInt = lists:max([4, 4 * (round(math:sqrt(H / W * ?BITMAP_SLICE_TGT)) div 4)]),
     XIntervals = lists:seq(0, W-4, XInt) ++ [W],
     YIntervals = lists:seq(0, H-4, YInt) ++ [H],
     Slices = slice_bitmap(I, XIntervals, YIntervals),
