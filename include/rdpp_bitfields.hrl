@@ -24,6 +24,6 @@
 -define(ts_info_flags, [
                 {skip,6}, rail_hd, {skip,2}, no_video, audio_in, saved_creds, no_audio, smartcard_pin,
                 mouse_wheel, logon_errors, rail, force_encrypt, remote_console_audio, {skip,4},
-                windows_key, compression, logon_notify, maximize_shell, unicode, autologoin, skip,
+                windows_key, compression, logon_notify, maximize_shell, unicode, autologon, skip,
                 disable_salute, mouse
             ]).
