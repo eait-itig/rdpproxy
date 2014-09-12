@@ -4,3 +4,5 @@ doc/*.png
 doc/*/*
 ebin
 deps
+priv/*.so
+c_src/*.o
