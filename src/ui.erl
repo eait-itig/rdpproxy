@@ -49,7 +49,9 @@ offset_orders(_O, []) -> [];
 offset_orders(O = {X0, Y0}, [R = #rect{dest = {X, Y}} | Rest]) ->
     [R#rect{dest = {X0 + X, Y0 + Y}} | offset_orders(O, Rest)];
 offset_orders(O = {X0, Y0}, [I = #image{dest = {X, Y}} | Rest]) ->
-    [I#image{dest = {X0 + X, Y0 + Y}} | offset_orders(O, Rest)].
+    [I#image{dest = {X0 + X, Y0 + Y}} | offset_orders(O, Rest)];
+offset_orders(O, [N = #null_order{} | Rest]) ->
+    [N | offset_orders(O, Rest)].
 
 -spec offset_selectors(point(), [selector()]) -> [selector()].
 offset_selectors(_O, []) -> [];
@@ -172,7 +174,12 @@ handle_recurse(W = #widget{dest = D, handler = H, orders = OldOrders, children =
                     Orders = lists:flatmap(fun({K = #widget{dest = KD}, O, _Es}) ->
                         offset_orders(K#widget.dest, O)
                     end, NewKOs),
-                    {W3, Orders, Evts ++ MoreEvts};
+                    case Orders of
+                        [#null_order{} | _] ->
+                            {W3, collect_orders(W3), Evts ++ MoreEvts};
+                        _ ->
+                            {W3, Orders, Evts ++ MoreEvts}
+                    end;
                 {ok, W3 = #widget{}, MoreEvts} ->
                     {W3, collect_orders(W3), Evts ++ MoreEvts}
             end
@@ -186,6 +193,13 @@ default_handler({add_child, K}, Wd = #widget{children = Kids}) ->
         _ -> K
     end,
     {ok, Wd#widget{children = Kids ++ [K2]}, []};
+default_handler({add_child, {before, Sel}, K}, Wd = #widget{children = Kids}) ->
+    K2 = case K#widget.id of
+        undefined -> K#widget{id = make_ref()};
+        _ -> K
+    end,
+    {BeforeNew, AfterNew} = lists:splitwith(fun(Kid) -> not selector_matches(Kid, Sel) end, Kids),
+    {ok, Wd#widget{children = BeforeNew ++ [K2 | AfterNew]}, []};
 default_handler({remove_child, Sel}, Wd = #widget{children = Kids}) ->
     {_Deleted, Kept} = lists:partition(fun(K) ->
         selector_matches(K, Sel)
@@ -277,17 +291,20 @@ hlayout_handler(init, Wd = #widget{}) ->
 hlayout_handler({set_margin, Margin}, Wd = #widget{state = S, size = Sz, children = Kids}) ->
     S2 = S#hlayout_state{margin = Margin},
     NewKids = hlayout_do_layout(Kids, Sz, S2),
-    {ok, Wd#widget{children = NewKids, state = S2}, []};
+    {ok, Wd#widget{children = NewKids, orders = [#null_order{}], state = S2}, []};
 hlayout_handler({set_valign, VAlign}, Wd = #widget{state = S, size = Sz, children = Kids}) ->
     S2 = S#hlayout_state{valign = VAlign},
     NewKids = hlayout_do_layout(Kids, Sz, S2),
-    {ok, Wd#widget{children = NewKids, state = S2}, []};
+    {ok, Wd#widget{children = NewKids, orders = [#null_order{}], state = S2}, []};
 hlayout_handler({children_updated, _OldKids}, Wd = #widget{state = S, size = Sz, children = Kids}) ->
     NewKids = hlayout_do_layout(Kids, Sz, S),
-    {ok, Wd#widget{children = NewKids, state = S}, []};
+    case NewKids of
+        Kids -> {ok, Wd, []};
+        _ -> {ok, Wd#widget{children = NewKids, orders = [#null_order{}]}, []}
+    end;
 hlayout_handler({resize, NewSize}, Wd = #widget{state = S, children = Kids}) ->
     NewKids = hlayout_do_layout(Kids, NewSize, S),
-    {ok, Wd#widget{children = NewKids, state = S, size = NewSize}, []};
+    {ok, Wd#widget{children = NewKids, state = S, size = NewSize, orders = [#null_order{}]}, []};
 hlayout_handler(Event, Wd) ->
     default_handler(Event, Wd).
 
@@ -313,17 +330,20 @@ vlayout_handler(init, Wd = #widget{}) ->
 vlayout_handler({set_margin, Margin}, Wd = #widget{state = S, size = Sz, children = Kids}) ->
     S2 = S#vlayout_state{margin = Margin},
     NewKids = vlayout_do_layout(Kids, Sz, S2),
-    {ok, Wd#widget{children = NewKids, state = S2}, []};
+    {ok, Wd#widget{children = NewKids, orders = [#null_order{}], state = S2}, []};
 vlayout_handler({set_halign, HAlign}, Wd = #widget{state = S, size = Sz, children = Kids}) ->
     S2 = S#vlayout_state{halign = HAlign},
     NewKids = vlayout_do_layout(Kids, Sz, S2),
-    {ok, Wd#widget{children = NewKids, state = S2}, []};
+    {ok, Wd#widget{children = NewKids, orders = [#null_order{}], state = S2}, []};
 vlayout_handler({children_updated, _OldKids}, Wd = #widget{state = S, size = Sz, children = Kids}) ->
     NewKids = vlayout_do_layout(Kids, Sz, S),
-    {ok, Wd#widget{children = NewKids, state = S}, []};
+    case NewKids of
+        Kids -> {ok, Wd, []};
+        _ -> {ok, Wd#widget{children = NewKids, orders = [#null_order{}]}, []}
+    end;
 vlayout_handler({resize, NewSize}, Wd = #widget{state = S, children = Kids}) ->
     NewKids = vlayout_do_layout(Kids, NewSize, S),
-    {ok, Wd#widget{children = NewKids, state = S, size = NewSize}, []};
+    {ok, Wd#widget{children = NewKids, state = S, size = NewSize, orders = [#null_order{}]}, []};
 vlayout_handler(Event, Wd) ->
     default_handler(Event, Wd).
 
@@ -494,6 +514,11 @@ textinput_handler({init, Placeholder}, Wd = #widget{}) ->
 textinput_handler({init, Placeholder, Mask}, Wd = #widget{}) ->
     textinput_handler(redraw_base,
         Wd#widget{tags = [focusable], state = #textinput_state{placeholder = Placeholder, mask = Mask}});
+textinput_handler({set_text, Text}, Wd = #widget{state = S}) ->
+    #textinput_state{mask = M} = S,
+    Xs = textinput_calc_xs(<<>>, Text, Wd#widget.size, M),
+    S2 = S#textinput_state{text = Text, cursor = byte_size(Text), xs = [0.0 | Xs]},
+    textinput_handler(redraw_text, Wd#widget{state = S2});
 textinput_handler(#ts_inpevt_key{code = shift, action = down}, Wd = #widget{tags = T}) ->
     case lists:member(shift_held, T) of
         true -> {ok, Wd, []};

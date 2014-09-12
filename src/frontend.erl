@@ -27,7 +27,7 @@ start_link(Sock, Sup) ->
 
 -record(x224_state, {us=none, them=none}).
 -record(mcs_state, {us=none, them=none, iochan=none, msgchan=none, chans=[]}).
--record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session}).
+-record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session, client_info}).
 
 send_dpdu(SslSock, McsPkt) ->
     {ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -299,7 +299,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
             error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = DaPkt}),
 
-            {next_state, rdp_capex, Data#data{shareid = ShareId}};
+            {next_state, rdp_capex, Data#data{shareid = ShareId, client_info = InfoPkt}};
         {ok, RdpPkt} ->
             error_logger:info_report(["rdp packet: ", rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_clientinfo, Data};
@@ -363,6 +363,22 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
 run_ui(get_canvas, From, D = #data{caps = Caps}) ->
     #ts_cap_bitmap{bpp = Bpp, width = W, height = H} = lists:keyfind(ts_cap_bitmap, 1, Caps),
     gen_fsm:reply(From, {W, H, Bpp}),
+    {next_state, run_ui, D};
+
+run_ui(get_autologon, From, D = #data{client_info = TsInfo}) ->
+    #ts_info{flags = Flags, username = U0, domain = Do0, password = P0} = TsInfo,
+    Unicode = lists:member(unicode, Flags),
+    NullLen = if Unicode -> 2; not Unicode -> 1 end,
+    U1 = binary:part(U0, {0, byte_size(U0) - NullLen}),
+    Do1 = binary:part(Do0, {0, byte_size(Do0) - NullLen}),
+    P1 = binary:part(P0, {0, byte_size(P0) - NullLen}),
+    U2 = if Unicode -> unicode:characters_to_binary(U1, {utf16,little}, utf8); not Unicode -> U1 end,
+    Do2 = if Unicode -> unicode:characters_to_binary(Do1, {utf16,little}, utf8); not Unicode -> Do1 end,
+    P2 = if Unicode -> unicode:characters_to_binary(P1, {utf16,little}, utf8); not Unicode -> P1 end,
+    case lists:member(autologon, Flags) of
+        true -> gen_fsm:reply(From, {true, U2, Do2, P2});
+        false -> gen_fsm:reply(From, {false, U2, Do2, P2})
+    end,
     {next_state, run_ui, D}.
 
 run_ui({subscribe, UiFsm}, D = #data{uis = Uis}) ->

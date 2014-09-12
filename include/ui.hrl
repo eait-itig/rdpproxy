@@ -12,7 +12,8 @@
 
 -record(rect, {dest = {0.0, 0.0} :: point(), size :: size(), color :: color()}).
 -record(image, {dest = {0.0, 0.0} :: point(), image :: cairerl:image()}).
--type order() :: #rect{} | #image{}.
+-record(null_order, {ref = make_ref()}).
+-type order() :: #rect{} | #image{} | #null_order{}.
 
 -record(widget, {id :: term(),
 				 tags = [] :: [atom()],

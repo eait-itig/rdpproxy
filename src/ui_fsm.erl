@@ -79,7 +79,9 @@ orders_to_updates(L = [#rect{} | _]) ->
 orders_to_updates([#image{dest = {X,Y}, image = Im} | Rest]) ->
     [#ts_update_bitmaps{
         bitmaps = divide_bitmap(Im, {round(X), round(Y)})
-    } | orders_to_updates(Rest)].
+    } | orders_to_updates(Rest)];
+orders_to_updates([#null_order{} | Rest]) ->
+    orders_to_updates(Rest).
 
 send_orders(F, Orders) ->
     lists:foreach(fun(U) ->
@@ -155,7 +157,21 @@ startup(timeout, S = #state{frontend = F}) ->
     ],
     {Root3, Orders, []} = ui:handle_events(Root2, Events2),
     send_orders(F, Orders),
-    {next_state, login, S#state{w = W, h = H, bpp = Bpp, root = Root3}}.
+    {Autologon, U, D, P} = gen_fsm:sync_send_event(F, get_autologon),
+    Events3 = [
+        { [{id, userinp}], {set_text, U} },
+        { [{id, passinp}], {set_text, P} }
+    ] ++ if (byte_size(U) > 0) ->
+        [ { [{id, passinp}], focus } ];
+    true -> []
+    end,
+    {Root4, Orders2, []} = ui:handle_events(Root3, Events3),
+    send_orders(F, Orders2),
+    case Autologon of
+        true -> ok; %gen_fsm:send_event(self(), check_creds);
+        false -> ok
+    end,
+    {next_state, login, S#state{w = W, h = H, bpp = Bpp, root = Root4}}.
 
 login({input, F, Evt}, S = #state{frontend = F, root = Root}) ->
     case Evt of
@@ -189,19 +205,41 @@ login(check_creds, S = #state{frontend = F, root = Root}) ->
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
     UserDomain = ui:textinput_get_text(UsernameTxt),
     {Domain, Username} = case binary:split(UserDomain, <<$\\>>) of
-        [D, U] -> {D, U};
+        [D = <<"LABS">>, U] -> {D, U};
+        [_D, U] -> {<<"KRB5.UQ.EDU.AU">>, U};
         [U] -> {<<"KRB5.UQ.EDU.AU">>, U}
     end,
     [PasswordTxt] = ui:select(Root, [{id, passinp}]),
     Password = ui:textinput_get_text(PasswordTxt),
-    {ok, Cookie} = session_mgr:store(#session{
-        host = "gs208-1967.labs.eait.uq.edu.au", port = 3389,
-        user = Username, domain = Domain, password = Password
-        }),
-    gen_fsm:send_event(F, {redirect,
-        Cookie, <<"uqawil16-mbp.eait.uq.edu.au">>,
-        Username, Domain, Password}),
-    {stop, normal, S}.
+    case {Username, Password} of
+        {<<>>, _} ->
+            login(invalid_login, S);
+        {_, <<>>} ->
+            login(invalid_login, S);
+        _ ->
+            {ok, Cookie} = session_mgr:store(#session{
+                host = "gs208-1966.labs.eait.uq.edu.au", port = 3389,
+                user = Username, domain = Domain, password = Password
+                }),
+            gen_fsm:send_event(F, {redirect,
+                Cookie, <<"uqawil16-mbp.eait.uq.edu.au">>,
+                Username, Domain, Password}),
+            {stop, normal, S}
+    end;
+
+login(invalid_login, S = #state{}) ->
+    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    LightRed = {1.0, 0.8, 0.8},
+    Events = [
+        { [{id, loginlyt}], {remove_child, {id, badlbl}} },
+        { [{id, loginlyt}], {add_child, {before, {id, loginbtn}},
+            #widget{id = badlbl, handler = label_handler, size = {400.0, 15.0}}
+            } },
+        { [{id, badlbl}],   {init, center, <<"Username and password are both required">>} },
+        { [{id, badlbl}],   {set_fgcolor, LightRed} },
+        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+    ],
+    handle_root_events(login, S, Events).
 
 handle_info({'DOWN', MRef, process, _, _}, State, S = #state{mref = MRef}) ->
     {stop, normal, S}.
