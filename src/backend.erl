@@ -15,7 +15,7 @@
 -include("rdpp.hrl").
 
 -export([start_link/4]).
--export([initiation/2, proxy/2]).
+-export([initiation/2, proxy_intercept/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number(), OrigCr :: tuple()) -> {ok, pid()}.
@@ -68,11 +68,41 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
 
         gen_fsm:send_event(Frontend, {backend_ready, self(), SslSock, Pkt}),
 
-        {next_state, proxy, Data#data{sslsock = SslSock, themref = ThemRef}};
+        {next_state, proxy_intercept, Data#data{sslsock = SslSock, themref = ThemRef}};
     true ->
         gen_tcp:close(Sock),
         {stop, no_ssl, Data}
     end.
+
+proxy_intercept({data, Bin}, #data{sslsock = SslSock, frontend = Frontend, origcr = OrigCr} = Data) ->
+    case rdpp:decode_connseq(Bin) of
+        {ok, {mcs_pdu, Cr = #mcs_cr{data = TsudsBin0}}, Rem} ->
+            {ok, Tsuds0} = tsud:decode(TsudsBin0),
+            TsudSvrCore0 = lists:keyfind(tsud_svr_core, 1, Tsuds0),
+            TsudSvrCore1 = TsudSvrCore0#tsud_svr_core{requested = OrigCr#x224_cr.rdp_protocols},
+            io:format("rewriting tsud: ~s\n", [tsud:pretty_print(TsudSvrCore1)]),
+            Tsuds1 = lists:keyreplace(tsud_svr_core, 1, Tsuds0, TsudSvrCore1),
+            TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
+                {ok, TsudBin} = tsud:encode(Tsud),
+                <<SoFar/binary, TsudBin/binary>>
+            end, <<>>, Tsuds1),
+            {ok, OutCrData} = mcsgcc:encode_cr(Cr#mcs_cr{data = TsudsBin1}),
+            {ok, OutDtData} = x224:encode(#x224_dt{data = OutCrData}),
+            {ok, OutPkt} = tpkt:encode(OutDtData),
+            gen_fsm:send_event(Frontend, {backend_data, self(), <<OutPkt/binary, Rem/binary>>}),
+            {next_state, proxy, Data};
+        _ ->
+            gen_fsm:send_event(Frontend, {backend_data, self(), Bin}),
+            {next_state, proxy_intercept, Data}
+    end;
+
+proxy_intercept({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = SslSock, frontend = Frontend} = Data) ->
+    if SslSock =:= none ->
+        ok = gen_tcp:send(Sock, Bin);
+    true ->
+        ok = ssl:send(SslSock, Bin)
+    end,
+    {next_state, proxy_intercept, Data}.
 
 proxy({data, Bin}, #data{sslsock = SslSock, frontend = Frontend} = Data) ->
     gen_fsm:send_event(Frontend, {backend_data, self(), Bin}),
@@ -140,7 +170,7 @@ debug_print_data(Bin) ->
 
 %% @private
 handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Data) ->
-    debug_print_data(Bin),
+    %debug_print_data(Bin),
     case rdpp:decode_connseq(Bin) of
         {ok, {x224_pdu, Pdu}, Rem} ->
             case byte_size(Rem) of
@@ -153,26 +183,9 @@ handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Dat
             {next_state, State, Data}
     end;
 
-handle_info({ssl, SslSock, Bin}, State = proxy, #data{sslsock = SslSock, origcr = OrigCr} = Data) ->
-    debug_print_data(Bin),
-    case rdpp:decode_connseq(Bin) of
-        {ok, {mcs_pdu, Cr = #mcs_cr{data = TsudsBin0}}, Rem} ->
-            {ok, Tsuds0} = tsud:decode(TsudsBin0),
-            TsudSvrCore0 = lists:keyfind(tsud_svr_core, 1, Tsuds0),
-            TsudSvrCore1 = TsudSvrCore0#tsud_svr_core{requested = OrigCr#x224_cr.rdp_protocols},
-            io:format("rewriting tsud: ~s\n", [tsud:pretty_print(TsudSvrCore1)]),
-            Tsuds1 = lists:keyreplace(tsud_svr_core, 1, Tsuds0, TsudSvrCore1),
-            TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
-                {ok, TsudBin} = tsud:encode(Tsud),
-                <<SoFar/binary, TsudBin/binary>>
-            end, <<>>, Tsuds1),
-            {ok, OutCrData} = mcsgcc:encode_cr(Cr#mcs_cr{data = TsudsBin1}),
-            {ok, OutDtData} = x224:encode(#x224_dt{data = OutCrData}),
-            {ok, OutPkt} = tpkt:encode(OutDtData),
-            ?MODULE:State({data, <<OutPkt/binary, Rem/binary>>}, Data);
-        _ ->
-            ?MODULE:State({data, Bin}, Data)
-    end;
+handle_info({ssl, SslSock, Bin}, State, #data{sslsock = SslSock} = Data)
+        when (State =:= proxy) orelse (State =:= proxy_intercept) ->
+    ?MODULE:State({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
     handle_info({tcp, Sock, Bin}, State, Data);
 

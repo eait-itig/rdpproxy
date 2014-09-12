@@ -18,7 +18,7 @@
 -include("fastpath.hrl").
 
 -export([start_link/2]).
--export([accept/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, run_ui/2, run_ui/3, proxy/2, wait_proxy/2]).
+-export([accept/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, run_ui/2, run_ui/3, proxy/2, proxy_intercept/2, wait_proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Sock :: term(), Sup :: pid()) -> {ok, pid()}.
@@ -451,7 +451,48 @@ wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, bac
         ssl:send(Backsock, Bin)
         %gen_fsm:send_event(Backend, {frontend_data, self(), Bin})
     end, Queue),
-    {next_state, proxy, Data#data{queue = [], backsock = Backsock, sslsock = SslSock}}.
+    {next_state, proxy_intercept, Data#data{queue = [], backsock = Backsock, sslsock = SslSock}}.
+
+proxy_intercept({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backend = Backend} = Data) ->
+    case rdpp:decode_server(Bin) of
+        {ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
+            case rdpp:decode_basic(RdpData0) of
+                {ok, TsInfo0 = #ts_info{secflags = []}} ->
+                    #data{session = #session{user = User, password = Password, domain = Domain}} = Data,
+                    TsInfo1 = TsInfo0#ts_info{flags = [autologon, unicode | TsInfo0#ts_info.flags]},
+                    Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
+                    TsInfo2 = TsInfo1#ts_info{
+                        domain = if
+                            Unicode -> unicode:characters_to_binary(<<Domain/binary,0>>, latin1, {utf16, little});
+                            true -> <<Domain/binary, 0>> end,
+                        username = if
+                            Unicode -> unicode:characters_to_binary(<<User/binary,0>>, latin1, {utf16, little});
+                            true -> <<User/binary, 0>> end,
+                        password = if
+                            Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
+                            true -> <<Password/binary, 0>> end
+                        },
+                    io:format("rewriting ts_info: ~s\n", [rdpp:pretty_print(TsInfo2)]),
+                    {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
+                    {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
+                    {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
+                    {ok, OutBin} = tpkt:encode(X224OutBin),
+                    ssl:send(Backsock, <<OutBin/binary, Rem/binary>>),
+                    {next_state, proxy, Data};
+
+                _ ->
+                    ssl:send(Backsock, Bin),
+                    {next_state, proxy_intercept, Data}
+            end;
+
+        _ ->
+            ssl:send(Backsock, Bin),
+            {next_state, proxy_intercept, Data}
+    end;
+
+proxy_intercept({backend_data, Backend, Bin}, #data{sslsock = SslSock, backend = Backend} = Data) ->
+    ssl:send(SslSock, Bin),
+    {next_state, proxy_intercept, Data}.
 
 proxy({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backend = Backend} = Data) ->
     ssl:send(Backsock, Bin),
@@ -522,38 +563,8 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
     end;
 
 handle_info({ssl, SslSock, Bin}, State, #data{sslsock = SslSock} = Data)
-        when (State =:= proxy) orelse (State =:= wait_proxy) ->
-    debug_print_data(Bin),
-    case rdpp:decode_server(Bin) of
-        {ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
-            case rdpp:decode_basic(RdpData0) of
-                {ok, TsInfo0 = #ts_info{secflags = []}} ->
-                    #data{session = #session{user = User, password = Password, domain = Domain}} = Data,
-                    TsInfo1 = TsInfo0#ts_info{flags = [autologon, unicode | TsInfo0#ts_info.flags]},
-                    Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
-                    TsInfo2 = TsInfo1#ts_info{
-                        domain = if
-                            Unicode -> unicode:characters_to_binary(<<Domain/binary,0>>, latin1, {utf16, little});
-                            true -> <<Domain/binary, 0>> end,
-                        username = if
-                            Unicode -> unicode:characters_to_binary(<<User/binary,0>>, latin1, {utf16, little});
-                            true -> <<User/binary, 0>> end,
-                        password = if
-                            Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
-                            true -> <<Password/binary, 0>> end
-                        },
-                    io:format("rewriting ts_info: ~s\n", [rdpp:pretty_print(TsInfo2)]),
-                    {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
-                    {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
-                    {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
-                    {ok, OutBin} = tpkt:encode(X224OutBin),
-                    ?MODULE:State({data, <<OutBin/binary, Rem/binary>>}, Data);
-                _ ->
-                    ?MODULE:State({data, Bin}, Data)
-            end;
-        _ ->
-            ?MODULE:State({data, Bin}, Data)
-    end;
+        when (State =:= proxy) orelse (State =:= proxy_intercept) orelse (State =:= wait_proxy) ->
+    ?MODULE:State({data, Bin}, Data);
 
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
     handle_info({tcp, Sock, Bin}, State, Data);
