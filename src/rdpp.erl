@@ -18,6 +18,7 @@
 -export([decode_basic/1, decode_sharecontrol/1]).
 -export([encode_basic/1, encode_sharecontrol/1]).
 -export([encode_ts_order/1, encode_ts_update_bitmaps/1]).
+-export([decode_ts_confirm/2]).
 -export([pretty_print/1]).
 
 -define(pp(Rec),

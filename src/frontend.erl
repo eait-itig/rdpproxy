@@ -247,11 +247,12 @@ mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan} = P
             error_logger:info_report([{got, ts_info}, {missing_chans, Chans}]),
             rdp_clientinfo({mcs_pdu, Pdu}, Data);
         {ok, RdpPkt} ->
-            error_logger:info_report(["mcs_chans got: ", rdpp:pretty_print(RdpPkt)]);
+            error_logger:info_report(["mcs_chans got: ", rdpp:pretty_print(RdpPkt)]),
+            {next_state, mcs_chans, Data};
         _ ->
-            error_logger:info_report(["mcs_chans got: ", mcsgcc:pretty_print(Pdu)])
-    end,
-    {next_state, mcs_chans, Data};
+            error_logger:info_report(["mcs_chans got: ", mcsgcc:pretty_print(Pdu)]),
+            {next_state, mcs_chans, Data}
+    end;
 
 mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = Them} = Pdu}, #data{mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
     case rdpp:decode_basic(RdpData) of
@@ -285,11 +286,11 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
                     #ts_cap_bitmap_codecs{codecs = [
                         #ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]}
                     ]},
-                    #ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,subsampling,skip_alpha,multirect]},
+                    #ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,skip_alpha,multirect]},
                     #ts_cap_order{},
                     #ts_cap_pointer{},
                     #ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
-                    #ts_cap_multifrag{},
+                    #ts_cap_multifrag{maxsize = 4*1024*1024},
                     #ts_cap_large_pointer{},
                     #ts_cap_colortable{}
                 ]
@@ -321,8 +322,19 @@ rdp_capex({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #
         {ok, #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt} ->
             error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
             {next_state, init_finalize, Data#data{caps = Caps}};
-        Other ->
-            {stop, Other, Data}
+        {ok, RdpPkt} ->
+            error_logger:info_report(["rdp_capex got: ", rdpp:pretty_print(RdpPkt)]),
+            {next_state, rdp_capex, Data};
+        Wat ->
+            case rdpp:decode_ts_confirm(1, RdpData) of
+                #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt ->
+                    error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
+                    {next_state, init_finalize, Data#data{caps = Caps}};
+                Wat2 ->
+                    io:format("WAT: ~p => ~p then ~p\n", [RdpData, Wat, Wat2]),
+                    % lolwut bro
+                    {next_state, rdp_capex, Data}
+            end
     end.
 
 init_finalize({fp_pdu, #fp_pdu{contents = Evts}}, #data{} = Data) ->
@@ -356,13 +368,24 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
             error_logger:info_report(["finalize: ", rdpp:pretty_print(SD)]),
             {next_state, init_finalize, Data};
 
-        Other ->
-            {stop, Other, Data}
+        {ok, RdpPkt} ->
+            error_logger:info_report(["init_finalize got: ", rdpp:pretty_print(RdpPkt)]),
+            {next_state, rdp_capex, Data}
+
     end.
 
 run_ui(get_canvas, From, D = #data{caps = Caps}) ->
     #ts_cap_bitmap{bpp = Bpp, width = W, height = H} = lists:keyfind(ts_cap_bitmap, 1, Caps),
     gen_fsm:reply(From, {W, H, Bpp}),
+    {next_state, run_ui, D};
+
+run_ui(get_redir_support, From, D = #data{tsuds = Tsuds}) ->
+    case lists:keyfind(tsud_cluster, 1, Tsuds) of
+        #tsud_cluster{flags = Flags, version = V} when V >= 4 ->
+            gen_fsm:reply(From, lists:member(supported, Flags));
+        _ ->
+            gen_fsm:reply(From, false)
+    end,
     {next_state, run_ui, D};
 
 run_ui(get_autologon, From, D = #data{client_info = TsInfo}) ->
@@ -444,7 +467,11 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
 
         {ok, #ts_sharedata{} = SD} ->
             error_logger:info_report(["frontend rx: ", rdpp:pretty_print(SD)]),
-            {next_state, run_ui, D}
+            {next_state, run_ui, D};
+
+        {ok, RdpPkt} ->
+            error_logger:info_report(["rdp_capex got: ", rdpp:pretty_print(RdpPkt)]),
+            {next_state, rdp_capex, D}
     end;
 
 run_ui({x224_pdu, #x224_dr{}}, D = #data{sslsock = SslSock}) ->
