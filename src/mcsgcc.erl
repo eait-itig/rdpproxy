@@ -45,7 +45,7 @@ decode_try_methods(Bin, Methods) ->
     case ?MODULE:Method(Bin) of
         {ok, Rec} -> {ok, Rec};
         Error ->
-            %error_logger:info_report([{tried, Method}, {got, Error}]),
+            %lager:debug("tried: ~p, got: ~p", [Method, Error]),
             decode_try_methods(Bin, Rest)
     end.
 
@@ -126,7 +126,7 @@ decode_ci(Bin) ->
             case gccp_per:decode('ConnectData', CDData) of
                 {ok, CD, CDRem} ->
                     if byte_size(CDRem) > 0 ->
-                        io:format("warning: ci connectdata is carrying ~B extra bytes\n", [byte_size(CDRem)]);
+                        lager:warning("ci connectdata is carrying ~B extra bytes", [byte_size(CDRem)]);
                     true -> ok end,
                     CPDUData = list_to_binary(CD#'ConnectData'.connectPDU),
                     case gccp_per:decode('ConnectGCCPDU', <<CPDUData/binary, CDRem/binary>>) of
@@ -164,7 +164,7 @@ decode_cr(Bin) ->
             case gccp_per:decode('ConnectData', CDData) of
                 {ok, CD, CDRem} ->
                     if byte_size(CDRem) > 0 ->
-                        io:format("warning: cr connectdata is carrying ~B extra bytes\n", [byte_size(CDRem)]);
+                        lager:warning("cr connectdata is carrying ~B extra bytes", [byte_size(CDRem)]);
                     true -> ok end,
                     CPDUData = list_to_binary(CD#'ConnectData'.connectPDU),
                     case gccp_per:decode('ConnectGCCPDU', <<CPDUData/binary,CDRem/binary>>) of

@@ -246,7 +246,7 @@ decode_sharecontrol(Bin) ->
                             16#7 -> decode_sharedata(Chan, Rest);
                             16#a -> decode_ts_redir(Chan, Rest);
                             Type ->
-                                error_logger:info_report([{unhandled_sharecontrol, Type}]),
+                                lager:warning("unhandled sharecontrol: ~p", [Type]),
                                 {error, badpacket}
                         end;
                     true ->
@@ -956,7 +956,7 @@ decode_basic(Bin) ->
                 {info, Fl} -> decode_ts_info(Fl, Rest);
                 {heartbeat, Fl} -> decode_ts_heartbeat(Fl, Rest);
                 {Type, Fl} ->
-                    error_logger:info_report([{unhandled_basic, Type}, {flags, Fl}]),
+                    lager:warning("unhandled basic: ~p, flags = ~p", [Type, Fl]),
                     {error, badpacket}
             end;
         _ ->

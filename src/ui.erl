@@ -212,7 +212,7 @@ default_handler(#ts_inpevt_mouse{action=move}, Wd) ->
 default_handler(#ts_inpevt_mouse{}, Wd) ->
     {ok, Wd, []};
 default_handler(Event, Wd = #widget{id = Id, handler = H}) ->
-    io:format("<widget ~p (~p)> ignored event ~p\n", [Id, H, Event]),
+    lager:debug("<widget ~p (~p)> ignored event ~p", [Id, H, Event]),
     {ok, Wd, []}.
 
 -record(root_state, {bgcolor = {0,0,0}, focus=[]}).
@@ -245,7 +245,7 @@ root_handler({children_updated, _OldKids}, Wd = #widget{children = NewKids, stat
 root_handler({add_child, K}, Wd = #widget{children = Kids, size = Sz}) ->
     case Kids of
         [] -> ok;
-        _ -> io:format("warning: root widget replacing child\n")
+        _ -> lager:warning("root widget replacing child")
     end,
     K2 = case K#widget.id of
         undefined -> K#widget{id = make_ref(), dest = {0.0,0.0}};

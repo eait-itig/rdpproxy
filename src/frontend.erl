@@ -75,9 +75,7 @@ accept(timeout, D = #data{sup = Sup, lsock = LSock}) ->
 
 initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x224 = X224} = Data) ->
     #x224_cr{src = ThemRef, rdp_cookie = Cookie, rdp_protocols = Protos} = Pkt,
-    io:format("frontend got cr: ~s\n", [x224:pretty_print(Pkt)]),
 
-    error_logger:info_report([{them_ref, ThemRef}]),
     NewX224 = X224#x224_state{them = ThemRef},
     NewData = Data#data{x224 = NewX224, askedfor=Protos},
     HasSsl = lists:member(ssl, Protos),
@@ -101,7 +99,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
         end;
     true ->
-        error_logger:info_report([{reject_protos, Protos}]),
+        lager:debug("rejecting cr, protocols = ~p", [Protos]),
         UsRef = 1000 + random:uniform(1000),
         Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_status = error, rdp_error = ssl_required},
         {ok, RespData} = x224:encode(Resp),
@@ -119,7 +117,6 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
     maybe([
         fun(D) ->
             {ok, Tsuds} = tsud:decode(McsCi#mcs_ci.data),
-            error_logger:info_report(["tsuds: ", tsud:pretty_print(Tsuds)]),
             {continue, [D#data{tsuds = Tsuds}, Tsuds, <<>>]}
         end,
         fun(D, Tsuds, SoFar) ->
@@ -128,7 +125,6 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
             {ThemUser, D3} = next_channel(D2, 1007),
             Mcs = D3#data.mcs,
             D4 = D3#data{mcs = Mcs#mcs_state{us = MyUser, them = ThemUser}},
-            error_logger:info_report([{mcs_us, MyUser}, {mcs_them, ThemUser}]),
             {continue, [D4, Tsuds, SoFar]}
         end,
         fun(D, Tsuds, SoFar) ->
@@ -195,10 +191,10 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
         fun(D = #data{mcs = Mcs}, Tsuds, SvrTsuds) ->
             {ok, Cr} = mcsgcc:encode_cr(#mcs_cr{data = SvrTsuds, node = Mcs#mcs_state.us}),
 
-            {ok, DebugCr} = mcsgcc:decode_cr(Cr),
-            {ok, DebugTsuds} = tsud:decode(SvrTsuds),
-            error_logger:info_report(["tsud output: ", tsud:pretty_print(DebugTsuds)]),
-            error_logger:info_report(["cr output: ", mcsgcc:pretty_print(DebugCr)]),
+            %{ok, DebugCr} = mcsgcc:decode_cr(Cr),
+            %{ok, DebugTsuds} = tsud:decode(SvrTsuds),
+            %error_logger:info_report(["tsud output: ", tsud:pretty_print(DebugTsuds)]),
+            %error_logger:info_report(["cr output: ", mcsgcc:pretty_print(DebugCr)]),
 
             {ok, DtData} = x224:encode(#x224_dt{data = Cr}),
             {ok, Packet} = tpkt:encode(DtData),
@@ -210,7 +206,7 @@ mcs_connect({mcs_pdu, #mcs_ci{} = McsCi}, #data{sslsock = SslSock} = Data0) ->
     ], [Data0]);
 
 mcs_connect({mcs_pdu, Pdu}, Data) ->
-    error_logger:info_report(["mcs_connect got: ", mcsgcc:pretty_print(Pdu)]),
+    lager:info("mcs_connect got: ~s", [mcsgcc:pretty_print(Pdu)]),
     {next_state, mcs_connect, Data}.
 
 mcs_attach_user({x224_pdu, _}, Data) ->
@@ -224,7 +220,7 @@ mcs_attach_user({mcs_pdu, #mcs_aur{}}, #data{sslsock = SslSock, mcs = #mcs_state
     {next_state, mcs_chans, Data};
 
 mcs_attach_user({mcs_pdu, Pdu}, Data) ->
-    error_logger:info_report(["mcs_attach_user got: ", mcsgcc:pretty_print(Pdu)]),
+    lager:info("mcs_attach_user got: ~s", [mcsgcc:pretty_print(Pdu)]),
     {next_state, mcs_attach_user, Data}.
 
 mcs_chans({mcs_pdu, #mcs_cjr{user = Them, channel = Chan}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them, us = Us}, waitchans = Chans} = Data) ->
@@ -235,7 +231,7 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = Them, channel = Chan}}, #data{sslsock = SslS
     send_dpdu(SslSock, #mcs_cjc{user = Us, channel = Chan, status = 'rt-successful'}),
 
     if (length(NewChans) == 0) ->
-        error_logger:info_report([{mcs_chans, all_ok}, {chans, NewData#data.mcs#mcs_state.chans}]),
+        lager:info("mcs_chans all ok (chans = ~p)", [NewData#data.mcs#mcs_state.chans]),
         {next_state, rdp_clientinfo, NewData};
     true ->
         {next_state, mcs_chans, NewData}
@@ -244,30 +240,28 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = Them, channel = Chan}}, #data{sslsock = SslS
 mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan} = Pdu}, #data{waitchans = Chans, mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
     case rdpp:decode_basic(RdpData) of
         {ok, #ts_info{}} ->
-            error_logger:info_report([{got, ts_info}, {missing_chans, Chans}]),
+            lager:info("got ts_info while still waiting for chans (missing = ~p)", [Chans]),
             rdp_clientinfo({mcs_pdu, Pdu}, Data);
         {ok, RdpPkt} ->
-            error_logger:info_report(["mcs_chans got: ", rdpp:pretty_print(RdpPkt)]),
+            lager:info("mcs_chans got: ~s", [rdpp:pretty_print(RdpPkt)]),
             {next_state, mcs_chans, Data};
         _ ->
-            error_logger:info_report(["mcs_chans got: ", mcsgcc:pretty_print(Pdu)]),
+            lager:info("mcs_chans got: ~s", [mcsgcc:pretty_print(Pdu)]),
             {next_state, mcs_chans, Data}
     end;
 
 mcs_chans({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = Them} = Pdu}, #data{mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
     case rdpp:decode_basic(RdpData) of
         {ok, RdpPkt} ->
-            error_logger:info_report(["mcs_chans got on user chan: ", rdpp:pretty_print(RdpPkt)]);
+            lager:info("mcs_chans got on user chan: ~s", [rdpp:pretty_print(RdpPkt)]);
         _ ->
-            error_logger:info_report(["mcs_chans got on user chan: ", mcsgcc:pretty_print(Pdu)])
+            lager:info("mcs_chans got on user chan: ~s", [mcsgcc:pretty_print(Pdu)])
     end,
     {next_state, mcs_chans, Data}.
 
 rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them, us = Us, iochan = IoChan}} = Data) ->
     case rdpp:decode_basic(RdpData) of
         {ok, #ts_info{} = InfoPkt} ->
-            error_logger:info_report(["info packet: ", rdpp:pretty_print(InfoPkt)]),
-
             {ok, LicData} = rdpp:encode_basic(#ts_license_vc{secflags=[encrypt_license]}),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = LicData}),
 
@@ -295,14 +289,14 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
                     #ts_cap_colortable{}
                 ]
             }),
-            file:write_file("my_demand", DaPkt),
-            {ok, Da} = rdpp:decode_sharecontrol(DaPkt),
-            error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
+            %file:write_file("my_demand", DaPkt),
+            %{ok, Da} = rdpp:decode_sharecontrol(DaPkt),
+            %error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = DaPkt}),
 
             {next_state, rdp_capex, Data#data{shareid = ShareId, client_info = InfoPkt}};
         {ok, RdpPkt} ->
-            error_logger:info_report(["rdp packet: ", rdpp:pretty_print(RdpPkt)]),
+            lager:info("rdp packet: ~s", [rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_clientinfo, Data};
         Other ->
             {stop, {bad_protocol, Other}, Data}
@@ -311,27 +305,24 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
 rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = Them} = Pdu}, #data{mcs = #mcs_state{us = Us, them = Them, iochan = IoChan}} = Data) ->
     case rdpp:decode_basic(RdpData) of
         {ok, RdpPkt} ->
-            error_logger:info_report(["rdp_clientinfo got on user chan: ", rdpp:pretty_print(RdpPkt)]);
+            lager:info("rdp_clientinfo got on user chan: ~s", [rdpp:pretty_print(RdpPkt)]);
         _ ->
-            error_logger:info_report(["rdp_clientinfo got on user chan: ", mcsgcc:pretty_print(Pdu)])
+            lager:info("rdp_clientinfo got on user chan: ~s", [mcsgcc:pretty_print(Pdu)])
     end,
     {next_state, rdp_clientinfo, Data}.
 
 rdp_capex({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them, iochan = IoChan}, shareid = ShareId} = Data) ->
     case rdpp:decode_sharecontrol(RdpData) of
         {ok, #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt} ->
-            error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
             {next_state, init_finalize, Data#data{caps = Caps}};
         {ok, RdpPkt} ->
-            error_logger:info_report(["rdp_capex got: ", rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_capex, Data};
         Wat ->
             case rdpp:decode_ts_confirm(1, RdpData) of
                 #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt ->
-                    error_logger:info_report(["confirm: ", rdpp:pretty_print(Pkt)]),
                     {next_state, init_finalize, Data#data{caps = Caps}};
                 Wat2 ->
-                    io:format("WAT: ~p => ~p then ~p\n", [RdpData, Wat, Wat2]),
+                    lager:error("WAT: ~p => ~p then ~p", [RdpData, Wat, Wat2]),
                     % lolwut bro
                     {next_state, rdp_capex, Data}
             end
@@ -365,11 +356,9 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
             {next_state, run_ui, Data};
 
         {ok, #ts_sharedata{} = SD} ->
-            error_logger:info_report(["finalize: ", rdpp:pretty_print(SD)]),
             {next_state, init_finalize, Data};
 
         {ok, RdpPkt} ->
-            error_logger:info_report(["init_finalize got: ", rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_capex, Data}
 
     end.
@@ -466,11 +455,9 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
             {stop, normal, D};
 
         {ok, #ts_sharedata{} = SD} ->
-            error_logger:info_report(["frontend rx: ", rdpp:pretty_print(SD)]),
             {next_state, run_ui, D};
 
         {ok, RdpPkt} ->
-            error_logger:info_report(["rdp_capex got: ", rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_capex, D}
     end;
 
@@ -482,7 +469,7 @@ wait_proxy({data, Bin}, #data{queue = Queue} = Data) ->
     {next_state, wait_proxy, Data#data{queue = Queue ++ [Bin]}};
 
 wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, backend = Backend, x224 = #x224_state{them = ThemRef}, sock = Sock} = Data) ->
-    io:format("frontend send cc: ~s\n", [x224:pretty_print(TheirCC)]),
+    lager:info("frontend send cc: ~s", [x224:pretty_print(TheirCC)]),
     {ok, RespData} = x224:encode(TheirCC),
     {ok, Packet} = tpkt:encode(RespData),
     gen_tcp:send(Sock, Packet),
@@ -515,7 +502,7 @@ proxy_intercept({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backe
                             Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
                             true -> <<Password/binary, 0>> end
                         },
-                    io:format("rewriting ts_info: ~s\n", [rdpp:pretty_print(TsInfo2)]),
+                    lager:info("rewriting ts_info: ~s", [rdpp:pretty_print(TsInfo2)]),
                     {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
                     {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
                     {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
@@ -592,7 +579,7 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data)
             queue_remainder(Sock, Rem),
             ?MODULE:State(Evt, Data);
         {error, Reason} ->
-            error_logger:info_report([{rdpp_decode_fail, Reason}]),
+            lager:warning("connseq decode fail: ~p", [Reason]),
             {next_state, State, Data}
     end;
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
@@ -601,7 +588,7 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
             queue_remainder(Sock, Rem),
             ?MODULE:State(Evt, Data);
         {error, Reason} ->
-            error_logger:info_report([{rdpp_decode_fail, Reason}]),
+            lager:warning("decode fail: ~p", [Reason]),
             {next_state, State, Data}
     end;
 
