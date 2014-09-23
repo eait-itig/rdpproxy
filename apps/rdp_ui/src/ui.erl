@@ -7,7 +7,7 @@
 %%
 
 -module(ui).
--include("rdpp.hrl").
+-include_lib("rdp_proto/include/rdpp.hrl").
 -include("ui.hrl").
 -include_lib("cairerl/include/cairerl.hrl").
 

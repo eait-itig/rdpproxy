@@ -5,8 +5,7 @@
 %% Copyright (c) 2012, The University of Queensland
 %% Author: Alex Wilson <alex@uq.edu.au>
 %%
-
--include("kbd.hrl").
+-include_lib("rdp_proto/include/kbd.hrl").
 
 -define(ROP_BLACKNESS, 16#00).
 -define(ROP_SRCCOPY, 16#CC).

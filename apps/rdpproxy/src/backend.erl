@@ -9,10 +9,10 @@
 -module(backend).
 -behaviour(gen_fsm).
 
--include("x224.hrl").
--include("mcsgcc.hrl").
--include("tsud.hrl").
--include("rdpp.hrl").
+-include_lib("rdp_proto/include/x224.hrl").
+-include_lib("rdp_proto/include/mcsgcc.hrl").
+-include_lib("rdp_proto/include/tsud.hrl").
+-include_lib("rdp_proto/include/rdpp.hrl").
 
 -export([start_link/4]).
 -export([initiation/2, proxy_intercept/2, proxy/2]).

@@ -3,7 +3,7 @@
 %% SEQUENCE and SET, and macro definitions for each value
 %% definition,in module MCS-PROTOCOL
 
--include("kbd.hrl").
+-include_lib("rdp_proto/include/kbd.hrl").
 
 -record('DomainParameters',{
 maxChannelIds, maxUserIds, maxTokenIds, numPriorities, minThroughput, maxHeight, maxMCSPDUsize, protocolVersion}).

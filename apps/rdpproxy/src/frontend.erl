@@ -9,13 +9,14 @@
 -module(frontend).
 -behaviour(gen_fsm).
 
--include("x224.hrl").
--include("mcsgcc.hrl").
--include("kbd.hrl").
--include("tsud.hrl").
+-include_lib("rdp_proto/include/x224.hrl").
+-include_lib("rdp_proto/include/mcsgcc.hrl").
+-include_lib("rdp_proto/include/kbd.hrl").
+-include_lib("rdp_proto/include/tsud.hrl").
+-include_lib("rdp_proto/include/rdpp.hrl").
+-include_lib("rdp_proto/include/fastpath.hrl").
+
 -include("session.hrl").
--include("rdpp.hrl").
--include("fastpath.hrl").
 
 -export([start_link/2]).
 -export([accept/2, initiation/2, mcs_connect/2, mcs_attach_user/2, mcs_chans/2, rdp_clientinfo/2, rdp_capex/2, init_finalize/2, run_ui/2, run_ui/3, proxy/2, proxy_intercept/2, wait_proxy/2]).

@@ -1,0 +1,17 @@
+{application, rdp_ui,
+ [
+  {description, "RDP UI framework"},
+  {vsn, "1.0"},
+  {registered, []},
+  {included_applications, [
+  ]},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  ssl,
+                  rdp_proto
+                 ]},
+  {mod, { rdp_ui_app, []}},
+  {env, [
+    ]}
+ ]}.

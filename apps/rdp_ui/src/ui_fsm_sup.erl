@@ -6,7 +6,7 @@
 %% Author: Alex Wilson <alex@uq.edu.au>
 %%
 
--module(ui_sup).
+-module(ui_fsm_sup).
 
 -behaviour(supervisor).
 -export([start_link/0, init/1, start_ui/1]).

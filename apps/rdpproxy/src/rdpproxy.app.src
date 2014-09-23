@@ -1,0 +1,18 @@
+{application, rdpproxy,
+ [
+  {description, "RDP proxy"},
+  {vsn, "1.0"},
+  {registered, []},
+  {included_applications, [
+  ]},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  ssl,
+                  rdp_proto,
+                  rdp_ui
+                 ]},
+  {mod, { rdpproxy, []}},
+  {env, [
+    ]}
+ ]}.

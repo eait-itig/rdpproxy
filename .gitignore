@@ -1,8 +1,10 @@
-doc/*.css
-doc/*.html
-doc/*.png
-doc/*/*
+apps/*/doc/*.css
+apps/*/doc/*.html
+apps/*/doc/*.png
+apps/*/doc/*/*
+apps/*/ebin
 ebin
 deps
-priv/*.so
-c_src/*.o
+apps/*/priv/*.so
+apps/*/c_src/*.o
+apps/*/.rebar
