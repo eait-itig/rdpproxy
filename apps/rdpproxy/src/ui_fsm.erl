@@ -12,11 +12,9 @@
 -include_lib("rdp_proto/include/rdpp.hrl").
 -include_lib("rdp_proto/include/kbd.hrl").
 -include_lib("cairerl/include/cairerl.hrl").
--include("ui.hrl").
+-include_lib("rdp_ui/include/ui.hrl").
 
-% this will have to go later
-%-include_lib("rdpproxy/include/session.hrl").
--record(session, {cookie=auto, host, port, user, password, domain}).
+-include("session.hrl").
 
 -export([start_link/1]).
 -export([startup/2, login/2, no_redir/2]).
