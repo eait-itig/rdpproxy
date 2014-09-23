@@ -34,64 +34,10 @@ init([Frontend]) ->
     MRef = monitor(process, Frontend),
     {ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
 
-slice_bitmap(_I, _Xs, []) -> [];
-slice_bitmap(_I, _Xs, [_Y]) -> [];
-slice_bitmap(I = #cairo_image{}, Xs, [FromY, ToY | RestY]) ->
-    slice_bitmap_x(I, Xs, [FromY, ToY | RestY]) ++
-    slice_bitmap(I, Xs, [ToY | RestY]).
-slice_bitmap_x(_I, [], _) -> [];
-slice_bitmap_x(_I, [_X], _) -> [];
-slice_bitmap_x(I = #cairo_image{}, [FromX, ToX | RestX], [FromY, ToY | RestY]) ->
-    Image0 = #cairo_image{width = ToX - FromX, height = ToY - FromY, data = <<>>},
-    {ok, _, Image1} = cairerl_nif:draw(Image0, [], [
-        #cairo_pattern_create_for_surface{tag=img, image=I},
-        #cairo_pattern_translate{tag=img, x=float(FromX), y=float(FromY)},
-        #cairo_set_source{tag=img},
-        #cairo_rectangle{width = float(ToX - FromX), height = float(ToY - FromY)},
-        #cairo_fill{}
-    ]),
-    [{FromX, FromY, Image1} | slice_bitmap_x(I, [ToX | RestX], [FromY, ToY | RestY])].
-
--define(BITMAP_SLICE_TGT, (41000 div 4)).
-
-divide_bitmap(I = #cairo_image{}) ->
-    divide_bitmap(I, {0,0}).
-divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
-        when (W * H > ?BITMAP_SLICE_TGT) ->
-    XInt = lists:max([4, 4 * (round(math:sqrt(W / H * ?BITMAP_SLICE_TGT)) div 4)]),
-    YInt = lists:max([4, 4 * (round(math:sqrt(H / W * ?BITMAP_SLICE_TGT)) div 4)]),
-    XIntervals = lists:seq(0, W-4, XInt) ++ [W],
-    YIntervals = lists:seq(0, H-4, YInt) ++ [H],
-    Slices = slice_bitmap(I, XIntervals, YIntervals),
-    lists:flatmap(fun({X, Y, Slice}) ->
-        divide_bitmap(Slice, {X0 + X, Y0 + Y})
-    end, Slices);
-divide_bitmap(I = #cairo_image{data = D, width = W, height = H}, {X,Y}) ->
-    {ok, Compr} = rle_nif:compress(D, W, H),
-    [#ts_bitmap{dest={X,Y}, size={W,H}, bpp=24, data = Compr, comp_info =
-        #ts_bitmap_comp_info{flags = [compressed]}}].
-
-rect_to_ts_order(#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
-    #ts_order_opaquerect{dest={round(X),round(Y)},
-        size={round(W),round(H)},
-        color={round(R*256), round(G*256), round(B*256)}}.
-
-orders_to_updates([]) -> [];
-orders_to_updates(L = [#rect{} | _]) ->
-    {Rects, Rest} = lists:splitwith(fun(#rect{}) -> true; (_) -> false end, L),
-    [#ts_update_orders{orders = lists:map(fun rect_to_ts_order/1, Rects)} |
-        orders_to_updates(Rest)];
-orders_to_updates([#image{dest = {X,Y}, image = Im} | Rest]) ->
-    [#ts_update_bitmaps{
-        bitmaps = divide_bitmap(Im, {round(X), round(Y)})
-    } | orders_to_updates(Rest)];
-orders_to_updates([#null_order{} | Rest]) ->
-    orders_to_updates(Rest).
-
 send_orders(F, Orders) ->
     lists:foreach(fun(U) ->
         gen_fsm:send_event(F, {send_update, U})
-    end, orders_to_updates(Orders)).
+    end, ui:orders_to_updates(Orders)).
 
 handle_root_events(State, S = #state{frontend = F, root = Root}, Events) ->
     {Root2, Orders, UiEvts} = ui:handle_events(Root, Events),

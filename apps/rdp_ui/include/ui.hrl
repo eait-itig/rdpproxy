@@ -19,7 +19,7 @@
 				 tags = [] :: [atom()],
 				 dest = {0.0, 0.0} :: point(),
 				 size = {0.0, 0.0} :: size(),
-				 handler = error(no_handler) :: atom(),
+				 mod = error(no_module) :: atom(),
 				 state :: term(),
 				 orders = [] :: [order()],
 				 children = []}).
