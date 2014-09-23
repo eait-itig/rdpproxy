@@ -13,6 +13,9 @@
 
 -export([handle/2, get_text/1]).
 
+color_set_order({R, G, B}) ->
+    #cairo_set_source_rgba{r = float(R), g = float(G), b = float(B)}.
+
 -record(state, {placeholder, text= <<>>, cursor=0, xs=[0.0], base, mask}).
 get_text(#widget{state = #state{text = Txt}}) ->
     Txt.

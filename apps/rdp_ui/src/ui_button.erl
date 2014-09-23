@@ -15,6 +15,9 @@
 
 -record(state, {text}).
 
+color_set_order({R, G, B}) ->
+    #cairo_set_source_rgba{r = float(R), g = float(G), b = float(B)}.
+
 handle({init, Text}, Wd = #widget{size = Sz}) ->
     handle({resize, Sz}, Wd#widget{state = #state{text = Text}});
 

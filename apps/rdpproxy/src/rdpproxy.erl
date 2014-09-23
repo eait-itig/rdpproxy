@@ -30,6 +30,9 @@ init(_Args) ->
     {ok, {
         {one_for_one, 60, 600},
         [
+            {ui_fsm_sup,
+                {ui_fsm_sup, start_link, []},
+                permanent, infinity, supervisor, [ui_fsm, ui_fsm_sup]},
             {frontend_sup,
                 {frontend_sup, start_link, [3389]},
                 permanent, infinity, supervisor, [frontend, frontend_sup]},

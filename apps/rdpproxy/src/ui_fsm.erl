@@ -55,35 +55,35 @@ startup(timeout, S = #state{frontend = F}) ->
             login(setup_ui, S2)
     end.
 
-no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = Bpp}) ->
+no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}),
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
-                                     handler = hlayout_handler}} },
+                                     mod = ui_hlayout}} },
         { [{id, hlayout}],  init },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
-                                     handler = png_image_handler}} },
+                                     mod = ui_image}} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
-                                     handler = vlayout_handler,
+                                     mod = ui_vlayout,
                                      size = {400.0, H}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = banner,
-                                     handler = label_handler,
+                                     mod = ui_label,
                                      size = {400.0, 38.0}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = explain,
-                                     handler = label_handler,
+                                     mod = ui_label,
                                      size = {400.0, 18.0*3}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = closebtn,
-                                     handler = button_handler,
+                                     mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
         { [{id, logo}],         {init, "uq-logo.png"} },
@@ -99,7 +99,7 @@ no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = Bpp}) ->
     send_orders(F, Orders),
     {next_state, no_redir, S#state{root = Root2}};
 
-no_redir({input, F, Evt}, S = #state{frontend = F, root = Root}) ->
+no_redir({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -110,7 +110,7 @@ no_redir({input, F, Evt}, S = #state{frontend = F, root = Root}) ->
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
             handle_root_events(no_redir, S, [Event]);
-        #ts_inpevt_key{code = Code} ->
+        #ts_inpevt_key{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(no_redir, S, [Event]);
         _ ->
@@ -121,47 +121,47 @@ no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
     gen_fsm:send_event(F, close),
     {stop, normal, S}.
 
-login(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = Bpp}) ->
+login(setup_ui, S = #state{frontend = F, w = W, h = H}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}),
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
-                                     handler = hlayout_handler}} },
+                                     mod = ui_hlayout}} },
         { [{id, hlayout}],  init },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
-                                     handler = png_image_handler}} },
+                                     mod = ui_image}} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
-                                     handler = vlayout_handler,
+                                     mod = ui_vlayout,
                                      size = {400.0, H}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = banner,
-                                     handler = label_handler,
+                                     mod = ui_label,
                                      size = {400.0, 38.0}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = subbanner,
-                                     handler = label_handler,
+                                     mod = ui_label,
                                      size = {400.0, 28.0}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = instru,
-                                     handler = label_handler,
+                                     mod = ui_label,
                                      size = {400.0, 15.0}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = userinp,
-                                     handler = textinput_handler,
+                                     mod = ui_textinput,
                                      size = {400.0, 30.0}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = passinp,
-                                     handler = textinput_handler,
+                                     mod = ui_textinput,
                                      size = {400.0, 30.0}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = loginbtn,
-                                     handler = button_handler,
+                                     mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
         { [{id, logo}],         {init, "uq-logo.png"} },
@@ -179,7 +179,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = Bpp}) ->
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(F, Orders),
 
-    {Autologon, U, D, P} = gen_fsm:sync_send_event(F, get_autologon),
+    {_Autologon, U, _D, P} = gen_fsm:sync_send_event(F, get_autologon),
     Events2 = [
         { [{id, userinp}], {set_text, U} },
         { [{id, passinp}], {set_text, P} }
@@ -193,7 +193,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = Bpp}) ->
 
     {next_state, login, S#state{root = Root3}};
 
-login({input, F, Evt}, S = #state{frontend = F, root = Root}) ->
+login({input, F, Evt}, S = #state{frontend = F}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -204,14 +204,14 @@ login({input, F, Evt}, S = #state{frontend = F, root = Root}) ->
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
             handle_root_events(login, S, [Event]);
-        #ts_inpevt_key{code = Code} ->
+        #ts_inpevt_key{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(login, S, [Event]);
         _ ->
             {next_state, login, S}
     end;
 
-login({ui, {submitted, userinp}}, S = #state{frontend = F, root = Root}) ->
+login({ui, {submitted, userinp}}, S = #state{}) ->
     Event = { [{id, passinp}], focus },
     handle_root_events(login, S, [Event]);
 
@@ -223,14 +223,14 @@ login({ui, {clicked, loginbtn}}, S = #state{}) ->
 
 login(check_creds, S = #state{frontend = F, root = Root}) ->
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
-    UserDomain = ui:textinput_get_text(UsernameTxt),
+    UserDomain = ui_textinput:get_text(UsernameTxt),
     {Domain, Username} = case binary:split(UserDomain, <<$\\>>) of
         [D = <<"LABS">>, U] -> {D, U};
         [_D, U] -> {<<"KRB5.UQ.EDU.AU">>, U};
         [U] -> {<<"KRB5.UQ.EDU.AU">>, U}
     end,
     [PasswordTxt] = ui:select(Root, [{id, passinp}]),
-    Password = ui:textinput_get_text(PasswordTxt),
+    Password = ui_textinput:get_text(PasswordTxt),
     case {Username, Password} of
         {<<>>, _} ->
             login(invalid_login, S);
@@ -253,7 +253,7 @@ login(invalid_login, S = #state{}) ->
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
         { [{id, loginlyt}], {add_child, {before, {id, loginbtn}},
-            #widget{id = badlbl, handler = label_handler, size = {400.0, 15.0}}
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
             } },
         { [{id, badlbl}],   {init, center, <<"Username and password are both required">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
@@ -261,7 +261,7 @@ login(invalid_login, S = #state{}) ->
     ],
     handle_root_events(login, S, Events).
 
-handle_info({'DOWN', MRef, process, _, _}, State, S = #state{mref = MRef}) ->
+handle_info({'DOWN', MRef, process, _, _}, _State, S = #state{mref = MRef}) ->
     {stop, normal, S}.
 
 %% @private

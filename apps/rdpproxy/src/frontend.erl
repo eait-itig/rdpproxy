@@ -353,7 +353,7 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
             {ok, FontMap} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_fontmap{}}),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
-            {ok, _} = ui_sup:start_ui(self()),
+            {ok, _} = ui_fsm_sup:start_ui(self()),
             {next_state, run_ui, Data};
 
         {ok, #ts_sharedata{} = SD} ->

@@ -32,7 +32,7 @@ rect_contains({X0, Y0}, {W, H}, {X, Y}) ->
 
 -spec selector_matches(widget(), selector()) -> boolean().
 selector_matches(W, {id, Id}) -> W#widget.id =:= Id;
-selector_matches(W, {mod, H}) -> W#widget.omd =:= H;
+selector_matches(W, {mod, H}) -> W#widget.mod =:= H;
 selector_matches(W, {contains, P}) -> rect_contains({0,0}, W#widget.size, P);
 selector_matches(W, {tag, T}) -> lists:member(T, W#widget.tags).
 
@@ -209,8 +209,8 @@ default_handler(#ts_inpevt_mouse{action=move}, Wd) ->
     {ok, Wd, Evts};
 default_handler(#ts_inpevt_mouse{}, Wd) ->
     {ok, Wd, []};
-default_handler(Event, Wd = #widget{id = Id, handler = H}) ->
-    lager:debug("<widget ~p (~p)> ignored event ~p", [Id, H, Event]),
+default_handler(Event, Wd = #widget{id = Id, mod = M}) ->
+    lager:debug("<widget ~p (~p)> ignored event ~p", [Id, M, Event]),
     {ok, Wd, []}.
 
 % ts utils
