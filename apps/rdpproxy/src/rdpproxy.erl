@@ -51,6 +51,9 @@ stop(_State) ->
 
 %% @private
 init(_Args) ->
+    RiakSize = rdpproxy:config([riak, connections], 20),
+    RiakHost = rdpproxy:config([riak, host], "localhost"),
+    RiakPort = rdpproxy:config([riak, port], 8087),
     {ok, {
         {one_for_one, 60, 600},
         [
@@ -62,6 +65,12 @@ init(_Args) ->
                 permanent, infinity, supervisor, [frontend, frontend_sup]},
             {session_mgr,
                 {session_mgr, start_link, []},
-                permanent, 10, worker, [session_mgr]}
+                permanent, 10, worker, [session_mgr]},
+            poolboy:child_spec(riakcp,
+                [{name, {local, riakc_pool}},
+                 {worker_module, riakc_pool},
+                 {size, RiakSize},
+                 {max_overflow, RiakSize*2}],
+                [RiakHost, RiakPort])
         ]
     }}.
