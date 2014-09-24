@@ -63,7 +63,8 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
 
     if HasSsl ->
         inet:setopts(Sock, [{packet, raw}]),
-        {ok, SslSock} = ssl:connect(Sock, [{verify, verify_none}]),
+        {ok, SslSock} = ssl:connect(Sock,
+            rdpproxy:config([backend, ssl_options], [{verify, verify_none}])),
         ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
         gen_fsm:send_event(Frontend, {backend_ready, self(), SslSock, Pkt}),

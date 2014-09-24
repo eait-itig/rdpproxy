@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -env ERL_LIBS ./apps:./deps
+%%! -env ERL_LIBS ./apps:./deps -config rel/files/app.config
 main(_) ->
 	[ok = application:start(X) || X <- [crypto, asn1, public_key, ssl, syntax_tools, compiler, goldrush, lager, rdp_proto, rdp_ui]],
     rdpproxy:start(),

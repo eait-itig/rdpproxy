@@ -12,6 +12,30 @@
 -behaviour(application).
 
 -export([start/0, start/2, stop/1, init/1]).
+-export([config/1, config/2]).
+
+dpath_resolve(Item, []) -> Item;
+dpath_resolve(List, ['_' | Rest]) ->
+    [dpath_resolve(X, Rest) || X <- List];
+dpath_resolve(Plist, [Key | Rest]) when is_atom(Key) or is_binary(Key) ->
+    dpath_resolve(proplists:get_value(Key, Plist), Rest);
+dpath_resolve(List, [Index | Rest]) when is_integer(Index) ->
+    dpath_resolve(lists:nth(Index, List), Rest).
+
+config(KeyOrDPath) -> config(KeyOrDPath, undefined).
+config([ConfigKey | DPath], Default) ->
+    case application:get_env(rdpproxy, ConfigKey) of
+        undefined -> Default;
+        Other -> case dpath_resolve(Other, DPath) of
+            undefined -> Default;
+            Other2 -> Other2
+        end
+    end;
+config(ConfigKey, Default) ->
+    case application:get_env(rdpproxy, ConfigKey) of
+        undefined -> Default;
+        Other -> Other
+    end.
 
 %% @doc Starts the rdpproxy application.
 start() ->

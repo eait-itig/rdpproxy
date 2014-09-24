@@ -95,7 +95,10 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 gen_tcp:send(Sock, Packet),
 
                 inet:setopts(Sock, [{packet, raw}]),
-                {ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
+                {ok, SslSock} = ssl:ssl_accept(Sock,
+                    rdpproxy:config([frontend, ssl_options], [
+                        {certfile, "etc/cert.pem"},
+                        {keyfile, "etc/key.pem"}]),
                 ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
                 {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
         end;
@@ -476,7 +479,10 @@ wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, bac
     gen_tcp:send(Sock, Packet),
 
     inet:setopts(Sock, [{packet, raw}]),
-    {ok, SslSock} = ssl:ssl_accept(Sock, [{certfile, "etc/cert.pem"}, {keyfile, "etc/key.pem"}]),
+    {ok, SslSock} = ssl:ssl_accept(Sock,
+                    rdpproxy:config([frontend, ssl_options], [
+                        {certfile, "etc/cert.pem"},
+                        {keyfile, "etc/key.pem"}]),
     ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
     lists:foreach(fun(Bin) ->
         ssl:send(Backsock, Bin)

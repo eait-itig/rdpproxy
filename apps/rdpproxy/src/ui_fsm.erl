@@ -222,15 +222,21 @@ login({ui, {clicked, loginbtn}}, S = #state{}) ->
     login(check_creds, S);
 
 login(check_creds, S = #state{frontend = F, root = Root}) ->
+    [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, domains], [<<".">>]),
+
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
     UserDomain = ui_textinput:get_text(UsernameTxt),
     {Domain, Username} = case binary:split(UserDomain, <<$\\>>) of
-        [D = <<"LABS">>, U] -> {D, U};
-        [_D, U] -> {<<"KRB5.UQ.EDU.AU">>, U};
-        [U] -> {<<"KRB5.UQ.EDU.AU">>, U}
+        [D, U] -> case lists:member(D, ValidDomains) of
+            true -> {D, U};
+            false -> {DefaultDomain, U}
+        end;
+        [U] -> {DefaultDomain, U}
     end,
+
     [PasswordTxt] = ui:select(Root, [{id, passinp}]),
     Password = ui_textinput:get_text(PasswordTxt),
+
     case {Username, Password} of
         {<<>>, _} ->
             login(invalid_login, S);
@@ -242,7 +248,7 @@ login(check_creds, S = #state{frontend = F, root = Root}) ->
                 user = Username, domain = Domain, password = Password
                 }),
             gen_fsm:send_event(F, {redirect,
-                Cookie, <<"uqawil16-mbp.eait.uq.edu.au">>,
+                Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
                 Username, Domain, Password}),
             {stop, normal, S}
     end;
