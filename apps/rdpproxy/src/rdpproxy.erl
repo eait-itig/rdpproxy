@@ -55,7 +55,7 @@ init(_Args) ->
     RiakHost = rdpproxy:config([riak, host], "localhost"),
     RiakPort = rdpproxy:config([riak, port], 8087),
     {ok, {
-        {one_for_one, 60, 600},
+        {one_for_one, 60, 60},
         [
             {ui_fsm_sup,
                 {ui_fsm_sup, start_link, []},
