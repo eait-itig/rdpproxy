@@ -16,7 +16,7 @@ init(Req, _Options) ->
     case Method of
         <<"PUT">> ->
             IpBin = cowboy_req:binding(ip, Req),
-            ok = db_user_status:clear(IpBin),
+            {ok,_} = db_user_status:clear(IpBin),
             Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
             {ok, Req2, none};
         <<"POST">> ->
