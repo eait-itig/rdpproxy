@@ -9,7 +9,9 @@
                   kernel,
                   stdlib,
                   ssl,
-                  rdp_proto
+                  lager,
+                  rdp_proto,
+                  cairerl
                  ]},
   {mod, { rdp_ui_app, []}},
   {env, [

@@ -8,7 +8,9 @@
   {applications, [
                   kernel,
                   stdlib,
-                  ssl
+                  ssl,
+                  lager,
+                  asn1
                  ]},
   {mod, { rdp_proto_app, []}},
   {env, [

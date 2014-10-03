@@ -9,8 +9,10 @@
                   kernel,
                   stdlib,
                   ssl,
+                  lager,
                   rdp_proto,
-                  rdp_ui
+                  rdp_ui,
+                  cowboy
                  ]},
   {mod, { rdpproxy, []}},
   {env, [

@@ -86,7 +86,7 @@ no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, "uq-logo.png"} },
+        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
         { [{id, banner}],       {init, left, <<"Sorry">>} },
         { [{id, banner}],       {set_bgcolor, UQPurple} },
         { [{id, explain}],      {init, left, <<"It seems that your remote desktop client\n",
@@ -164,7 +164,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H}) ->
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, "uq-logo.png"} },
+        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
         { [{id, banner}],       {init, left, <<"UQ Faculty of EAIT">>} },
         { [{id, banner}],       {set_bgcolor, UQPurple} },
         { [{id, subbanner}],    {init, left, <<"Remote Lab Access">>} },
@@ -292,7 +292,7 @@ waiting(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, "uq-logo.png"} },
+        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
         { [{id, banner}],       {init, left, <<"Please wait...">>} },
         { [{id, banner}],       {set_bgcolor, UQPurple} },
         { [{id, explain}],      {init, left, <<"We're busy finding an available virtual lab\n",
