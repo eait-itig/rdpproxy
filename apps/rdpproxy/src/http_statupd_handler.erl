@@ -7,17 +7,17 @@
 %%
 
 -module(http_statupd_handler).
--behaviour(cowboy_http_handler).
+-behaviour(cowboy_handler).
 
--export([init/3, handle/2, terminate/3]).
+-export([init/2]).
 
--record(state, {}).
-
-init(_Transport, Req, _Options) ->
-    {ok, Req, #state{}}.
-
-terminate(_Reason, _Req, _State) ->
-    ok.
-
-handle(Req, S = #state{}) ->
-    {ok, Req}.
+init(Req, _Options) ->
+    Method = cowboy_req:method(Req),
+    case Method of
+        B when (B =:= <<"PUT">>) or (B =:= <<"POST">>) ->
+            IpBin = cowboy_req:binding(ip, Req),
+            StatusBin = cowboy_req:binding(status, Req),
+            ok = db_host_status:put(IpBin, StatusBin),
+            Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
+            {ok, Req2, none}
+    end.

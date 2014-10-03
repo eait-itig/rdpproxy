@@ -17,14 +17,14 @@
 -include("session.hrl").
 
 -export([start_link/1]).
--export([startup/2, login/2, no_redir/2]).
+-export([startup/2, login/2, no_redir/2, waiting/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Frontend :: pid()) -> {ok, pid()}.
 start_link(Frontend) ->
     gen_fsm:start_link(?MODULE, [Frontend], []).
 
--record(state, {frontend, mref, w, h, bpp, root}).
+-record(state, {frontend, mref, w, h, bpp, root, sess}).
 
 %% @private
 init([Frontend]) ->
@@ -243,14 +243,8 @@ login(check_creds, S = #state{frontend = F, root = Root}) ->
         {_, <<>>} ->
             login(invalid_login, S);
         _ ->
-            {ok, Cookie} = session_mgr:store(#session{
-                host = "gs208-1966.labs.eait.uq.edu.au", port = 3389,
-                user = Username, domain = Domain, password = Password
-                }),
-            gen_fsm:send_event(F, {redirect,
-                Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
-                Username, Domain, Password}),
-            {stop, normal, S}
+            waiting(setup_ui, S#state{sess =
+                #session{user = Username, domain = Domain, password = Password}})
     end;
 
 login(invalid_login, S = #state{}) ->
@@ -266,6 +260,100 @@ login(invalid_login, S = #state{}) ->
         { [{id, badlbl}],   {set_bgcolor, UQPurple} }
     ],
     handle_root_events(login, S, Events).
+
+waiting(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
+    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    {Root, _, []} = ui:new({float(W), float(H)}),
+    Events = [
+        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {add_child,
+                             #widget{id = hlayout,
+                                     mod = ui_hlayout}} },
+        { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_margin, 100} },
+        { [{id, hlayout}],  {add_child,
+                             #widget{id = logo,
+                                     mod = ui_image}} },
+        { [{id, hlayout}],  {add_child,
+                             #widget{id = loginlyt,
+                                     mod = ui_vlayout,
+                                     size = {400.0, H}}} },
+        { [{id, loginlyt}], init },
+        { [{id, loginlyt}], {add_child,
+                             #widget{id = banner,
+                                     mod = ui_label,
+                                     size = {400.0, 38.0}}} },
+        { [{id, loginlyt}], {add_child,
+                             #widget{id = explain,
+                                     mod = ui_label,
+                                     size = {400.0, 18.0*3}}} },
+        { [{id, loginlyt}], {add_child,
+                             #widget{id = closebtn,
+                                     mod = ui_button,
+                                     size = {120.0, 40.0}}} },
+
+        { [{id, logo}],         {init, "uq-logo.png"} },
+        { [{id, banner}],       {init, left, <<"Please wait...">>} },
+        { [{id, banner}],       {set_bgcolor, UQPurple} },
+        { [{id, explain}],      {init, left, <<"We're busy finding an available virtual lab\n",
+                                               "machine to log you in...\n">>} },
+        { [{id, explain}],      {set_bgcolor, UQPurple} },
+        { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
+    ],
+    {Root2, Orders, []} = ui:handle_events(Root, Events),
+    send_orders(F, Orders),
+    {ok, _} = timer:send_after(500, find_machine),
+    {next_state, waiting, S#state{root = Root2}};
+
+waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
+    case Evt of
+        #ts_inpevt_mouse{point = P} ->
+            Event = { [{contains, P}], Evt },
+            handle_root_events(waiting, S, [Event]);
+        #ts_inpevt_key{code = esc, action = down} ->
+            gen_fsm:send_event(F, close),
+            {stop, normal, S};
+        #ts_inpevt_key{code = tab, action = down} ->
+            Event = { [{id, root}], focus_next },
+            handle_root_events(waiting, S, [Event]);
+        #ts_inpevt_key{code = _Code} ->
+            Event = { [{tag, focus}], Evt },
+            handle_root_events(waiting, S, [Event]);
+        _ ->
+            {next_state, waiting, S}
+    end;
+
+waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
+    case db_user_status:get(Sess#session.user) of
+        {ok, Ip} ->
+            {ok, Cookie} = db_cookie:new(Sess#session{
+                host = Ip, port = 3389}),
+            gen_fsm:send_event(F, {redirect,
+                Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
+                Sess#session.user, Sess#session.domain, Sess#session.password}),
+            {stop, normal, S};
+
+        _ ->
+            case db_host_status:find(<<"available">>) of
+                {ok, [Ip | _]} ->
+                    {ok, Cookie} = db_cookie:new(Sess#session{
+                        host = Ip, port = 3389}),
+                    gen_fsm:send_event(F, {redirect,
+                        Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
+                        Sess#session.user, Sess#session.domain, Sess#session.password}),
+                    {stop, normal, S};
+                _ ->
+                    {ok, _} = timer:send_after(500, find_machine),
+                    {next_state, waiting, S}
+            end
+    end;
+
+waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+    gen_fsm:send_event(F, close),
+    {stop, normal, S}.
+
+handle_info(find_machine, State, S = #state{}) ->
+    ?MODULE:State(find_machine, S);
 
 handle_info({'DOWN', MRef, process, _, _}, _State, S = #state{mref = MRef}) ->
     {stop, normal, S}.

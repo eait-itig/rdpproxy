@@ -82,9 +82,11 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
     HasSsl = lists:member(ssl, Protos),
 
     if HasSsl ->
-        case session_mgr:get(Cookie) of
-            {ok, Sess = #session{host = Host, port = Port}} ->
-                {ok, Backend} = backend:start_link(self(), Host, Port, Pkt),
+        case db_cookie:get(Cookie) of
+            {ok, Sess = #session{host = HostBin, port = Port, user = User}} ->
+                ok = db_host_status:put(HostBin, <<"busy">>),
+                ok = db_user_status:put(User, HostBin),
+                {ok, Backend} = backend:start_link(self(), binary_to_list(HostBin), Port, Pkt),
                 {next_state, wait_proxy, NewData#data{backend = Backend, session = Sess}};
 
             _ ->
@@ -98,7 +100,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 {ok, SslSock} = ssl:ssl_accept(Sock,
                     rdpproxy:config([frontend, ssl_options], [
                         {certfile, "etc/cert.pem"},
-                        {keyfile, "etc/key.pem"}]),
+                        {keyfile, "etc/key.pem"}])),
                 ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
                 {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
         end;
@@ -482,7 +484,7 @@ wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, bac
     {ok, SslSock} = ssl:ssl_accept(Sock,
                     rdpproxy:config([frontend, ssl_options], [
                         {certfile, "etc/cert.pem"},
-                        {keyfile, "etc/key.pem"}]),
+                        {keyfile, "etc/key.pem"}])),
     ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
     lists:foreach(fun(Bin) ->
         ssl:send(Backsock, Bin)

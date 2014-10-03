@@ -26,7 +26,7 @@ config(KeyOrDPath) -> config(KeyOrDPath, undefined).
 config([ConfigKey | DPath], Default) ->
     case application:get_env(rdpproxy, ConfigKey) of
         undefined -> Default;
-        Other -> case dpath_resolve(Other, DPath) of
+        {ok, Other} -> case dpath_resolve(Other, DPath) of
             undefined -> Default;
             Other2 -> Other2
         end
@@ -34,7 +34,7 @@ config([ConfigKey | DPath], Default) ->
 config(ConfigKey, Default) ->
     case application:get_env(rdpproxy, ConfigKey) of
         undefined -> Default;
-        Other -> Other
+        {ok, Other} -> Other
     end.
 
 %% @doc Starts the rdpproxy application.
@@ -54,6 +54,7 @@ init(_Args) ->
     RiakSize = rdpproxy:config([riak, connections], 20),
     RiakHost = rdpproxy:config([riak, host], "localhost"),
     RiakPort = rdpproxy:config([riak, port], 8087),
+    {ok, _Pid} = http_api:start(),
     {ok, {
         {one_for_one, 60, 60},
         [

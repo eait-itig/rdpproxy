@@ -41,19 +41,9 @@ init([Frontend, Address, Port, OrigCr]) ->
             {stop, Reason}
     end.
 
-%initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed} = Pkt}, #data{addr = Address, port = Port, sock = Sock, usref = UsRef} = Data) ->
-%   gen_tcp:close(Sock),
-%   case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, tpkt}, {nodelay, true}]) of
-%       {ok, NewSock} ->
-%           Cr = #x224_cr{src = UsRef, dst = 0, rdp_protocols = []},
-%           {ok, CrData} = x224:encode(Cr),
-%           {ok, Packet} = tpkt:encode(CrData),
-%           ok = gen_tcp:send(NewSock, Packet),
-%           {next_state, initiation, Data#data{sock = NewSock}};
-%
-%       {error, Reason} ->
-%           {stop, Reason, Data}
-%   end;
+initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed} = Pkt},
+        #data{addr = Address, port = Port, sock = Sock, usref = UsRef} = Data) ->
+    {stop, no_ssl, Data};
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected, rdp_flags = Flags} = Pkt,
