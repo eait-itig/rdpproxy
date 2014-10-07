@@ -52,23 +52,25 @@ init([Opts0]) ->
             end;
         false -> ok
     end,
-	{ok, #state{c = C}}.
+	{ok, #state{c = C}, 30000}.
 
 handle_call({bind, Dn, Password}, _From, #state{c=Conn}=State) ->
-    {reply, eldap:simple_bind(Conn, Dn, Password), State};
+    {reply, eldap:simple_bind(Conn, Dn, Password), State, 30000};
 handle_call({search, SearchOpts}, _From, #state{c=Conn}=State) ->
-    {reply, eldap:search(Conn, SearchOpts), State};
+    {reply, eldap:search(Conn, SearchOpts), State, 30000};
 handle_call(_Request, _From, State) ->
-    {reply, ok, State}.
+    {reply, ok, State, 30000}.
 
 handle_cast(_Msg, State) ->
-    {noreply, State}.
+    {noreply, State, 30000}.
 
+handle_info(timeout, State) ->
+    {stop, normal, State};
 handle_info(_Info, State) ->
-    {noreply, State}.
+    {noreply, State, 30000}.
 
 terminate(_Reason, #state{c=Conn}) ->
-    ok = eldap:close(Conn),
+    eldap:close(Conn),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
