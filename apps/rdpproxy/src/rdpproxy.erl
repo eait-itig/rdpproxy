@@ -55,6 +55,16 @@ init(_Args) ->
     RiakHost = rdpproxy:config([riak, host], "localhost"),
     RiakPort = rdpproxy:config([riak, port], 8087),
     {ok, _Pid} = http_api:start(),
+
+    LdapPools = lists:map(fun({Name,Conf}) ->
+        poolboy:child_spec(Name,
+            [{name, {local, Name}},
+             {worker_module, ldap_pool},
+             {size, 4},
+             {max_overflow, 16}],
+            [Conf])
+    end, rdpproxy:config(ldap, [])),
+
     {ok, {
         {one_for_one, 60, 60},
         [
@@ -70,5 +80,5 @@ init(_Args) ->
                  {size, RiakSize},
                  {max_overflow, RiakSize*2}],
                 [RiakHost, RiakPort])
-        ]
+        ] ++ LdapPools
     }}.

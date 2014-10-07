@@ -28,7 +28,7 @@ start_link(Sock, Sup) ->
 
 -record(x224_state, {us=none, them=none}).
 -record(mcs_state, {us=none, them=none, iochan=none, msgchan=none, chans=[]}).
--record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session, client_info}).
+-record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session, client_info, peer}).
 
 send_dpdu(SslSock, McsPkt) ->
     {ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
@@ -72,7 +72,12 @@ accept(timeout, D = #data{sup = Sup, lsock = LSock}) ->
     % start our replacement in the pool
     frontend_sup:start_frontend(Sup),
     inet:setopts(Sock, [{packet, raw}, {active, once}, {nodelay, true}]),
-    {next_state, initiation, D#data{sock = Sock}}.
+    case inet:peername(Sock) of
+        {ok, Peer} ->
+            {next_state, initiation, D#data{sock = Sock, peer = Peer}};
+        _ ->
+            {next_state, initiation, D#data{sock = Sock, peer = unknown}}
+    end.
 
 initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x224 = X224} = Data) ->
     #x224_cr{src = ThemRef, rdp_cookie = Cookie, rdp_protocols = Protos} = Pkt,
@@ -105,7 +110,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
         end;
     true ->
-        lager:debug("rejecting cr, protocols = ~p", [Protos]),
+        lager:debug("~p rejecting cr, protocols = ~p", [Data#data.peer, Protos]),
         UsRef = 1000 + random:uniform(1000),
         Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_status = error, rdp_error = ssl_required},
         {ok, RespData} = x224:encode(Resp),
@@ -237,7 +242,7 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = Them, channel = Chan}}, #data{sslsock = SslS
     send_dpdu(SslSock, #mcs_cjc{user = Us, channel = Chan, status = 'rt-successful'}),
 
     if (length(NewChans) == 0) ->
-        lager:info("mcs_chans all ok (chans = ~p)", [NewData#data.mcs#mcs_state.chans]),
+        lager:info("~p mcs_chans all ok (chans = ~p)", [Data#data.peer, NewData#data.mcs#mcs_state.chans]),
         {next_state, rdp_clientinfo, NewData};
     true ->
         {next_state, mcs_chans, NewData}
@@ -328,7 +333,7 @@ rdp_capex({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #
                 #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt ->
                     {next_state, init_finalize, Data#data{caps = Caps}};
                 Wat2 ->
-                    lager:error("WAT: ~p => ~p then ~p", [RdpData, Wat, Wat2]),
+                    lager:error("~p WAT: ~p => ~p then ~p", [Data#data.peer, RdpData, Wat, Wat2]),
                     % lolwut bro
                     {next_state, rdp_capex, Data}
             end
@@ -475,7 +480,7 @@ wait_proxy({data, Bin}, #data{queue = Queue} = Data) ->
     {next_state, wait_proxy, Data#data{queue = Queue ++ [Bin]}};
 
 wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, backend = Backend, x224 = #x224_state{them = ThemRef}, sock = Sock} = Data) ->
-    lager:info("frontend send cc: ~s", [x224:pretty_print(TheirCC)]),
+    lager:info("~p frontend send cc: ~s", [Data#data.peer, x224:pretty_print(TheirCC)]),
     {ok, RespData} = x224:encode(TheirCC),
     {ok, Packet} = tpkt:encode(RespData),
     gen_tcp:send(Sock, Packet),
@@ -511,7 +516,7 @@ proxy_intercept({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backe
                             Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
                             true -> <<Password/binary, 0>> end
                         },
-                    lager:info("rewriting ts_info: ~s", [rdpp:pretty_print(TsInfo2)]),
+                    lager:info("~p rewriting ts_info: ~s", [Data#data.peer, rdpp:pretty_print(TsInfo2)]),
                     {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
                     {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
                     {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
@@ -588,7 +593,9 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data)
             queue_remainder(Sock, Rem),
             ?MODULE:State(Evt, Data);
         {error, Reason} ->
-            lager:warning("connseq decode fail: ~p", [Reason]),
+            Name = filename:join(["/tmp", base64:encode(crypto:rand_bytes(6))]),
+            file:write_file(Name, Bin),
+            lager:warning("~p connseq decode fail in ~p: ~p (data saved in ~p)", [Data#data.peer, State, Reason, Name]),
             {next_state, State, Data}
     end;
 handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
@@ -597,7 +604,9 @@ handle_info({tcp, Sock, Bin}, State, #data{sock = Sock} = Data) ->
             queue_remainder(Sock, Rem),
             ?MODULE:State(Evt, Data);
         {error, Reason} ->
-            lager:warning("decode fail: ~p", [Reason]),
+            Name = filename:join(["/tmp", base64:encode(crypto:rand_bytes(6))]),
+            file:write_file(Name, Bin),
+            lager:warning("~p decode fail in ~p: ~p (data saved in ~p)", [Data#data.peer, State, Reason, Name]),
             {next_state, State, Data}
     end;
 

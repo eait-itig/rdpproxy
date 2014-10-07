@@ -243,8 +243,14 @@ login(check_creds, S = #state{frontend = F, root = Root}) ->
         {_, <<>>} ->
             login(invalid_login, S);
         _ ->
-            waiting(setup_ui, S#state{sess =
-                #session{user = Username, domain = Domain, password = Password}})
+            Creds = [{<<"username">>, Username}, {<<"password">>, Password}],
+            case ldap_auth:process(rdpproxy:config(ldap, []), Creds) of
+                {true, _} ->
+                    waiting(setup_ui, S#state{sess =
+                        #session{user = Username, domain = Domain, password = Password}});
+                {false, _} ->
+                    login(invalid_login, S)
+            end
     end;
 
 login(invalid_login, S = #state{}) ->
@@ -255,7 +261,7 @@ login(invalid_login, S = #state{}) ->
         { [{id, loginlyt}], {add_child, {before, {id, loginbtn}},
             #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
             } },
-        { [{id, badlbl}],   {init, center, <<"Username and password are both required">>} },
+        { [{id, badlbl}],   {init, center, <<"Invalid username or password">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, UQPurple} }
     ],
