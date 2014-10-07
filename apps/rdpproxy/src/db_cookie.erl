@@ -31,7 +31,7 @@ encode(#session{host=H, port=P, user=U, password=Pw, domain=D}) ->
 decode(<<P:16/big, HLen:16/big, H:HLen/binary, ULen:16/big, U:ULen/binary, PwLen:16/big, Pw:PwLen/binary, DLen:16/big, D:DLen/binary>>) ->
 	#session{host = H, port = P, user = U, password = Pw, domain = D}.
 
-get(K) ->
+get(K) when is_binary(K) and (byte_size(K) > 0) ->
 	poolboy:transaction(?POOL, fun(C) ->
 		case riakc_pb_socket:get(C, ?BUCKET, K) of
 			{ok, RObj} ->
@@ -44,7 +44,9 @@ get(K) ->
 			{error, Reason} ->
 				{error, Reason}
 		end
-	end).
+	end);
+get(K) when is_list(K) and (length(K) > 0) -> ?MODULE:get(list_to_binary(K));
+get(_) -> {error, not_found}.
 
 new(Session = #session{cookie = auto}) ->
 	K = gen_key(),

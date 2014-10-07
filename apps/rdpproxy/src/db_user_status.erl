@@ -23,9 +23,10 @@ encode_new_val(V) when is_binary(V) ->
 	<<MS:44/big, S:20/big, V/binary>>.
 
 decode_vals([]) -> [];
-decode_vals([V | Rest]) when is_binary(V) ->
+decode_vals([V | Rest]) when is_binary(V) and (byte_size(V) > 0) ->
 	<<MS:44/big, S:20/big, Val/binary>> = V,
-	[{{MS,S}, Val} | decode_vals(Rest)].
+	[{{MS,S}, Val} | decode_vals(Rest)];
+decode_vals([V | Rest]) -> decode_vals(Rest).
 
 get(User) ->
 	poolboy:transaction(?POOL, fun(C) ->
@@ -45,7 +46,8 @@ put(User, Ip) ->
 			_ -> riakc_obj:new(?BUCKET, User, encode_new_val(Ip))
 		end
 	end),
-	MD0 = riakc_obj:get_update_metadata(RObj0),
+	%MD0 = riakc_obj:get_update_metadata(RObj0),
+	MD0 = dict:new(),
 	MD1 = riakc_obj:set_secondary_index(MD0, [{{binary_index, "ip"}, [Ip]}]),
 	RObj = riakc_obj:update_metadata(RObj0, MD1),
 	poolboy:transaction(?POOL, fun(C) ->

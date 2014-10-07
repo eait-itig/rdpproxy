@@ -45,7 +45,8 @@ put(Ip, Status) ->
 			_ -> riakc_obj:new(?BUCKET, Ip, encode_new_val(Status))
 		end
 	end),
-	MD0 = riakc_obj:get_update_metadata(RObj0),
+	%MD0 = riakc_obj:get_update_metadata(RObj0),
+	MD0 = dict:new(),
 	MD1 = riakc_obj:set_secondary_index(MD0, [{{binary_index, "status"}, [Status]}]),
 	RObj = riakc_obj:update_metadata(RObj0, MD1),
 	poolboy:transaction(?POOL, fun(C) ->

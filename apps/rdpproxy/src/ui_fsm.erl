@@ -326,6 +326,7 @@ waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
 waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
     case db_user_status:get(Sess#session.user) of
         {ok, Ip} ->
+            lager:info("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
             {ok, Cookie} = db_cookie:new(Sess#session{
                 host = Ip, port = 3389}),
             gen_fsm:send_event(F, {redirect,
@@ -336,6 +337,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
         _ ->
             case db_host_status:find(<<"available">>) of
                 {ok, [Ip | _]} ->
+                    lager:info("~p gets a new session on ~p", [Sess#session.user, Ip]),
                     {ok, Cookie} = db_cookie:new(Sess#session{
                         host = Ip, port = 3389}),
                     gen_fsm:send_event(F, {redirect,

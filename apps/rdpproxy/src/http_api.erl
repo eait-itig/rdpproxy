@@ -7,7 +7,7 @@
 %%
 
 -module(http_api).
--export([start/0]).
+-export([start/0, peer_allowed/2]).
 
 start() ->
     Port = rdpproxy:config([http_api, port], 8080),
@@ -26,3 +26,8 @@ start() ->
     ]),
     cowboy:start_http(http, 20, [{port, Port}],
         [{env, [{dispatch, Dispatch}]}]).
+
+peer_allowed(Ip, PeerIp) ->
+    {A,B,C,D} = PeerIp,
+    [A1,B1,C1,D1] = [list_to_integer(X) || X <- string:tokens(binary_to_list(Ip), ".")],
+    (A =:= 10) andalso (A =:= A1) andalso (B =:= B1).

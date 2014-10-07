@@ -85,7 +85,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
         case db_cookie:get(Cookie) of
             {ok, Sess = #session{host = HostBin, port = Port, user = User}} ->
                 ok = db_host_status:put(HostBin, <<"busy">>),
-                ok = db_user_status:put(User, HostBin),
+                _ = db_user_status:put(User, HostBin),
                 {ok, Backend} = backend:start_link(self(), binary_to_list(HostBin), Port, Pkt),
                 {next_state, wait_proxy, NewData#data{backend = Backend, session = Sess}};
 
