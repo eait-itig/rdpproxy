@@ -20,7 +20,7 @@ init(Req, _Options) ->
             case http_api:peer_allowed(IpBin, PeerIp) of
                 true ->
                     StatusBin = cowboy_req:binding(status, Req),
-                    lager:info("~p is now ~p", [IpBin, StatusBin]),
+                    %lager:info("~p is now ~p", [IpBin, StatusBin]),
                     ok = db_host_status:put(IpBin, StatusBin),
                     Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                     {ok, Req2, none};

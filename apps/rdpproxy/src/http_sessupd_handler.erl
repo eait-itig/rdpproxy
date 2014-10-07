@@ -21,12 +21,12 @@ init(Req, _Options) ->
                 true ->
                     case cowboy_req:binding(user, Req) of
                         undefined ->
-                            lager:info("~p cleared all sessions", [IpBin]),
+                            %lager:info("~p cleared all sessions", [IpBin]),
                             {ok,_} = db_user_status:clear(IpBin),
                             Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                             {ok, Req2, none};
                         UserBin ->
-                            lager:info("~p register ONLY session for ~p", [IpBin, UserBin]),
+                            %lager:info("~p register ONLY session for ~p", [IpBin, UserBin]),
                             {ok,_} = db_user_status:clear(IpBin),
                             ok = db_user_status:put(UserBin, IpBin),
                             Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
@@ -42,7 +42,7 @@ init(Req, _Options) ->
             case http_api:peer_allowed(IpBin, PeerIp) of
                 true ->
                     UserBin = cowboy_req:binding(user, Req),
-                    lager:info("~p register session for ~p", [IpBin, UserBin]),
+                    %lager:info("~p register session for ~p", [IpBin, UserBin]),
                     ok = db_user_status:put(UserBin, IpBin),
                     Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                     {ok, Req2, none};
