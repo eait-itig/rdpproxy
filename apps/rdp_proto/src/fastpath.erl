@@ -80,12 +80,12 @@ decode_inp_events(<<Code:3, Flags:5, Rest/binary>>) ->
                         if CapsLock == 1 -> [capslock]; true -> [] end ++
                         if NumLock == 1 -> [numlock]; true -> [] end ++
                         if ScrollLock == 1 -> [scrolllock]; true -> [] end,
-            [#ts_inpevt_sync{flags = FlagAtoms} | decode_inp_events(Rest)];
+            [#ts_inpevt_sync{flags = FlagAtoms} | decode_inp_events(Rem)];
         ?FP_INP_UNICODE ->
             <<CodePoint:16/little, Rem/binary>> = Rest,
             <<_:4, Release:1>> = <<Flags:5>>,
             Action = if Release == 1 -> up; true -> down end,
-            [#ts_inpevt_unicode{code = CodePoint, action = Action} | decode_inp_events(Rest)];
+            [#ts_inpevt_unicode{code = CodePoint, action = Action} | decode_inp_events(Rem)];
         Other ->
             [#fp_inp_unknown{type = Code, flags = Flags}]
     end.
