@@ -42,7 +42,6 @@ init([Opts0]) ->
             end;
         _ -> LdapOptions1 = LdapOptions0, false
     end,
-    lager:info("opening ldap to ~p (options = ~p)", [Hosts, LdapOptions1]),
     {ok, C} = eldap:open(Hosts, LdapOptions1),
     case StartTLS of
         true ->
