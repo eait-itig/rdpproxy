@@ -20,7 +20,13 @@ init(Req, _Options) ->
             case http_api:peer_allowed(IpBin, PeerIp) of
                 true ->
                     StatusBin = cowboy_req:binding(status, Req),
+                    Peer = iolist_to_binary(io_lib:format("~B.~B.~B.~B", tuple_to_list(PeerIp))),
+                    Meta = jsxd:thread([
+                        {set, [<<"hypervisor">>], Peer},
+                        {set, [<<"status">>], StatusBin}
+                        ], []),
                     %lager:info("~p is now ~p", [IpBin, StatusBin]),
+                    ok = db_host_meta:put(IpBin, Meta),
                     ok = db_host_status:put(IpBin, StatusBin),
                     Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                     {ok, Req2, none};

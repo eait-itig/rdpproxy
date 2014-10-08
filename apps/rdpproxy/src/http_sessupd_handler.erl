@@ -27,6 +27,13 @@ init(Req, _Options) ->
                             {ok, Req2, none};
                         UserBin ->
                             %lager:info("~p register ONLY session for ~p", [IpBin, UserBin]),
+                            Meta = jsxd:thread([
+                                {set, [<<"sessions">>, 0, <<"user">>], UserBin},
+                                {set, [<<"sessions">>, 0, <<"type">>], cowboy_req:binding(type, Req)},
+                                {set, [<<"sessions">>, 0, <<"start">>], binary_to_integer(cowboy_req:binding(time, Req))}
+                                ], []),
+                            ok = db_host_meta:put(IpBin, Meta),
+
                             {ok,_} = db_user_status:clear(IpBin),
                             ok = db_user_status:put(UserBin, IpBin),
                             Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),

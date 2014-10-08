@@ -17,6 +17,7 @@ start() ->
             {"/status_update/:ip/:status", http_statupd_handler, []},
             {"/session_update/:ip", http_sessupd_handler, []},
             {"/session_update/:ip/:type/:user/:time", http_sessupd_handler, []},
+            {"/api/host/:ip", http_host_handler, []},
 
             {"/[...]", cowboy_static,
                 {priv_dir, rdpproxy, [<<"webroot">>], [
