@@ -65,6 +65,8 @@ init(_Args) ->
             [Conf])
     end, rdpproxy:config(ldap, [])),
 
+    {ok, _} = timer:apply_interval(30000, db_cookie, expire, []),
+
     {ok, {
         {one_for_one, 60, 60},
         [

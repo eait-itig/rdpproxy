@@ -113,6 +113,9 @@ no_redir({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
         #ts_inpevt_key{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(no_redir, S, [Event]);
+        #ts_inpevt_unicode{code = _Code} ->
+            Event = { [{tag, focus}], Evt },
+            handle_root_events(no_redir, S, [Event]);
         _ ->
             {next_state, no_redir, S}
     end;
@@ -205,6 +208,9 @@ login({input, F, Evt}, S = #state{frontend = F}) ->
             Event = { [{id, root}], focus_next },
             handle_root_events(login, S, [Event]);
         #ts_inpevt_key{code = _Code} ->
+            Event = { [{tag, focus}], Evt },
+            handle_root_events(login, S, [Event]);
+        #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(login, S, [Event]);
         _ ->
@@ -323,6 +329,9 @@ waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
             Event = { [{id, root}], focus_next },
             handle_root_events(waiting, S, [Event]);
         #ts_inpevt_key{code = _Code} ->
+            Event = { [{tag, focus}], Evt },
+            handle_root_events(waiting, S, [Event]);
+        #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(waiting, S, [Event]);
         _ ->

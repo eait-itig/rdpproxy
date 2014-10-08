@@ -152,6 +152,23 @@ handle(#ts_inpevt_key{code = enter, action = down}, Wd = #widget{id = Id}) ->
 handle(E = #ts_inpevt_key{code = space}, Wd = #widget{}) ->
     handle(E#ts_inpevt_key{code = {32, 32}}, Wd);
 
+handle(#ts_inpevt_unicode{code = Codepoint, action = down}, Wd = #widget{tags = T, state = S}) ->
+    Char = unicode:characters_to_binary([Codepoint], {utf16, little}, utf8),
+
+    #state{xs = Xs0, text = Text0, cursor = Cursor0, mask = M} = S,
+    TextBefore = binary:part(Text0, {0, Cursor0}),
+    XsBefore = lists:sublist(Xs0, Cursor0 + 1),
+
+    TextAfter0 = binary:part(Text0, {Cursor0, byte_size(Text0) - Cursor0}),
+    TextAfter1 = <<Char/binary, TextAfter0/binary>>,
+
+    Xs1 = XsBefore ++ calc_xs(TextBefore, TextAfter1, Wd#widget.size, M),
+    Text1 = <<TextBefore/binary, TextAfter1/binary>>,
+    Cursor1 = Cursor0 + 1,
+
+    S2 = S#state{xs = Xs1, text = Text1, cursor = Cursor1},
+    handle(redraw_text, Wd#widget{state = S2});
+
 handle(#ts_inpevt_key{code = {Unshift, Shift}, action = down}, Wd = #widget{tags = T, state = S}) ->
     Char = case lists:member(shift_held, T) of
         true -> Shift;
