@@ -51,9 +51,9 @@ to_json(Req, S = #state{meta = Meta}) ->
 from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
 	{ok, Json, Req2} = cowboy_req:body(Req),
 	Meta = jsx:decode(Json),
-	Peer = iolist_to_binary(io_lib:format("~B.~B.~B.~B", tuple_to_list(Peer))),
-	Meta2 = jsxd:set([<<"hypervisor">>], Peer, Meta),
-	case db_host_meta:put(Ip, Meta) of
+	PeerBin = iolist_to_binary(io_lib:format("~B.~B.~B.~B", tuple_to_list(Peer))),
+	Meta2 = jsxd:set([<<"hypervisor">>], PeerBin, Meta),
+	case db_host_meta:put(Ip, Meta2) of
 		ok -> {true, Req2, S};
 		Err -> lager:error("put returned ~p", [Err]), {false, Req2, S}
 	end.

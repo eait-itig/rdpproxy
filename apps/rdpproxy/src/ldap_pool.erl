@@ -13,7 +13,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 
--record(state, {c}).
+-record(state, {c, opts}).
 
 start_link(Args) ->
     gen_server:start_link(?MODULE, Args, []).
@@ -22,7 +22,7 @@ lookup_ad_ldap(Domain) ->
     Results = inet_res:lookup("_ldap._tcp." ++ Domain, in, srv),
     [Name || {_Prio, _Weight, 389, Name} <- Results].
 
-init([Opts0]) ->
+connect(Opts0) ->
     Hosts = case lists:keytake(ad_domain, 1, Opts0) of
         {value, {_, Domain}, Opts1} ->
             case lookup_ad_ldap(Domain) of
@@ -51,7 +51,18 @@ init([Opts0]) ->
             end;
         false -> ok
     end,
-	{ok, #state{c = C}, 30000}.
+    {ok, #state{c = C, opts = Opts0}, 30000}.
+
+init([Opts0]) ->
+    case fuse:ask(ldap_fuse, sync) of
+        ok -> connect(Opts0);
+        blown -> {ok, #state{opts = Opts0}, 10000}
+    end.
+
+handle_call({bind, Dn, Password}, _From, #state{c=undefined}=State) ->
+    {reply, {error, fuse_blown}, State};
+handle_call({search, SearchOpts}, _From, #state{c=undefined}=State) ->
+    {reply, {error, fuse_blown}, State};
 
 handle_call({bind, Dn, Password}, _From, #state{c=Conn}=State) ->
     {reply, eldap:simple_bind(Conn, Dn, Password), State, 30000};
@@ -63,11 +74,18 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State, 30000}.
 
+handle_info(timeout, #state{c = undefined} = State) ->
+    case fuse:ask(ldap_fuse, sync) of
+        ok -> {stop, normal, State};
+        blown -> {noreply, State, 10000}
+    end;
 handle_info(timeout, State) ->
     {stop, normal, State};
 handle_info(_Info, State) ->
     {noreply, State, 30000}.
 
+terminate(_Reason, #state{c=undefined}) ->
+    ok;
 terminate(_Reason, #state{c=Conn}) ->
     eldap:close(Conn),
     ok.

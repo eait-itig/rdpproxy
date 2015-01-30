@@ -314,7 +314,7 @@ waiting(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(F, Orders),
-    {ok, _} = timer:send_after(500, find_machine),
+    {ok, _} = timer:send_after(1000, find_machine),
     {next_state, waiting, S#state{root = Root2}};
 
 waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
@@ -339,8 +339,8 @@ waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
     end;
 
 waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
-    case db_user_status:get(Sess#session.user) of
-        {ok, Ip} ->
+    case db_host_meta:find(user, Sess#session.user) of
+        {ok, [{Ip, Meta} | _]} ->
             lager:info("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
             {ok, Cookie} = db_cookie:new(Sess#session{
                 host = Ip, port = 3389}),
@@ -352,16 +352,17 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
         _ ->
             case db_host_meta:find(status, <<"available">>) of
                 {ok, Metas} ->
-                    SortedMetas = lists:sort(fun({_,A}, {_,B}) ->
+                    SortedMetas = lists:sort(fun({IpA,A}, {IpB,B}) ->
                         RoleA = proplists:get_value(<<"role">>, A),
                         RoleB = proplists:get_value(<<"role">>, B),
                         UpdatedA = proplists:get_value(<<"updated">>, A),
                         UpdatedB = proplists:get_value(<<"updated">>, B),
                         if
-                            (RoleA =:= <<"vlab">>) and (not RoleB =:= <<"vlab">>) -> true;
-                            (RoleB =:= <<"vlab">>) and (not RoleA =:= <<"vlab">>) -> false;
+                            (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) -> true;
+                            (RoleB =:= <<"vlab">>) and (not (RoleA =:= <<"vlab">>)) -> false;
                             (UpdatedA > UpdatedB) -> true;
-                            true -> false
+                            (UpdatedA < UpdatedB) -> false;
+                            true -> (IpA =< IpB)
                         end
                     end, Metas),
                     case SortedMetas of
@@ -387,11 +388,10 @@ waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
     gen_fsm:send_event(F, close),
     {stop, normal, S}.
 
-handle_info(find_machine, State, S = #state{}) ->
-    ?MODULE:State(find_machine, S);
-
 handle_info({'DOWN', MRef, process, _, _}, _State, S = #state{mref = MRef}) ->
-    {stop, normal, S}.
+    {stop, normal, S};
+handle_info(Msg, State, S = #state{}) ->
+    ?MODULE:State(Msg, S).
 
 %% @private
 terminate(_Reason, _State, _Data) ->

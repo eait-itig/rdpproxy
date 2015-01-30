@@ -43,6 +43,7 @@ start() ->
 
 %% @private
 start(_StartType, _StartArgs) ->
+    fuse:install(ldap_fuse, { {standard, 3, 10}, {reset, 30000} }),
     start().
 
 %% @private

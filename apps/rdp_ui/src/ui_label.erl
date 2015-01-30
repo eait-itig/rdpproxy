@@ -11,12 +11,15 @@
 -include("ui.hrl").
 -include_lib("cairerl/include/cairerl.hrl").
 
--export([handle/2]).
+-export([handle/2, get_text/1]).
 
 color_set_order({R, G, B}) ->
     #cairo_set_source_rgba{r = float(R), g = float(G), b = float(B)}.
 
 -record(state, {align, text, bgcolor={0,0,0}, fgcolor={1,1,1}}).
+
+get_text(Wd = #widget{state = #state{text = Text}}) ->
+    Text.
 
 handle({init, Align, Text}, Wd = #widget{size = Sz}) ->
     handle({resize, Sz}, Wd#widget{state = #state{align = Align, text = Text}});

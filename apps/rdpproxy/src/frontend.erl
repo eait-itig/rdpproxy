@@ -91,6 +91,10 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
             {ok, Sess = #session{host = HostBin, port = Port, user = User}} ->
                 ok = db_host_status:put(HostBin, <<"busy">>),
                 _ = db_user_status:put(User, HostBin),
+                ok = db_host_meta:put(HostBin, jsxd:thread([
+                        {set, <<"status">>, <<"busy">>},
+                        {set, [<<"sessions">>, 0, <<"user">>], User}
+                    ], [])),
                 {ok, Backend} = backend:start_link(self(), binary_to_list(HostBin), Port, Pkt),
                 {next_state, wait_proxy, NewData#data{backend = Backend, session = Sess}};
 
@@ -102,10 +106,14 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 gen_tcp:send(Sock, Packet),
 
                 inet:setopts(Sock, [{packet, raw}]),
+                Ciphers = [{A,B,C}||{A,B,C}<-ssl:cipher_suites(),not (B =:= des_cbc),not (C =:= md5)],
                 {ok, SslSock} = ssl:ssl_accept(Sock,
+                    [{ciphers, Ciphers}, {honor_cipher_order, true} |
                     rdpproxy:config([frontend, ssl_options], [
                         {certfile, "etc/cert.pem"},
-                        {keyfile, "etc/key.pem"}])),
+                        {keyfile, "etc/key.pem"}])]),
+                {ok, {Ver, Cipher}} = ssl:connection_info(SslSock),
+                lager:info("~p: accepted tls ~p, cipher = ~p", [Data#data.peer, Ver, Cipher]),
                 ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
                 {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
         end;
@@ -486,10 +494,12 @@ wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, bac
     gen_tcp:send(Sock, Packet),
 
     inet:setopts(Sock, [{packet, raw}]),
+    Ciphers = [{A,B,C}||{A,B,C}<-ssl:cipher_suites(),not (B =:= des_cbc),not (C =:= md5)],
     {ok, SslSock} = ssl:ssl_accept(Sock,
+                [{ciphers, Ciphers}, {honor_cipher_order, true} |
                     rdpproxy:config([frontend, ssl_options], [
                         {certfile, "etc/cert.pem"},
-                        {keyfile, "etc/key.pem"}])),
+                        {keyfile, "etc/key.pem"}])]),
     ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
     lists:foreach(fun(Bin) ->
         ssl:send(Backsock, Bin)

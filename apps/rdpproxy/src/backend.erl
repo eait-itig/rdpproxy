@@ -38,14 +38,16 @@ init([Frontend, Address, Port, OrigCr]) ->
             {ok, initiation, #data{addr = Address, port = Port, frontend = Frontend, sock = Sock, usref = OrigCr#x224_cr.src, origcr = OrigCr}};
 
         {error, Reason} ->
+            db_host_meta:put(Address, [{<<"status">>,<<"dead">>}]),
             {stop, Reason}
     end.
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed} = Pkt},
         #data{addr = Address, port = Port, sock = Sock, usref = UsRef} = Data) ->
+    db_host_meta:put(Address, [{<<"status">>,<<"dead">>}]),
     {stop, no_ssl, Data};
 
-initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend} = Data) ->
+initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend, addr = Address} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected, rdp_flags = Flags} = Pkt,
     lager:info("backend got cc: ~s", [x224:pretty_print(Pkt)]),
 
@@ -62,6 +64,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
         {next_state, proxy_intercept, Data#data{sslsock = SslSock, themref = ThemRef}};
     true ->
         gen_tcp:close(Sock),
+        db_host_meta:put(Address, [{<<"status">>,<<"dead">>}]),
         {stop, no_ssl, Data}
     end.
 

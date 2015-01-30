@@ -33,9 +33,10 @@ encode_new_val(V0) ->
 	<<MS:44/big, S:20/big, V/binary>>.
 
 decode_vals([]) -> [];
-decode_vals([V | Rest]) when is_binary(V) ->
+decode_vals([V | Rest]) when is_binary(V) and (byte_size(V) > 0) ->
 	<<MS:44/big, S:20/big, Val/binary>> = V,
-	[{{MS,S}, binary_to_term(Val)} | decode_vals(Rest)].
+	[{{MS,S}, binary_to_term(Val)} | decode_vals(Rest)];
+decode_vals([V | Rest]) -> decode_vals(Rest).
 
 get(Ip) ->
 	poolboy:transaction(?POOL, fun(C) ->
@@ -56,7 +57,7 @@ put(Ip, Meta0) ->
 			{ok, R} ->
 				OldVs = riakc_obj:get_values(R),
 				NewV = merge([encode_new_val(Meta) | OldVs]),
-				{riakc_obj:update_value(R, NewV), NewV};
+				{riakc_obj:update_value(R, encode_new_val(NewV)), NewV};
 			_ ->
 				{riakc_obj:new(?BUCKET, Ip, encode_new_val(Meta)), Meta}
 		end
@@ -94,7 +95,7 @@ find(Index, Value) ->
 						{ok, RObj} ->
 							Vs = merge(riakc_obj:get_values(RObj)),
 							case jsxd:get(Path, Vs) of
-								Value -> [{K, Vs} | Acc];
+								{ok, Value} -> [{K, Vs} | Acc];
 								_ -> Acc
 							end;
 						_ -> Acc
