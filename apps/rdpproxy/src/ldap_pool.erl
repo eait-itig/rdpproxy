@@ -22,8 +22,11 @@ lookup_ad_ldap(Domain) ->
     Results = inet_res:lookup("_ldap._tcp." ++ Domain, in, srv),
     [Name || {_Prio, _Weight, 389, Name} <- Results].
 
+shuffle(List) ->
+    [V || {_,V} <- lists:sort([{crypto:rand_uniform(1,1 bsl 32), V} || V <- List])].
+
 connect(Opts0) ->
-    Hosts = case lists:keytake(ad_domain, 1, Opts0) of
+    Hosts0 = case lists:keytake(ad_domain, 1, Opts0) of
         {value, {_, Domain}, Opts1} ->
             case lookup_ad_ldap(Domain) of
                 [] -> error(no_ad_ldap_servers);
@@ -33,6 +36,7 @@ connect(Opts0) ->
             {value, {_, SetHosts}, Opts1} = lists:keytake(hosts, 1, Opts0),
             SetHosts
     end,
+    Hosts = shuffle(Hosts0),
     LdapOptions0 = proplists:get_value(options, Opts1),
     StartTLS = case lists:keytake(starttls, 1, LdapOptions0) of
         {value, {_, V}, TempOpts} ->
@@ -51,11 +55,23 @@ connect(Opts0) ->
             end;
         false -> ok
     end,
+    case proplists:get_value(bind, Opts1) of
+        undefined -> ok;
+        [BindDn, Password] ->
+            ok = eldap:simple_bind(C, BindDn, Password)
+    end,
     {ok, #state{c = C, opts = Opts0}, 30000}.
 
 init([Opts0]) ->
     case fuse:ask(ldap_fuse, sync) of
-        ok -> connect(Opts0);
+        ok ->
+            case (catch connect(Opts0)) of
+                {'EXIT', Reason} ->
+                    lager:error("LDAP connection failed: ~p", [Reason]),
+                    ok = fuse:melt(ldap_fuse),
+                    {ok, #state{opts = Opts0}, 1000};
+                R -> R
+            end;
         blown -> {ok, #state{opts = Opts0}, 10000}
     end.
 
@@ -64,10 +80,28 @@ handle_call({bind, Dn, Password}, _From, #state{c=undefined}=State) ->
 handle_call({search, SearchOpts}, _From, #state{c=undefined}=State) ->
     {reply, {error, fuse_blown}, State};
 
-handle_call({bind, Dn, Password}, _From, #state{c=Conn}=State) ->
-    {reply, eldap:simple_bind(Conn, Dn, Password), State, 30000};
-handle_call({search, SearchOpts}, _From, #state{c=Conn}=State) ->
-    {reply, eldap:search(Conn, SearchOpts), State, 30000};
+handle_call({bind, Dn, Password}, From, #state{c=Conn}=State) ->
+    case eldap:simple_bind(Conn, Dn, Password) of
+        Ret = ok ->
+            {reply, Ret, State, 30000};
+        Ret = {error, Reason} when Reason =:= timeout; Ret =:= ldap_closed ->
+            fuse:melt(ldap_fuse),
+            gen_server:reply(From, Ret),
+            {stop, normal, State};
+        Ret = {error, _} ->
+            {reply, Ret, State, 30000}
+    end;
+handle_call({search, SearchOpts}, From, #state{c=Conn}=State) ->
+    case eldap:search(Conn, SearchOpts) of
+        Ret = {ok, _} ->
+            {reply, Ret, State, 30000};
+        Ret = {error, Reason} when Reason =:= timeout; Ret =:= ldap_closed ->
+            fuse:melt(ldap_fuse),
+            gen_server:reply(From, Ret),
+            {stop, normal, State};
+        Ret = {error, _} ->
+            {reply, Ret, State, 30000}
+    end;
 handle_call(_Request, _From, State) ->
     {reply, ok, State, 30000}.
 
