@@ -28,7 +28,7 @@ start_link(Frontend, Address, Port, OrigCr) ->
 init([Frontend, Address, Port, OrigCr]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
-    case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}]) of
+    case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}], 2000) of
         {ok, Sock} ->
             Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
             lager:info("backend send cr: ~s", [x224:pretty_print(Cr)]),
@@ -38,13 +38,13 @@ init([Frontend, Address, Port, OrigCr]) ->
             {ok, initiation, #data{addr = Address, port = Port, frontend = Frontend, sock = Sock, usref = OrigCr#x224_cr.src, origcr = OrigCr}};
 
         {error, Reason} ->
-            db_host_meta:put(Address, [{<<"status">>,<<"dead">>}]),
+            db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
             {stop, Reason}
     end.
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed} = Pkt},
         #data{addr = Address, port = Port, sock = Sock, usref = UsRef} = Data) ->
-    db_host_meta:put(Address, [{<<"status">>,<<"dead">>}]),
+    db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
     {stop, no_ssl, Data};
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend, addr = Address} = Data) ->
@@ -64,7 +64,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
         {next_state, proxy_intercept, Data#data{sslsock = SslSock, themref = ThemRef}};
     true ->
         gen_tcp:close(Sock),
-        db_host_meta:put(Address, [{<<"status">>,<<"dead">>}]),
+        db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
         {stop, no_ssl, Data}
     end.
 
