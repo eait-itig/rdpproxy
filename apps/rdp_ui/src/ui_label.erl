@@ -51,7 +51,7 @@ handle({resize, {W,H}}, Wd = #widget{state = S}) ->
         end, NLines)),
     LineWs = [{N, LW} || {{textext,N}, #cairo_tag_text_extents{width = LW}} <- Tags],
     NLineW = [{N, proplists:get_value(N, NLines), proplists:get_value(N, LineWs)} || N <- lists:seq(1, length(Lines))],
-    #cairo_tag_font_extents{height = FontHeight} = proplists:get_value(fontext, Tags),
+    #cairo_tag_font_extents{height = FontHeight, descent = FontDescent} = proplists:get_value(fontext, Tags),
     {ok, _, Image1} = cairerl_nif:draw(Image0, [], [
         color_set_order(Bg),
         #cairo_rectangle{width=W,height=H},
@@ -64,9 +64,9 @@ handle({resize, {W,H}}, Wd = #widget{state = S}) ->
             [#cairo_new_path{},
              #cairo_identity_matrix{}] ++
             case Align of
-                center -> [#cairo_translate{x = W/2 - LWidth/2, y = FontHeight * N}];
-                left -> [#cairo_translate{y = FontHeight * N}];
-                right -> [#cairo_translate{x = W - LWidth, y = FontHeight * N}]
+                center -> [#cairo_translate{x = W/2 - LWidth/2, y = FontHeight * N - FontDescent}];
+                left -> [#cairo_translate{y = FontHeight * N - FontDescent}];
+                right -> [#cairo_translate{x = W - LWidth, y = FontHeight * N - FontDescent}]
             end ++
             [#cairo_show_text{text = <<Line/binary, 0>>}]
         end, NLineW)),
