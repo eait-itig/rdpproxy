@@ -89,8 +89,6 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
     if HasSsl ->
         case db_cookie:get(Cookie) of
             {ok, Sess = #session{host = HostBin, port = Port, user = User}} ->
-                ok = db_host_status:put(HostBin, <<"busy">>),
-                _ = db_user_status:put(User, HostBin),
                 ok = db_host_meta:put(HostBin, jsxd:thread([
                         {set, <<"status">>, <<"busy">>},
                         {set, [<<"sessions">>, 0, <<"user">>], User}

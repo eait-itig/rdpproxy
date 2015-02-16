@@ -22,8 +22,6 @@ init(Req, _Options) ->
                     case cowboy_req:binding(user, Req) of
                         undefined ->
                             %lager:info("~p cleared all sessions", [IpBin]),
-                            ok = db_host_meta:put(IpBin, [{<<"sessions">>, []}]),
-                            {ok,_} = db_user_status:clear(IpBin),
                             Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                             {ok, Req2, none};
                         UserBin ->
@@ -35,8 +33,6 @@ init(Req, _Options) ->
                                 ], []),
                             ok = db_host_meta:put(IpBin, Meta),
 
-                            {ok,_} = db_user_status:clear(IpBin),
-                            ok = db_user_status:put(UserBin, IpBin),
                             Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                             {ok, Req2, none}
                     end;
@@ -51,7 +47,6 @@ init(Req, _Options) ->
                 true ->
                     UserBin = cowboy_req:binding(user, Req),
                     %lager:info("~p register session for ~p", [IpBin, UserBin]),
-                    ok = db_user_status:put(UserBin, IpBin),
                     Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                     {ok, Req2, none};
                 false ->
