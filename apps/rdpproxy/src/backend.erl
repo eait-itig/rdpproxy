@@ -25,6 +25,10 @@ start_link(Frontend, Address, Port, OrigCr) ->
 -record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, frontend, origcr}).
 
 %% @private
+init([Frontend, Address, Port]) ->
+    init([Frontend, Address, Port, #x224_cr{
+        class = 0, dst = 0, src = crypto:rand_uniform(2000,9999)
+        }]);
 init([Frontend, Address, Port, OrigCr]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
@@ -193,8 +197,9 @@ handle_info(_Msg, State, Data) ->
     {next_state, State, Data}.
 
 %% @private
-terminate(_Reason, _State, _Data) ->
-    ok.
+terminate(_Reason, _State, #data{sslsock = SslSock, sock = Sock}) ->
+    ssl:close(SslSock),
+    gen_tcp:close(Sock).
 
 %% @private
 % default handler

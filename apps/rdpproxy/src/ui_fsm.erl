@@ -355,11 +355,19 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                     SortedMetas = lists:sort(fun({IpA,A}, {IpB,B}) ->
                         RoleA = proplists:get_value(<<"role">>, A),
                         RoleB = proplists:get_value(<<"role">>, B),
+                        ImageA = proplists:get_value(<<"image">>, A, <<>>),
+                        ImageB = proplists:get_value(<<"image">>, B, <<>>),
+                        IsLabA = (binary:longest_common_prefix([ImageA, <<"lab">>]) =/= 0),
+                        IsLabB = (binary:longest_common_prefix([ImageB, <<"lab">>]) =/= 0),
                         UpdatedA = proplists:get_value(<<"updated">>, A),
                         UpdatedB = proplists:get_value(<<"updated">>, B),
                         if
                             (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) -> true;
                             (RoleB =:= <<"vlab">>) and (not (RoleA =:= <<"vlab">>)) -> false;
+                            IsLabA and (not IsLabB) -> true;
+                            IsLabB and (not IsLabA) -> false;
+                            (ImageA > ImageB) -> false;
+                            (ImageA < ImageB) -> true;
                             (UpdatedA > UpdatedB) -> true;
                             (UpdatedA < UpdatedB) -> false;
                             true -> (IpA =< IpB)
