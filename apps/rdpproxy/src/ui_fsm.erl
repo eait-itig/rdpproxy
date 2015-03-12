@@ -35,7 +35,7 @@ init([Frontend]) ->
 send_orders(F, Orders) ->
     lists:foreach(fun(U) ->
         gen_fsm:send_event(F, {send_update, U})
-    end, ui:orders_to_updates(Orders)).
+    end, ui:orders_to_updates(ui:dedupe_orders(Orders))).
 
 handle_root_events(State, S = #state{frontend = F, root = Root}, Events) ->
     {Root2, Orders, UiEvts} = ui:handle_events(Root, Events),

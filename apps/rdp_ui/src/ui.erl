@@ -13,7 +13,7 @@
 
 -export([new/1, handle_events/2, select/2, print/1]).
 -export([default_handler/2, selector_matches/2]).
--export([divide_bitmap/1, divide_bitmap/2, orders_to_updates/1]).
+-export([divide_bitmap/1, divide_bitmap/2, orders_to_updates/1, dedupe_orders/1]).
 
 -spec new(Size :: size()) -> {widget(), [order()]}.
 new(Size) ->
@@ -256,6 +256,23 @@ rect_to_ts_order(#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
     #ts_order_opaquerect{dest={round(X),round(Y)},
         size={round(W),round(H)},
         color={round(R*256), round(G*256), round(B*256)}}.
+
+dedupe_orders(L) ->
+    dedupe_orders(lists:reverse(L), [], gb_sets:new()).
+
+dedupe_orders([], SoFar, _) -> SoFar;
+dedupe_orders([O = #rect{dest = {X,Y}, size = {W,H}} | Rest], SoFar, Set) ->
+    case gb_sets:is_element({X,Y,W,H}, Set) of
+        true -> dedupe_orders(Rest, SoFar, Set);
+        false -> dedupe_orders(Rest, [O | SoFar], gb_sets:add_element({X,Y,W,H}, Set))
+    end;
+dedupe_orders([O = #image{dest = {X,Y}, image = #cairo_image{width=W, height=H}} | Rest], SoFar, Set) ->
+    case gb_sets:is_element({X,Y,W,H}, Set) of
+        true -> dedupe_orders(Rest, SoFar, Set);
+        false -> dedupe_orders(Rest, [O | SoFar], gb_sets:add_element({X,Y,W,H}, Set))
+    end;
+dedupe_orders([O = #null_order{} | Rest], SoFar, Set) ->
+    dedupe_orders(Rest, [O | SoFar], Set).
 
 orders_to_updates([]) -> [];
 orders_to_updates(L = [#rect{} | _]) ->
