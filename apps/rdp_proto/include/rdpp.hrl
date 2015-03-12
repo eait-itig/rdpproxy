@@ -21,6 +21,8 @@
 -define(GUID_JPEG, <<16#430C9EED:32/little, 16#1BAF:16/little, 16#4CE6:16/little, 16#86, 16#9A, 16#CB, 16#8B, 16#37, 16#B6, 16#62, 16#37>>).
 -define(GUID_IGNORE, <<16#9C4351A6:32/little, 16#3535:16/little, 16#42AE:16/little, 16#91, 16#0C, 16#CD, 16#FC, 16#E5, 16#76, 16#0B, 16#58>>).
 
+-record(ts_vchan, {flags = [], data}).
+
 -record(ts_security, {secflags = [], random=[]}).
 -record(ts_info, {secflags = [], codepage=0, flags = [mouse, noaudio], compression='8k', domain="", username="", password="", shell="", workdir="", client_address, client_dir, session_id, perf_flags, reconnect_cookie, dynamic_dst, extra, timezone}).
 -record(ts_timezone, {bias, name, dst_name, dst_bias, dst_start, dst_end}).

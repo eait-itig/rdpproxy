@@ -15,6 +15,7 @@
 -include_lib("rdp_proto/include/tsud.hrl").
 -include_lib("rdp_proto/include/rdpp.hrl").
 -include_lib("rdp_proto/include/fastpath.hrl").
+-include_lib("rdp_proto/include/cliprdr.hrl").
 
 -include("session.hrl").
 
@@ -101,9 +102,9 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata,dynvc_gfx]},
                 {ok, RespData} = x224:encode(Resp),
                 {ok, Packet} = tpkt:encode(RespData),
+                inet:setopts(Sock, [{packet, raw}]),
                 gen_tcp:send(Sock, Packet),
 
-                inet:setopts(Sock, [{packet, raw}]),
                 Ciphers = [{A,B,C}||{A,B,C}<-ssl:cipher_suites(),not (B =:= des_cbc),not (C =:= md5)],
                 {ok, SslSock} = ssl:ssl_accept(Sock,
                     [{ciphers, Ciphers}, {honor_cipher_order, true} |
@@ -480,11 +481,32 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
 
 run_ui({mcs_pdu, #mcs_data{user = Them, data = Data, channel = Chan}}, D = #data{mcs = #mcs_state{them = Them, us = Us, chans = Chans}}) ->
     ChanName = case proplists:get_value(Chan, Chans) of
-        undefined -> unknown;
-        #tsud_net_channel{name = Name} -> Name
-    end,
-    lager:info("run_ui got data on channel ~p (~p): ~p", [ChanName, Chan, Data]),
-    {next_state, run_ui, D};
+        undefined ->
+            lager:info("run_ui got data on unknown vchannel ~p: ~p", [Chan, Data]),
+            {next_state, run_ui, D};
+
+        #tsud_net_channel{name = Name} ->
+            case rdpp:decode_vchan(Data) of
+                {ok, VPkt = #ts_vchan{flags = VFlags, data = VData}} ->
+                    case string:to_lower(Name) of
+                        "cliprdr" ->
+                            case cliprdr:decode(VData) of
+                                {ok, ClipPdu} ->
+                                    lager:info("cliprdr: ~s", [cliprdr:pretty_print(ClipPdu)]),
+                                    {next_state, run_ui, D};
+                                Err ->
+                                    lager:info("cliprdr decode failed: ~p (~s)", [Err, rdpp:pretty_print(VPkt)]),
+                                    {next_state, run_ui, D}
+                            end;
+                        _ ->
+                            lager:info("unhandled data on vchannel ~p (~p): ~s", [Name, Chan, rdpp:pretty_print(VPkt)]),
+                            {next_state, run_ui, D}
+                    end;
+                _ ->
+                    lager:info("run_ui got invalid data on vchannel ~p (~p): ~p", [Name, Chan, Data]),
+                    {next_state, run_ui, D}
+            end
+    end;
 
 run_ui({x224_pdu, #x224_dr{}}, D = #data{sslsock = SslSock}) ->
     ssl:close(SslSock),

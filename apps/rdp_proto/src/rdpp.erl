@@ -19,7 +19,10 @@
 -export([encode_basic/1, encode_sharecontrol/1]).
 -export([encode_ts_order/1, encode_ts_update_bitmaps/1]).
 -export([decode_ts_confirm/2]).
+-export([encode_vchan/1, decode_vchan/1]).
 -export([pretty_print/1]).
+
+-export([decode_bit_flags/2, encode_bit_flags/2]).
 
 -define(pp(Rec),
 pretty_print(Rec, N) ->
@@ -77,6 +80,7 @@ pretty_print(Record) ->
 ?pp(ts_cap_bitmap_codecs);
 ?pp(ts_cap_bitmap_codec);
 ?pp(ts_cap_colortable);
+?pp(ts_vchan);
 pretty_print(_, _) ->
     no.
 
@@ -162,8 +166,9 @@ decode_bit_flags(<<_Flag:1, Rest/bitstring>>, [skip | RestAtoms]) ->
 decode_bit_flags(Bits, [{FlagAtom, Width} | RestAtoms]) ->
     <<Flag:Width/little, Rest/bitstring>> = Bits,
     case Flag of
+        0 -> decode_bit_flags(Rest, RestAtoms);
         1 -> sets:add_element(FlagAtom, decode_bit_flags(Rest, RestAtoms));
-        0 -> decode_bit_flags(Rest, RestAtoms)
+        N -> sets:add_element({FlagAtom, N}, decode_bit_flags(Rest, RestAtoms))
     end;
 decode_bit_flags(<<Flag:1, Rest/bitstring>>, [FlagAtom | RestAtoms]) ->
     case Flag of
@@ -217,6 +222,20 @@ encode_sec_flags({Type, Flags}) ->
     FlagSet = sets:from_list([Type | Flags]),
     <<Out:16/big>> = encode_bit_flags(FlagSet, ?sec_flags),
     Out.
+
+encode_vchan(#ts_vchan{flags = FlagSet, data = Data}) ->
+    <<Flags:32/big>> = encode_bit_flags(FlagSet, ?vchan_flags),
+    Len = byte_size(Data),
+    <<Len:32/little, Flags:32/little, Data/binary>>.
+
+decode_vchan(<<Len:32/little, Flags:32/little, Data:Len/binary, Pad/binary>>) ->
+    FlagSet = decode_bit_flags(<<Flags:32/big>>, ?vchan_flags),
+    PadLen = 8*byte_size(Pad),
+    <<0:PadLen>> = Pad,
+    {ok, #ts_vchan{flags = sets:to_list(FlagSet), data = Data}};
+
+decode_vchan(_) ->
+    {error, bad_packet}.
 
 encode_sharecontrol(Pdu) ->
     {InnerType, Inner} = case Pdu of
@@ -1034,7 +1053,7 @@ decode_ts_ext_info(Bin0, SoFar0 = #ts_info{}) ->
         end,
         fun(Bin, SoFar) ->
             case Bin of
-                <<Bias:32/little, NameBin:64/binary, DstEndBin:16/binary, StdBias:32/little, DstNameBin:64/binary, DstStartBin:16/binary, DstBias:32/little, Rest/binary>> ->
+                <<Bias:32/signed-little, NameBin:64/binary, DstEndBin:16/binary, StdBias:32/signed-little, DstNameBin:64/binary, DstStartBin:16/binary, DstBias:32/signed-little, Rest/binary>> ->
                     DstEnd = decode_ts_date(DstEndBin),
                     DstStart = decode_ts_date(DstStartBin),
                     [Name | _] = binary:split(NameBin, <<0, 0>>),
