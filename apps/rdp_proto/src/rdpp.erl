@@ -1034,7 +1034,7 @@ decode_ts_ext_info(Bin0, SoFar0 = #ts_info{}) ->
         end,
         fun(Bin, SoFar) ->
             case Bin of
-                <<Bias:32/little, NameBin:64/binary, DstEndBin:16/binary, Bias:32/little, DstNameBin:64/binary, DstStartBin:16/binary, DstBias:32/little, Rest/binary>> ->
+                <<Bias:32/little, NameBin:64/binary, DstEndBin:16/binary, StdBias:32/little, DstNameBin:64/binary, DstStartBin:16/binary, DstBias:32/little, Rest/binary>> ->
                     DstEnd = decode_ts_date(DstEndBin),
                     DstStart = decode_ts_date(DstStartBin),
                     [Name | _] = binary:split(NameBin, <<0, 0>>),

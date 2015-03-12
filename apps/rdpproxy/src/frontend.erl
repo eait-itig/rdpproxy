@@ -478,6 +478,14 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
             {next_state, rdp_capex, D}
     end;
 
+run_ui({mcs_pdu, #mcs_data{user = Them, data = Data, channel = Chan}}, D = #data{mcs = #mcs_state{them = Them, us = Us, chans = Chans}}) ->
+    ChanName = case proplists:get_value(Chan, Chans) of
+        undefined -> unknown;
+        #tsud_net_channel{name = Name} -> Name
+    end,
+    lager:info("run_ui got data on channel ~p (~p): ~p", [ChanName, Chan, Data]),
+    {next_state, run_ui, D};
+
 run_ui({x224_pdu, #x224_dr{}}, D = #data{sslsock = SslSock}) ->
     ssl:close(SslSock),
     {stop, normal, D}.
