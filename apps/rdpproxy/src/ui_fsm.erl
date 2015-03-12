@@ -342,13 +342,18 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
     case db_host_meta:find(user, Sess#session.user) of
         {ok, [{Ip, Meta} | _]} ->
             lager:info("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
-            {ok, Cookie} = db_cookie:new(Sess#session{
-                host = Ip, port = 3389}),
-            gen_fsm:send_event(F, {redirect,
-                Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
-                Sess#session.user, Sess#session.domain, Sess#session.password}),
-            {stop, normal, S};
-
+            case backend:probe(binary_to_list(Ip), 3389) of
+                ok ->
+                    {ok, Cookie} = db_cookie:new(Sess#session{
+                        host = Ip, port = 3389}),
+                    gen_fsm:send_event(F, {redirect,
+                        Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
+                        Sess#session.user, Sess#session.domain, Sess#session.password}),
+                    {stop, normal, S};
+                _ ->
+                    {ok, _} = timer:send_after(500, find_machine),
+                    {next_state, waiting, S}
+            end;
         _ ->
             case db_host_meta:find(status, <<"available">>) of
                 {ok, Metas} ->
@@ -376,12 +381,18 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                     case SortedMetas of
                         [{Ip, _Meta} | _] ->
                             lager:info("~p gets a new session on ~p", [Sess#session.user, Ip]),
-                            {ok, Cookie} = db_cookie:new(Sess#session{
-                                host = Ip, port = 3389}),
-                            gen_fsm:send_event(F, {redirect,
-                                Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
-                                Sess#session.user, Sess#session.domain, Sess#session.password}),
-                            {stop, normal, S};
+                            case backend:probe(binary_to_list(Ip), 3389) of
+                                ok ->
+                                    {ok, Cookie} = db_cookie:new(Sess#session{
+                                        host = Ip, port = 3389}),
+                                    gen_fsm:send_event(F, {redirect,
+                                        Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
+                                        Sess#session.user, Sess#session.domain, Sess#session.password}),
+                                    {stop, normal, S};
+                                _ ->
+                                    {ok, _} = timer:send_after(500, find_machine),
+                                    {next_state, waiting, S}
+                            end;
                         _ ->
                             {ok, _} = timer:send_after(500, find_machine),
                             {next_state, waiting, S}

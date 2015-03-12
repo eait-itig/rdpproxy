@@ -14,13 +14,32 @@
 -include_lib("rdp_proto/include/tsud.hrl").
 -include_lib("rdp_proto/include/rdpp.hrl").
 
--export([start_link/4]).
+-export([start_link/4, probe/2]).
 -export([initiation/2, proxy_intercept/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number(), OrigCr :: tuple()) -> {ok, pid()}.
 start_link(Frontend, Address, Port, OrigCr) ->
     gen_fsm:start_link(?MODULE, [Frontend, Address, Port, OrigCr], []).
+
+probe(Address, Port) ->
+    {ok, Pid} = gen_fsm:start(?MODULE, [self(), Address, Port], []),
+    MonRef = monitor(process, Pid),
+    probe_rx(Pid, MonRef, {error, bad_host}).
+
+probe_rx(Pid, MonRef, RetVal) ->
+    receive
+        {'$gen_event', {backend_ready, Pid, _, _}} ->
+            gen_fsm:send_event(Pid, close),
+            probe_rx(Pid, MonRef, ok);
+        {'DOWN', MonRef, process, Pid, no_ssl} ->
+            {error, no_ssl};
+        {'DOWN', MonRef, process, Pid, _} ->
+            RetVal
+    after 10000 ->
+        exit(Pid, kill),
+        probe_rx(Pid, MonRef, {error, timeout})
+    end.
 
 -record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, frontend, origcr}).
 
@@ -100,7 +119,10 @@ proxy_intercept({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = Ssl
     true ->
         ok = ssl:send(SslSock, Bin)
     end,
-    {next_state, proxy_intercept, Data}.
+    {next_state, proxy_intercept, Data};
+
+proxy_intercept(close, Data) ->
+    {stop, normal, Data}.
 
 proxy({data, Bin}, #data{sslsock = SslSock, frontend = Frontend} = Data) ->
     gen_fsm:send_event(Frontend, {backend_data, self(), Bin}),
@@ -112,7 +134,10 @@ proxy({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = SslSock, fron
     true ->
         ok = ssl:send(SslSock, Bin)
     end,
-    {next_state, proxy, Data}.
+    {next_state, proxy, Data};
+
+proxy(close, Data) ->
+    {stop, normal, Data}.
 
 debug_print_data(<<>>) -> ok;
 debug_print_data(Bin) ->
@@ -197,6 +222,8 @@ handle_info(_Msg, State, Data) ->
     {next_state, State, Data}.
 
 %% @private
+terminate(_Reason, _State, #data{sslsock = none, sock = Sock}) ->
+    gen_tcp:close(Sock);
 terminate(_Reason, _State, #data{sslsock = SslSock, sock = Sock}) ->
     ssl:close(SslSock),
     gen_tcp:close(Sock).
