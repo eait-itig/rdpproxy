@@ -223,8 +223,8 @@ encode_sec_flags({Type, Flags}) ->
     <<Out:16/big>> = encode_bit_flags(FlagSet, ?sec_flags),
     Out.
 
-encode_vchan(#ts_vchan{flags = FlagSet, data = Data}) ->
-    <<Flags:32/big>> = encode_bit_flags(FlagSet, ?vchan_flags),
+encode_vchan(#ts_vchan{flags = FlagList, data = Data}) ->
+    <<Flags:32/big>> = encode_bit_flags(sets:from_list(FlagList), ?vchan_flags),
     Len = byte_size(Data),
     <<Len:32/little, Flags:32/little, Data/binary>>.
 
@@ -253,6 +253,13 @@ encode_sharecontrol(Pdu) ->
 
 decode_sharecontrol(Bin) ->
     case Bin of
+        <<N:32/little, Length:16/little, Rest/binary>> when N =:= 0; N =:= 48 ->
+            if
+                (byte_size(Rest) == Length - 2) ->
+                    decode_sharecontrol(<<Length:16/little, Rest/binary>>);
+                true ->
+                    {error, bad_length}
+            end;
         <<Length:16/little, Type:16/little, Chan:16/little, Rest/binary>> ->
             case <<Type:16/big>> of
                 <<_:7, 0:1, 1:4, InnerType:4>> ->

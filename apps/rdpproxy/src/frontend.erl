@@ -334,6 +334,7 @@ rdp_capex({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #
         {ok, #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt} ->
             {next_state, init_finalize, Data#data{caps = Caps}};
         {ok, RdpPkt} ->
+            %lager:info("rdp_capex got ~s", [rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_capex, Data};
         Wat ->
             case rdpp:decode_ts_confirm(1, RdpData) of

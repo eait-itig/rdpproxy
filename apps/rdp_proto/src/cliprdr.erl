@@ -29,6 +29,26 @@ pretty_print(_, _) ->
 
 -define(msg_flags, [{skip, 13}, ascii_names, fail, ok]).
 
+encode(#cliprdr_monitor_ready{flags = Flags}) ->
+    encode(16#0001, Flags, <<>>);
+
+encode(#cliprdr_format_list{flags = Flags, formats = Formats}) ->
+    Data = iolist_to_binary([encode_long_format(F) || F <- Formats]),
+    encode(16#0002, Flags, Data);
+
+encode(#cliprdr_caps{flags = Flags, caps = Caps}) ->
+    NSets = length(Caps),
+    CapSets = iolist_to_binary([encode_cap(C) || C <- Caps]),
+    Data = <<NSets:16/little, 0:16, CapSets/binary>>,
+    encode(16#0007, Flags, Data);
+
+encode(_) -> error(bad_record).
+
+encode(Type, FlagList, Data) ->
+    <<MsgFlags:16/big>> = rdpp:encode_bit_flags(sets:from_list(FlagList), ?msg_flags),
+    Len = byte_size(Data),
+    <<Type:16/little, MsgFlags:16/little, Len:32/little, Data/binary>>.
+
 decode(<<MsgType:16/little, MsgFlags:16/little, Len:32/little, Data:Len/binary, Pad/binary>>) ->
     PadLen = 8 * byte_size(Pad),
     case Pad of
@@ -64,7 +84,46 @@ decode_long_format(<<Id:32/little, Rest/binary>>) ->
         <<0, AfterZero/binary>> -> {<<Name0/binary, 0>>, AfterZero};
         _ -> {Name0, Rem0}
     end,
-    [{Id, Name} | decode_long_format(Rem)].
+    Fmt = case {Id, Name} of
+        {1, _} -> text;
+        {2, _} -> bitmap;
+        {3, _} -> metafile;
+        {4, _} -> sylk;
+        {5, _} -> dif;
+        {6, _} -> tiff;
+        {7, _} -> oemtext;
+        {8, _} -> dib;
+        {9, _} -> palette;
+        {10, _} -> pendata;
+        {11, _} -> riff;
+        {12, _} -> wave;
+        {13, _} -> unicode;
+        {14, _} -> enh_metafile;
+        {15, _} -> hdrop;
+        {16, _} -> locale;
+        {_, _} -> {Id, unicode:characters_to_list(Name, {utf16, little})}
+    end,
+    [Fmt | decode_long_format(Rem)].
+
+encode_long_format(text) -> <<1:32/little, 0, 0>>;
+encode_long_format(bitmap) -> <<2:32/little, 0, 0>>;
+encode_long_format(metafile) -> <<3:32/little, 0, 0>>;
+encode_long_format(sylk) -> <<4:32/little, 0, 0>>;
+encode_long_format(dif) -> <<5:32/little, 0, 0>>;
+encode_long_format(tiff) -> <<6:32/little, 0, 0>>;
+encode_long_format(oemtext) -> <<7:32/little, 0, 0>>;
+encode_long_format(dib) -> <<8:32/little, 0, 0>>;
+encode_long_format(palette) -> <<9:32/little, 0, 0>>;
+encode_long_format(pendata) -> <<10:32/little, 0, 0>>;
+encode_long_format(riff) -> <<11:32/little, 0, 0>>;
+encode_long_format(wave) -> <<12:32/little, 0, 0>>;
+encode_long_format(unicode) -> <<13:32/little, 0, 0>>;
+encode_long_format(enh_metafile) -> <<14:32/little, 0, 0>>;
+encode_long_format(hdrop) -> <<15:32/little, 0, 0>>;
+encode_long_format(locale) -> <<16:32/little, 0, 0>>;
+encode_long_format({Id, Name}) ->
+    NameBin = unicode:characters_to_binary(Name, {utf16, little}),
+    <<Id:32/little, NameBin/binary, 0, 0>>.
 
 -define(gencap_flags, [{skip, 28}, locking, no_file_paths, files, long_names]).
 decode_caps_set(_, 0) -> [];
@@ -81,4 +140,9 @@ decode_caps_set(<<Type:16/little, Len:16/little, Rest/binary>>, N) ->
         _ -> error({unknown_cap_type, Type})
     end.
 
-encode(_) -> <<>>.
+encode_cap(#cliprdr_cap_general{flags = FlagList, version = Version}) ->
+    <<Flags:32/big>> = rdpp:encode_bit_flags(sets:from_list(FlagList), ?gencap_flags),
+    Data = <<Version:32/little, Flags:32/little>>,
+    Len = byte_size(Data) + 4,
+    <<16#01:16/little, Len:16/little, Data/binary>>.
+
