@@ -106,15 +106,23 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                 gen_tcp:send(Sock, Packet),
 
                 Ciphers = [{A,B,C}||{A,B,C}<-ssl:cipher_suites(),not (B =:= des_cbc),not (C =:= md5)],
-                {ok, SslSock} = ssl:ssl_accept(Sock,
+                Ret = ssl:ssl_accept(Sock,
                     [{ciphers, Ciphers}, {honor_cipher_order, true} |
                     rdpproxy:config([frontend, ssl_options], [
                         {certfile, "etc/cert.pem"},
                         {keyfile, "etc/key.pem"}])]),
-                {ok, {Ver, Cipher}} = ssl:connection_info(SslSock),
-                lager:info("~p: accepted tls ~p, cipher = ~p", [Data#data.peer, Ver, Cipher]),
-                ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
-                {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}}
+                case Ret of
+                    {ok, SslSock} ->
+                        {ok, {Ver, Cipher}} = ssl:connection_info(SslSock),
+                        lager:info("~p: accepted tls ~p, cipher = ~p", [Data#data.peer, Ver, Cipher]),
+                        ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
+                        {next_state, mcs_connect, NewData#data{x224 = NewX224#x224_state{us = UsRef}, sslsock = SslSock}};
+                    {error, closed} ->
+                        {stop, normal, NewData};
+                    {error, Err} ->
+                        lager:debug("~p: tls error: ~p, dropping connection", [Data#data.peer, Err]),
+                        {stop, normal, NewData}
+                end
         end;
     true ->
         lager:debug("~p rejecting cr, protocols = ~p", [Data#data.peer, Protos]),

@@ -20,9 +20,13 @@ init(Req, Opts) ->
 	IpBin = cowboy_req:binding(ip, Req),
 	{cowboy_rest, Req, #state{opts = Opts, ip = IpBin}}.
 
+allowed_methods(Req, S = #state{ip = undefined}) ->
+	{[<<"GET">>, <<"HEAD">>, <<"OPTIONS">>], Req, S};
 allowed_methods(Req, S = #state{}) ->
 	{[<<"GET">>, <<"HEAD">>, <<"OPTIONS">>, <<"PUT">>], Req, S}.
 
+forbidden(Req, S = #state{ip = undefined}) ->
+	{false, Req, S};
 forbidden(Req, S = #state{ip = Ip}) ->
     {PeerIp, _PeerPort} = cowboy_req:peer(Req),
     {(not http_api:peer_allowed(Ip, PeerIp)), Req, S#state{peer = PeerIp}}.
@@ -33,6 +37,13 @@ content_types_provided(Req, S = #state{}) ->
 	],
 	{Types, Req, S}.
 
+resource_exists(Req, S = #state{ip = undefined}) ->
+	case db_host_meta:find(status, <<"available">>) of
+		{ok, Metas} when length(Metas) > 0 ->
+			{true, Req, S#state{meta = Metas}};
+		_ ->
+			{false, Req, S}
+	end;
 resource_exists(Req, S = #state{ip = Ip}) ->
 	case db_host_meta:get(Ip) of
 		{ok, Meta} -> {true, Req, S#state{meta = Meta}};
@@ -45,6 +56,15 @@ content_types_accepted(Req, S = #state{}) ->
 	],
 	{Types, Req, S}.
 
+to_json(Req, S = #state{ip = undefined, meta = Metas}) ->
+	Updates = lists:sort([proplists:get_value(<<"updated">>, Plist) || {Ip, Plist} <- Metas]),
+	LatestUpdate = lists:last(Updates),
+	Now = calendar:datetime_to_gregorian_seconds(erlang:localtime()),
+	Json = [
+		{count, length(Metas)},
+		{last_update, Now - LatestUpdate}
+	],
+	{jsx:encode(Json), Req, S};
 to_json(Req, S = #state{meta = Meta}) ->
 	{jsx:encode(Meta), Req, S}.
 
