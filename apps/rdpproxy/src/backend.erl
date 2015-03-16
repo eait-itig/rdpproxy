@@ -23,9 +23,13 @@ start_link(Frontend, Address, Port, OrigCr) ->
     gen_fsm:start_link(?MODULE, [Frontend, Address, Port, OrigCr], []).
 
 probe(Address, Port) ->
-    {ok, Pid} = gen_fsm:start(?MODULE, [self(), Address, Port], []),
-    MonRef = monitor(process, Pid),
-    probe_rx(Pid, MonRef, {error, bad_host}).
+    case (catch gen_fsm:start(?MODULE, [self(), Address, Port], [{timeout, 5000}])) of
+        {ok, Pid} ->
+            MonRef = monitor(process, Pid),
+            probe_rx(Pid, MonRef, {error, bad_host});
+        {'EXIT', Reason} -> {error, Reason};
+        Err -> Err
+    end.
 
 probe_rx(Pid, MonRef, RetVal) ->
     receive
