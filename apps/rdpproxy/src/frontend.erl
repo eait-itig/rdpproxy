@@ -312,7 +312,8 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
                     #ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
                     #ts_cap_multifrag{maxsize = 4*1024*1024},
                     #ts_cap_large_pointer{},
-                    #ts_cap_colortable{}
+                    #ts_cap_colortable{},
+                    #ts_cap_surface{}
                 ]
             }),
             %file:write_file("my_demand", DaPkt),

@@ -34,7 +34,7 @@
 -record(ts_cap_share, {channel}).
 -record(ts_cap_order, {flags=[negotiate, zeroboundsdeltas, colorindex], orders=[dstblt,patblt,scrblt,memblt,mem3blt,lineto,savebitmap,multidstblt,multipatblt,multiscrblt,multiopaquerect,fastindex,polygonsc,polygoncb,polyline,fastglyph,ellipsesc,ellipsecb,index]}).
 -record(ts_cap_input, {flags=[mousex, scancodes, unicode], kbd_layout=?KBDL_US, kbd_type=?KBD_IBM101, kbd_sub_type=0, kbd_fun_keys=12, ime=""}).
--record(ts_cap_surface, {flags=[setsurfacebits, streamsurfacebits]}).
+-record(ts_cap_surface, {flags=[setsurfacebits, streamsurfacebits, framemarker]}).
 -record(ts_cap_font, {flags=[fontlist]}).
 -record(ts_cap_pointer, {flags=[color], cache_size=25}).
 -record(ts_cap_vchannel, {flags=[], chunksize=1600}).

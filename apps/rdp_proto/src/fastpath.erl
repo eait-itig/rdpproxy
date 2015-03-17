@@ -113,6 +113,10 @@ encode_update(Ub = #ts_update_bitmaps{bitmaps = Bitmaps}) ->
     Inner = rdpp:encode_ts_update_bitmaps(Ub),
     encode_update({16#01, single, <<1:16/little, Inner/binary>>});
 
+encode_update(#ts_update_surfaces{surfaces = Surfs}) ->
+    SurfBins = << encode_surface(Surf) || Surf <- Surfs >>,
+    encode_update({16#04, single, SurfBins});
+
 encode_update({Type, single, Data}) when byte_size(Data) > ?FRAGMENT_SIZE ->
     Part = binary:part(Data, {0, ?FRAGMENT_SIZE}),
     Rest = binary:part(Data, {?FRAGMENT_SIZE, byte_size(Data) - ?FRAGMENT_SIZE}),
@@ -136,6 +140,17 @@ encode_update({Type, Fragment, Data}) ->
     end,
     Size = byte_size(Data),
     [<<Compression:2, Fragmentation:2, Type:4, ComprFlags:8, Size:16/little, Data/binary>>].
+
+encode_surface(#ts_surface_frame_marker{frame = FrameId, action = Action}) ->
+    ActionNum = case Action of
+        start -> 16#0000;
+        finish -> 16#0001
+    end,
+    <<16#0004:16/little, ActionNum:16/little, FrameId:32/little>>;
+
+encode_surface(#ts_surface_set_bits{dest = {X,Y}, size = {W, H}, bpp = Bpp, codec = Codec, data = Data}) ->
+    BitmapEx = <<Bpp:8, 0, 0, Codec:8, W:16/little, H:16/little, (byte_size(Data)):32/little, Data/binary>>,
+    <<16#0001:16/little, X:16/little, Y:16/little, (X+W):16/little, (Y+H):16/little, BitmapEx/binary>>.
 
 encode_output(Pdu = #fp_pdu{contents = [Update]}) ->
     Fragments = encode_update(Update),
