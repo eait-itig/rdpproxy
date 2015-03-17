@@ -114,7 +114,7 @@ encode_update(Ub = #ts_update_bitmaps{bitmaps = Bitmaps}) ->
     encode_update({16#01, single, <<1:16/little, Inner/binary>>});
 
 encode_update(#ts_update_surfaces{surfaces = Surfs}) ->
-    SurfBins = << encode_surface(Surf) || Surf <- Surfs >>,
+    SurfBins = << <<(encode_surface(Surf))/binary>> || Surf <- Surfs >>,
     encode_update({16#04, single, SurfBins});
 
 encode_update({Type, single, Data}) when byte_size(Data) > ?FRAGMENT_SIZE ->

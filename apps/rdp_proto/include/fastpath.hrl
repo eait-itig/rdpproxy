@@ -15,9 +15,6 @@
 -record(fp_inp_sync, {flags = []}).
 -record(fp_inp_unicode, {code = 0, action = down}).
 
--record(ts_update_surfaces, {
-	surfaces = [] :: [#ts_surface_set_bits{} | #ts_surface_stream_bits{} | #ts_surface_frame_marker{}]
-}).
 -record(ts_surface_set_bits, {
 	dest :: {X :: integer(), Y :: integer()},
 	size :: {W :: integer(), H :: integer()},
@@ -35,4 +32,7 @@
 -record(ts_surface_frame_marker, {
 	action :: start | finish,
 	frame :: integer()
+}).
+-record(ts_update_surfaces, {
+	surfaces = [] :: [#ts_surface_set_bits{} | #ts_surface_stream_bits{} | #ts_surface_frame_marker{}]
 }).
