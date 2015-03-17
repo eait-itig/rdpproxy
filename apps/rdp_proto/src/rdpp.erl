@@ -80,6 +80,8 @@ pretty_print(Record) ->
 ?pp(ts_cap_bitmap_codecs);
 ?pp(ts_cap_bitmap_codec);
 ?pp(ts_cap_colortable);
+?pp(ts_cap_surface);
+
 ?pp(ts_vchan);
 pretty_print(_, _) ->
     no.
@@ -445,6 +447,11 @@ decode_tscap(16#1b, Bin) ->
     FlagAtoms = if Support96 == 1 -> [support_96x96]; true -> [] end,
     #ts_cap_large_pointer{flags = FlagAtoms};
 
+decode_tscap(16#1c, Bin) ->
+    <<Flags:32/little, _:32>> = Bin,
+    FlagSet = decode_bit_flags(<<Flags:32/big>>, ?ts_cap_surface_flags),
+    #ts_cap_surface{flags = sets:to_list(FlagSet)};
+
 decode_tscap(16#1d, Bin) ->
     <<CodecCount, CodecsBin/binary>> = Bin,
     {<<>>, Codecs} = lists:foldl(fun(_, {CodecBin, Acc}) ->
@@ -587,6 +594,10 @@ encode_tscap(#ts_cap_bitmap_codecs{codecs = Codecs}) ->
             <<Acc/binary, Guid/binary, Id, PropLen:16/little, PropBin/binary>>
         end, <<>>, Codecs),
     encode_tscap({16#1d, <<CodecCount, CodecsBin/binary>>});
+
+encode_tscap(#ts_cap_surface{flags = FlagList}) ->
+    <<Flags:32/big>> = encode_bit_flags(sets:from_list(FlagList), ?ts_cap_surface_flags),
+    encode_tscap({16#1c, <<Flags:32/little, 0:32>>});
 
 encode_tscap(#ts_cap_colortable{cache_size = Size}) ->
     encode_tscap({16#0a, <<Size:16/little, 0:16>>});

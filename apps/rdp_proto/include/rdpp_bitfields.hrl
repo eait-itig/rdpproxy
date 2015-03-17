@@ -20,6 +20,8 @@
 
 -define(ts_cap_bitmap_flags, [{skip,4}, skip_alpha, subsampling, dynamic_bpp, skip, resize, compression, multirect]).
 
+-define(ts_cap_surface_flags, [{skip,25},streamsurfacebits,skip,framemarker,{skip,2},setsurfacebits,skip]).
+
 -define(ts_inpevt_sync_flags, [{skip,12}, kanalock, capslock, numlock, scrolllock]).
 
 -define(ts_info_perf_flags, [{skip,23}, composition, font_smoothing, no_cursor_settings, no_cursor_shadow, skip, no_themes, no_menu_anim, no_full_win_drag, no_wallpaper]).
