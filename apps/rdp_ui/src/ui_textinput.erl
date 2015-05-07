@@ -146,6 +146,12 @@ handle(#ts_inpevt_key{code = del, action = down}, Wd = #widget{state = S}) ->
             {ok, Wd, []}
     end;
 
+handle(#ts_inpevt_key{code = caps, action = down}, Wd = #widget{tags = T}) ->
+    case lists:member(capslock, T) of
+        true -> {ok, Wd#widget{tags = T -- [capslock]}, []};
+        false -> {ok, Wd#widget{tags = [capslock | T]}, []}
+    end;
+
 handle(#ts_inpevt_key{code = enter, action = down}, Wd = #widget{id = Id}) ->
     {ok, Wd, [{ui, {submitted, Id}}]};
 
@@ -170,9 +176,11 @@ handle(#ts_inpevt_unicode{code = Codepoint, action = down}, Wd = #widget{tags = 
     handle(redraw_text, Wd#widget{state = S2});
 
 handle(#ts_inpevt_key{code = {Unshift, Shift}, action = down}, Wd = #widget{tags = T, state = S}) ->
-    Char = case lists:member(shift_held, T) of
-        true -> Shift;
-        false -> Unshift
+    Char = case {lists:member(capslock,T), lists:member(shift_held,T)} of
+        {true, true} when (Shift >= $A) and (Shift =< $Z) -> Unshift;
+        {true, false} when (Shift >= $A) and (Shift =< $Z) -> Shift;
+        {_, true} -> Shift;
+        _ -> Unshift
     end,
 
     #state{xs = Xs0, text = Text0, cursor = Cursor0, mask = M} = S,
@@ -188,6 +196,9 @@ handle(#ts_inpevt_key{code = {Unshift, Shift}, action = down}, Wd = #widget{tags
 
     S2 = S#state{xs = Xs1, text = Text1, cursor = Cursor1},
     handle(redraw_text, Wd#widget{state = S2});
+
+handle(#ts_inpevt_key{action = up}, Wd = #widget{state = S}) ->
+    {ok, Wd, []};
 
 handle(focus, Wd = #widget{tags = T, state = S}) ->
     #state{text = Text} = S,

@@ -13,7 +13,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 
--record(state, {c, opts}).
+-record(state, {c, fuse, opts}).
 
 start_link(Args) ->
     gen_server:start_link(?MODULE, Args, []).
@@ -36,8 +36,12 @@ connect(Opts0) ->
             {value, {_, SetHosts}, Opts1} = lists:keytake(hosts, 1, Opts0),
             SetHosts
     end,
+    Fuse = case lists:keytake(fuse, 1, Opts1) of
+        {value, F, Opts2} -> F;
+        _ -> Opts2 = Opts1, ldap_fuse
+    end,
     Hosts = shuffle(Hosts0),
-    LdapOptions0 = proplists:get_value(options, Opts1),
+    LdapOptions0 = proplists:get_value(options, Opts2),
     StartTLS = case lists:keytake(starttls, 1, LdapOptions0) of
         {value, {_, V}, TempOpts} ->
             case lists:keytake(sslopts, 1, TempOpts) of
@@ -46,57 +50,83 @@ connect(Opts0) ->
             end;
         _ -> LdapOptions1 = LdapOptions0, false
     end,
-    {ok, C} = eldap:open(Hosts, LdapOptions1),
-    case StartTLS of
-        true ->
-            case eldap:start_tls(C, proplists:get_value(sslopts, LdapOptions0, []), 3000) of
-                ok -> ok;
-                Err -> lager:warning("failed to start LDAP tls with ~p: ~p", [Hosts, Err])
-            end;
-        false -> ok
-    end,
-    case proplists:get_value(bind, Opts1) of
-        undefined -> ok;
-        [BindDn, Password] ->
-            ok = eldap:simple_bind(C, BindDn, Password)
-    end,
-    {ok, #state{c = C, opts = Opts0}, 30000}.
+    Bind = proplists:get_value(bind, Opts2),
+    SslOpts = proplists:get_value(sslopts, LdapOptions0, []),
+    {ok, C} = connect_retry(Hosts, LdapOptions1, Bind, StartTLS, SslOpts),
+    {ok, #state{c = C, opts = Opts0, fuse = Fuse}, 30000}.
 
-init([Opts0]) ->
-    case fuse:ask(ldap_fuse, sync) of
-        ok ->
-            case (catch connect(Opts0)) of
-                {'EXIT', Reason} ->
-                    lager:error("LDAP connection failed: ~p", [Reason]),
-                    ok = fuse:melt(ldap_fuse),
-                    {ok, #state{opts = Opts0}, 1000};
-                R -> R
+connect_retry([Host | Rest], LdapOptions, Bind, StartTLS, SslOpts) ->
+    case eldap:open([Host], LdapOptions) of
+        {ok, C} ->
+            case StartTLS of
+               true ->
+                   case eldap:start_tls(C, SslOpts, 3000) of
+                       ok -> ok;
+                       Err -> lager:warning("failed to start LDAP tls with ~p: ~p", [Host, Err])
+                   end;
+               false -> ok
+            end,
+            case Bind of
+                undefined -> {ok, C};
+                [BindDn, Password] ->
+                    case eldap:simple_bind(C, BindDn, Password) of
+                        ok -> {ok, C};
+                        R ->
+                            case Rest of [] -> R; _ ->
+                                lager:debug("LDAP connection to ~p failed, falling back...", [Host]),
+                                connect_retry(Rest, LdapOptions, Bind, StartTLS, SslOpts)
+                            end
+                    end
             end;
-        blown -> {ok, #state{opts = Opts0}, 10000}
+        R = {error, _} ->
+            case Rest of [] -> R; _ ->
+                lager:debug("LDAP connection to ~p failed, falling back...", [Host]),
+                connect_retry(Rest, LdapOptions, Bind, StartTLS, SslOpts)
+            end
     end.
 
-handle_call({bind, Dn, Password}, _From, #state{c=undefined}=State) ->
+init([Opts0]) ->
+    Fuse = proplists:get_value(fuse, Opts0, ldap_fuse),
+    case fuse:ask(Fuse, sync) of
+        ok ->
+            try
+                connect(Opts0)
+            catch error:Err ->
+                lager:error("LDAP connection failed: ~p ~p", [Err, erlang:get_stacktrace()]),
+                ok = fuse:melt(Fuse),
+                {ok, #state{opts = Opts0, fuse = Fuse}, 1000};
+            exit:Err ->
+                lager:error("LDAP connection failed: ~p ~p", [Err, erlang:get_stacktrace()]),
+                ok = fuse:melt(Fuse),
+                {ok, #state{opts = Opts0, fuse = Fuse}, 1000}
+            end;
+        blown -> {ok, #state{opts = Opts0, fuse = Fuse}, 10000}
+    end.
+
+handle_call({bind, _Dn, _Password}, _From, #state{c=undefined}=State) ->
     {reply, {error, fuse_blown}, State};
-handle_call({search, SearchOpts}, _From, #state{c=undefined}=State) ->
+handle_call({search, _SearchOpts}, _From, #state{c=undefined}=State) ->
     {reply, {error, fuse_blown}, State};
 
-handle_call({bind, Dn, Password}, From, #state{c=Conn}=State) ->
+handle_call({bind, Dn, Password}, From, #state{c=Conn,fuse=F}=State) ->
     case eldap:simple_bind(Conn, Dn, Password) of
         Ret = ok ->
             {reply, Ret, State, 30000};
+        Ret when is_tuple(Ret) and (element(1,Ret) =:= ok) ->
+            {reply, Ret, State, 30000};
         Ret = {error, Reason} when Reason =:= timeout; Ret =:= ldap_closed ->
-            fuse:melt(ldap_fuse),
+            fuse:melt(F),
             gen_server:reply(From, Ret),
             {stop, normal, State};
         Ret = {error, _} ->
             {reply, Ret, State, 30000}
     end;
-handle_call({search, SearchOpts}, From, #state{c=Conn}=State) ->
+handle_call({search, SearchOpts}, From, #state{c=Conn,fuse=F}=State) ->
     case eldap:search(Conn, SearchOpts) of
-        Ret = {ok, _} ->
+        Ret when is_tuple(Ret) and (element(1,Ret) =:= ok) ->
             {reply, Ret, State, 30000};
         Ret = {error, Reason} when Reason =:= timeout; Ret =:= ldap_closed ->
-            fuse:melt(ldap_fuse),
+            fuse:melt(F),
             gen_server:reply(From, Ret),
             {stop, normal, State};
         Ret = {error, _} ->
@@ -108,8 +138,8 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State, 30000}.
 
-handle_info(timeout, #state{c = undefined} = State) ->
-    case fuse:ask(ldap_fuse, sync) of
+handle_info(timeout, #state{c = undefined, fuse =F} = State) ->
+    case fuse:ask(F, sync) of
         ok -> {stop, normal, State};
         blown -> {noreply, State, 10000}
     end;

@@ -50,6 +50,7 @@ startup(timeout, S = #state{frontend = F}) ->
     S2 = S#state{w = W, h = H, bpp = Bpp},
     case gen_fsm:sync_send_event(F, get_redir_support) of
         false ->
+            lager:debug("redir not supported, presenting error screen"),
             no_redir(setup_ui, S2);
         true ->
             login(setup_ui, S2)
@@ -251,16 +252,20 @@ login(check_creds, S = #state{frontend = F, root = Root}) ->
 
     case {Username, Password} of
         {<<>>, _} ->
+            lager:debug("supplied empty username, rejecting"),
             login(invalid_login, S);
         {_, <<>>} ->
+            lager:debug("supplied empty password for ~p, rejecting", [Username]),
             login(invalid_login, S);
         _ ->
             Creds = [{<<"username">>, Username}, {<<"password">>, Password}],
             case ldap_auth:process(rdpproxy:config(ldap, []), Creds) of
                 {true, _} ->
+                    lager:debug("auth for ~p succeeded!", [Username]),
                     waiting(setup_ui, S#state{sess =
                         #session{user = Username, domain = Domain, password = Password}});
-                {false, _} ->
+                R = {false, _} ->
+                    lager:debug("auth for ~p failed", [Username]),
                     login(invalid_login, S)
             end
     end;
@@ -347,7 +352,7 @@ waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
 waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
     case db_host_meta:find(user, Sess#session.user) of
         {ok, [{Ip, Meta} | _]} ->
-            lager:info("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
+            lager:debug("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
             case backend:probe(binary_to_list(Ip), 3389) of
                 ok ->
                     {ok, Cookie} = db_cookie:new(Sess#session{
@@ -357,6 +362,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                         Sess#session.user, Sess#session.domain, Sess#session.password}),
                     {stop, normal, S};
                 _ ->
+                    lager:debug("probe failed on ~p, looking at another machine", [Ip]),
                     {ok, _} = timer:send_after(500, find_machine),
                     {next_state, waiting, S}
             end;
@@ -386,7 +392,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                     end, Metas),
                     case SortedMetas of
                         [{Ip, _Meta} | _] ->
-                            lager:info("~p gets a new session on ~p", [Sess#session.user, Ip]),
+                            lager:debug("~p gets a new session on ~p", [Sess#session.user, Ip]),
                             case backend:probe(binary_to_list(Ip), 3389) of
                                 ok ->
                                     {ok, Cookie} = db_cookie:new(Sess#session{
@@ -396,6 +402,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                                         Sess#session.user, Sess#session.domain, Sess#session.password}),
                                     {stop, normal, S};
                                 _ ->
+                                    lager:debug("probe failed on ~p, looking at another machine", [Ip]),
                                     {ok, _} = timer:send_after(500, find_machine),
                                     {next_state, waiting, S}
                             end;

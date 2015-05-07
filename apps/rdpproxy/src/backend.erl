@@ -55,10 +55,11 @@ init([Frontend, Address, Port]) ->
 init([Frontend, Address, Port, OrigCr]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
+    lager:debug("backend for frontend ~p", [Frontend]),
     case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}], 2000) of
         {ok, Sock} ->
             Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
-            lager:info("backend send cr: ~s", [x224:pretty_print(Cr)]),
+            lager:debug("backend connected to ~p", [Address]),
             {ok, CrData} = x224:encode(Cr),
             {ok, Packet} = tpkt:encode(CrData),
             ok = gen_tcp:send(Sock, Packet),
@@ -76,7 +77,6 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error 
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend, addr = Address} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected, rdp_flags = Flags} = Pkt,
-    lager:info("backend got cc: ~s", [x224:pretty_print(Pkt)]),
 
     HasSsl = lists:member(ssl, Selected),
 
@@ -90,6 +90,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
 
         {next_state, proxy_intercept, Data#data{sslsock = SslSock, themref = ThemRef}};
     true ->
+        lager:debug("upstream server rejected SSL, dying"),
         gen_tcp:close(Sock),
         db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
         {stop, no_ssl, Data}
@@ -101,7 +102,7 @@ proxy_intercept({data, Bin}, #data{sslsock = SslSock, frontend = Frontend, origc
             {ok, Tsuds0} = tsud:decode(TsudsBin0),
             TsudSvrCore0 = lists:keyfind(tsud_svr_core, 1, Tsuds0),
             TsudSvrCore1 = TsudSvrCore0#tsud_svr_core{requested = OrigCr#x224_cr.rdp_protocols},
-            lager:info("rewriting tsud: ~s", [tsud:pretty_print(TsudSvrCore1)]),
+            lager:debug("rewriting tsud: ~p", [TsudSvrCore1]),
             Tsuds1 = lists:keyreplace(tsud_svr_core, 1, Tsuds0, TsudSvrCore1),
             TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
                 {ok, TsudBin} = tsud:encode(Tsud),

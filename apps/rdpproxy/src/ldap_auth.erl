@@ -14,7 +14,7 @@
 process([], User) -> {true, User};
 process([{Name, Config} | Rest], User) ->
 	case (do_stage(Name, Config, User)) of
-		{'EXIT', _} -> {false, User};
+		{'EXIT', Err} -> lager:debug("ldap auth error: ~p", [Err]), {false, User};
 		{true, User2} -> process(Rest, User2);
 		{false, User2} -> {false, User2}
 	end.
@@ -31,8 +31,13 @@ do_stage(search, Name, Config, User) ->
 		ok = gen_server:call(L, {bind, BindUser, BindPw}),
 		{ok, Res} = gen_server:call(L, {search, [{base, Base}, {filter, Filter}, {attributes, ["dn"]}]}),
 		#eldap_search_result{entries = Ents} = Res,
-		[#eldap_entry{} | _] = Ents,
-		{true, User}
+		case Ents of
+			[#eldap_entry{} | _] ->
+				{true, User};
+			[] ->
+				lager:debug("failed to find LDAP user in search:~p, rejecting", [Name]),
+				{false, User}
+		end
 	end);
 
 do_stage(search_and_bind, Name, Config, User) ->
@@ -43,10 +48,15 @@ do_stage(search_and_bind, Name, Config, User) ->
 		ok = gen_server:call(L, {bind, BindUser, BindPw}),
 		{ok, Res} = gen_server:call(L, {search, [{base, Base}, {filter, Filter}, {attributes, ["dn"]}]}),
 		#eldap_search_result{entries = Ents} = Res,
-		[#eldap_entry{object_name = Dn} | _] = Ents,
-		case gen_server:call(L, {bind, Dn, proplists:get_value(<<"password">>, User)}) of
-			ok -> {true, User};
-			_ -> {false, User}
+		case Ents of
+			[#eldap_entry{object_name = Dn} | _] ->
+				case gen_server:call(L, {bind, Dn, proplists:get_value(<<"password">>, User)}) of
+					ok -> {true, User};
+					_ -> {false, User}
+				end;
+			[] ->
+				lager:debug("failed to find LDAP user in search_and_bind:~p, rejecting", [Name]),
+				{false, User}
 		end
 	end);
 

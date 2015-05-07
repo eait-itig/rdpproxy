@@ -94,6 +94,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
                         {set, <<"status">>, <<"busy">>},
                         {set, [<<"sessions">>, 0, <<"user">>], User}
                     ], [])),
+                lager:debug("~p: presented cookie ~p, forwarding to ~p", [Data#data.peer, Cookie, HostBin]),
                 {ok, Backend} = backend:start_link(self(), binary_to_list(HostBin), Port, Pkt),
                 {next_state, wait_proxy, NewData#data{backend = Backend, session = Sess}};
 
@@ -380,7 +381,8 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
             {ok, FontMap} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_fontmap{}}),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
-            {ok, _} = ui_fsm_sup:start_ui(self()),
+            {ok, Ui} = ui_fsm_sup:start_ui(self()),
+            lager:debug("frontend for ~p spawned ui_fsm ~p", [Data#data.peer, Ui]),
             {next_state, run_ui, Data};
 
         {ok, #ts_sharedata{} = SD} ->
@@ -413,11 +415,14 @@ run_ui(get_autologon, From, D = #data{client_info = TsInfo}) ->
     Do1 = binary:part(Do0, {0, byte_size(Do0) - NullLen}),
     P1 = binary:part(P0, {0, byte_size(P0) - NullLen}),
     U2 = if Unicode -> unicode:characters_to_binary(U1, {utf16,little}, utf8); not Unicode -> U1 end,
+    [U3 | _] = binary:split(U2, <<0>>),
     Do2 = if Unicode -> unicode:characters_to_binary(Do1, {utf16,little}, utf8); not Unicode -> Do1 end,
+    [Do3 | _] = binary:split(Do2, <<0>>),
     P2 = if Unicode -> unicode:characters_to_binary(P1, {utf16,little}, utf8); not Unicode -> P1 end,
+    [P3 | _] = binary:split(P2, <<0>>),
     case lists:member(autologon, Flags) of
-        true -> gen_fsm:reply(From, {true, U2, Do2, P2});
-        false -> gen_fsm:reply(From, {false, U2, Do2, P2})
+        true -> gen_fsm:reply(From, {true, U3, Do3, P3});
+        false -> gen_fsm:reply(From, {false, U3, Do3, P3})
     end,
     {next_state, run_ui, D}.
 
@@ -447,12 +452,14 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
     }),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Redir}),
 
+    lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
     ssl:close(SslSock),
     {stop, normal, D};
 
 run_ui(close, D = #data{sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = IoChan}, shareid = ShareId}) ->
+    lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
     ssl:close(SslSock),
@@ -492,7 +499,7 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
 run_ui({mcs_pdu, #mcs_data{user = Them, data = Data, channel = Chan}}, D = #data{mcs = #mcs_state{them = Them, us = Us, chans = Chans}}) ->
     ChanName = case proplists:get_value(Chan, Chans) of
         undefined ->
-            lager:info("run_ui got data on unknown vchannel ~p: ~p", [Chan, Data]),
+            lager:warning("run_ui got data on unknown vchannel ~p: ~p", [Chan, Data]),
             {next_state, run_ui, D};
 
         #tsud_net_channel{name = Name} ->
@@ -502,18 +509,18 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = Data, channel = Chan}}, D = #data
                         "cliprdr" ->
                             case cliprdr:decode(VData) of
                                 {ok, ClipPdu} ->
-                                    lager:info("cliprdr: ~s", [cliprdr:pretty_print(ClipPdu)]),
+                                    lager:debug("cliprdr: ~s", [cliprdr:pretty_print(ClipPdu)]),
                                     {next_state, run_ui, D};
                                 Err ->
-                                    lager:info("cliprdr decode failed: ~p (~s)", [Err, rdpp:pretty_print(VPkt)]),
+                                    lager:warning("cliprdr decode failed: ~p (~s)", [Err, rdpp:pretty_print(VPkt)]),
                                     {next_state, run_ui, D}
                             end;
                         _ ->
-                            lager:info("unhandled data on vchannel ~p (~p): ~s", [Name, Chan, rdpp:pretty_print(VPkt)]),
+                            lager:warning("unhandled data on vchannel ~p (~p): ~s", [Name, Chan, rdpp:pretty_print(VPkt)]),
                             {next_state, run_ui, D}
                     end;
                 _ ->
-                    lager:info("run_ui got invalid data on vchannel ~p (~p): ~p", [Name, Chan, Data]),
+                    lager:warning("run_ui got invalid data on vchannel ~p (~p): ~p", [Name, Chan, Data]),
                     {next_state, run_ui, D}
             end
     end;
@@ -526,7 +533,7 @@ wait_proxy({data, Bin}, #data{queue = Queue} = Data) ->
     {next_state, wait_proxy, Data#data{queue = Queue ++ [Bin]}};
 
 wait_proxy({backend_ready, Backend, Backsock, TheirCC}, #data{queue = Queue, backend = Backend, x224 = #x224_state{them = ThemRef}, sock = Sock} = Data) ->
-    lager:info("~p frontend send cc: ~s", [Data#data.peer, x224:pretty_print(TheirCC)]),
+    lager:debug("frontend send cc: ~p", [TheirCC]),
     {ok, RespData} = x224:encode(TheirCC),
     {ok, Packet} = tpkt:encode(RespData),
     gen_tcp:send(Sock, Packet),
@@ -564,7 +571,7 @@ proxy_intercept({data, Bin}, #data{sslsock = SslSock, backsock = Backsock, backe
                             Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
                             true -> <<Password/binary, 0>> end
                         },
-                    lager:info("~p rewriting ts_info: ~s", [Data#data.peer, rdpp:pretty_print(TsInfo2)]),
+                    lager:debug("rewriting ts_info: ~p", [TsInfo2#ts_info{extra = snip}]),
                     {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
                     {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
                     {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
@@ -666,9 +673,19 @@ handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = 
     handle_info({tcp, Sock, Bin}, State, Data);
 
 handle_info({ssl_closed, Sock}, State, #data{sock = Sock} = Data) ->
+    case State of
+        initiation -> ok;
+        mcs_connect -> ok;
+        _ -> lager:debug("ssl closed by remote side")
+    end,
     {stop, normal, Data};
 
 handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
+    case State of
+        initiation -> ok;
+        mcs_connect -> ok;
+        _ -> lager:debug("tcp closed by remote side")
+    end,
     {stop, normal, Data};
     %?MODULE:State(disconnect, Data);
 
@@ -676,7 +693,12 @@ handle_info(_Msg, State, Data) ->
     {next_state, State, Data}.
 
 %% @private
-terminate(_Reason, _State, _Data) ->
+terminate(Reason, State, Data = #data{peer = P}) ->
+    case State of
+        initiation -> ok;
+        mcs_connect -> ok;
+        _ -> lager:debug("frontend terminating due to ~p, was connected to ~p", [Reason, P])
+    end,
     ok.
 
 %% @private
