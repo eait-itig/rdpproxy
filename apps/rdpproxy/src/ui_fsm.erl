@@ -214,6 +214,12 @@ login({input, F, Evt}, S = #state{frontend = F}) ->
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
             handle_root_events(login, S, [Event]);
+        #ts_inpevt_key{code = caps} ->
+            Event = { [{tag, focusable}], Evt },
+            handle_root_events(login, S, [Event]);
+        #ts_inpevt_sync{} ->
+            Event = { [{tag, focusable}], Evt },
+            handle_root_events(login, S, [Event]);
         #ts_inpevt_key{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(login, S, [Event]);
@@ -338,6 +344,12 @@ waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
+            handle_root_events(waiting, S, [Event]);
+        #ts_inpevt_key{code = caps} ->
+            Event = { [{tag, focusable}], Evt },
+            handle_root_events(waiting, S, [Event]);
+        #ts_inpevt_sync{} ->
+            Event = { [{tag, focusable}], Evt },
             handle_root_events(waiting, S, [Event]);
         #ts_inpevt_key{code = _Code} ->
             Event = { [{tag, focus}], Evt },

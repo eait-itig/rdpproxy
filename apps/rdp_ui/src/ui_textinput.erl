@@ -152,6 +152,16 @@ handle(#ts_inpevt_key{code = caps, action = down}, Wd = #widget{tags = T}) ->
         false -> {ok, Wd#widget{tags = [capslock | T]}, []}
     end;
 
+handle(#ts_inpevt_sync{flags = F}, Wd = #widget{tags = T}) ->
+    case lists:member(capslock, F) of
+        false -> {ok, Wd#widget{tags = T -- [capslock]}, []};
+        true ->
+            case lists:member(capslock, T) of
+                true -> {ok, Wd, []};
+                false -> {ok, Wd#widget{tags = [capslock | T]}, []}
+            end
+    end;
+
 handle(#ts_inpevt_key{code = enter, action = down}, Wd = #widget{id = Id}) ->
     {ok, Wd, [{ui, {submitted, Id}}]};
 
