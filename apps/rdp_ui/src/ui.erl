@@ -233,12 +233,18 @@ slice_bitmap_x(I = #cairo_image{}, [FromX, ToX | RestX], [FromY, ToY | RestY]) -
     ]),
     [{FromX, FromY, Image1} | slice_bitmap_x(I, [ToX | RestX], [FromY, ToY | RestY])].
 
--define(BITMAP_SLICE_TGT, (41000 div 4)).
+-define(BITMAP_SLICE_TGT, (4000 div 4)).
 
 divide_bitmap(I = #cairo_image{}) ->
     divide_bitmap(I, {0,0}).
 divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
-        when (W * H > ?BITMAP_SLICE_TGT) ->
+        when (X0 < 0); (Y0 < 0) ->
+    X = lists:max([X0, 0]),
+    Y = lists:max([Y0, 0]),
+    [{X, Y, Slice}] = slice_bitmap(I, [X, W], [Y, H]),
+    divide_bitmap(Slice, {X, Y});
+divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
+        when (W * H > 4 * ?BITMAP_SLICE_TGT) ->
     XInt = lists:max([4, 4 * (round(math:sqrt(W / H * ?BITMAP_SLICE_TGT)) div 4)]),
     YInt = lists:max([4, 4 * (round(math:sqrt(H / W * ?BITMAP_SLICE_TGT)) div 4)]),
     XIntervals = lists:seq(0, W-4, XInt) ++ [W],
@@ -248,9 +254,16 @@ divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
         divide_bitmap(Slice, {X0 + X, Y0 + Y})
     end, Slices);
 divide_bitmap(I = #cairo_image{data = D, width = W, height = H}, {X,Y}) ->
+    ShouldBeSize = W * H * 4,
+    ShouldBeSize = byte_size(D),
     {ok, Compr} = rle_nif:compress(D, W, H),
-    [#ts_bitmap{dest={X,Y}, size={W,H}, bpp=24, data = Compr, comp_info =
-        #ts_bitmap_comp_info{flags = [compressed]}}].
+    CompInfo = #ts_bitmap_comp_info{
+        flags = [compressed]},
+        %full_size = byte_size(D),
+        %scan_width = W},
+    true = (byte_size(Compr) < 1 bsl 16),
+    [#ts_bitmap{dest={X,Y}, size={W,H}, bpp=24, data = Compr,
+        comp_info = CompInfo}].
 
 rect_to_ts_order(#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
     #ts_order_opaquerect{dest={round(X),round(Y)},
@@ -280,8 +293,25 @@ orders_to_updates(L = [#rect{} | _]) ->
     [#ts_update_orders{orders = lists:map(fun rect_to_ts_order/1, Rects)} |
         orders_to_updates(Rest)];
 orders_to_updates([#image{dest = {X,Y}, image = Im} | Rest]) ->
-    [#ts_update_bitmaps{
-        bitmaps = divide_bitmap(Im, {round(X), round(Y)})
-    } | orders_to_updates(Rest)];
+    Bitmaps = divide_bitmap(Im, {round(X), round(Y)}),
+    Orders = bitmaps_to_orders(Bitmaps),
+    Orders ++ orders_to_updates(Rest);
 orders_to_updates([#null_order{} | Rest]) ->
     orders_to_updates(Rest).
+
+bitmaps_to_orders(Bms) ->
+    lists:reverse(bitmaps_to_orders(0, [], Bms)).
+
+bitmaps_to_orders(_, [], []) -> [];
+bitmaps_to_orders(_, R, []) ->
+    [#ts_update_bitmaps{bitmaps = lists:reverse(R)}];
+bitmaps_to_orders(Size, R, [Next | Rest]) ->
+    #ts_bitmap{data = D} = Next,
+    NewSize = Size + byte_size(D),
+    if
+        (NewSize > 16000) or (length(R) > 16) ->
+            [#ts_update_bitmaps{bitmaps = lists:reverse(R)} |
+                bitmaps_to_orders(0, [Next], Rest)];
+        true ->
+            bitmaps_to_orders(NewSize, [Next | R], Rest)
+    end.

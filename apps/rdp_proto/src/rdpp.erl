@@ -249,16 +249,19 @@ encode_sharecontrol(Pdu) ->
     end,
     Channel = element(2, Pdu),
     Length = byte_size(Inner) + 6,
+    true = (Length < 1 bsl 16),
     Version = 16#01,
     <<Type:16/big>> = <<Version:12/big, InnerType:4>>,
     {ok, <<Length:16/little, Type:16/little, Channel:16/little, Inner/binary>>}.
 
-decode_sharecontrol(Bin) ->
+decode_sharecontrol(Bin) -> decode_sharecontrol(Bin, true).
+decode_sharecontrol(Bin, StripN) ->
     case Bin of
-        <<N:32/little, Length:16/little, Rest/binary>> when N =:= 0; N =:= 48 ->
+        <<N:32/little, Length:16/little, Rest/binary>> when StripN and ((N =:= 0) or (N =:= 48)) ->
             if
                 (byte_size(Rest) == Length - 2) ->
-                    decode_sharecontrol(<<Length:16/little, Rest/binary>>);
+                    lager:debug("sharecontrol stripping initial 4 bytes"),
+                    decode_sharecontrol(<<Length:16/little, Rest/binary>>, false);
                 true ->
                     {error, bad_length}
             end;
@@ -778,7 +781,7 @@ encode_sharedata(#ts_sharedata{shareid = ShareId, data = Pdu, priority = Prio, c
         #ts_update_bitmaps{} -> {2, encode_ts_update(Pdu)};
         {N, Data} -> {N, Data}
     end,
-    CompType = case CompTypeAtom of '8k' -> 0; '64k' -> 1; 'rdp6' -> 2; 'rdp61' -> 3; _ -> 4 end,
+    CompType = case CompTypeAtom of '8k' -> 0; '64k' -> 1; 'rdp6' -> 2; 'rdp61' -> 3; I when is_integer(I) -> I; _ -> 0 end,
     Priority = case Prio of low -> 1; medium -> 2; high -> 4; _ -> 0 end,
 
     Flushed = case lists:member(flushed, FlagAtoms) of true -> 1; _ -> 0 end,
@@ -786,8 +789,11 @@ encode_sharedata(#ts_sharedata{shareid = ShareId, data = Pdu, priority = Prio, c
     Compressed = case lists:member(compressed, FlagAtoms) of true -> 1; _ -> 0 end,
     <<Flags:4>> = <<Flushed:1, AtFront:1, Compressed:1, 0:1>>,
 
-    Size = byte_size(Inner) + 6 + 12,
-    <<ShareId:32/little, 0:8, Priority:8, Size:16/little, PduType:8, Flags:4, CompType:4, Size:16/little, Inner/binary>>.
+    Size = byte_size(Inner) + 4,
+    true = (Size < 1 bsl 16),
+    CompSize = 0,
+
+    <<ShareId:32/little, 0:8, Priority:8, Size:16/little, PduType:8, Flags:4, CompType:4, CompSize:16/little, Inner/binary>>.
 
 decode_ts_sync(Bin) ->
     <<1:16/little, User:16/little>> = Bin,
@@ -887,27 +893,31 @@ encode_ts_bitmap(#ts_bitmap{dest={X,Y}, size={W,H}, bpp=Bpp, comp_info=CompInfo,
     #ts_bitmap_comp_info{flags=CompFlags, scan_width=ScanWidth, full_size=FullSize} = CompInfo,
     Compressed = lists:member(compressed, CompFlags),
     ComprFlag = case Compressed of true -> 1; _ -> 0 end,
-    NoComprFlag = case ScanWidth of undefined -> 1; _ -> 0 end,
+    NoComprFlag = case ScanWidth of undefined when Compressed -> 1; _ -> 0 end,
     <<Flags:16/big>> = <<0:5, NoComprFlag:1, 0:9, ComprFlag:1>>,
     X2 = X + W,
     Y2 = Y + H,
     Body = if
-        NoComprFlag == 0 ->
+        Compressed and (NoComprFlag == 0) ->
             CompSize = byte_size(Data),
             CompHdr = <<0:16, CompSize:16/little, ScanWidth:16/little, FullSize:16/little>>,
             <<CompHdr/binary, Data/binary>>;
-        NoComprFlag == 1 ->
+        true ->
             Data
     end,
     BodyLength = byte_size(Body),
-    <<X:16/little, Y:16/little, X2:16/little, Y2:16/little, W:16/little, H:16/little, Bpp:16/little, Flags:16/little, BodyLength:16/little, Body/binary>>.
+    <<X:16/little-unsigned, Y:16/little-unsigned,
+      X2:16/little-unsigned, Y2:16/little-unsigned,
+      W:16/little-unsigned, H:16/little-unsigned,
+      Bpp:16/little-unsigned,
+      Flags:16/little-unsigned,
+      BodyLength:16/little-unsigned, Body/binary>>.
 
 encode_ts_update_bitmaps(#ts_update_bitmaps{bitmaps = Bitmaps}) ->
     N = length(Bitmaps),
-    BitmapsBin = lists:foldl(fun(Next, Bin) ->
-        Encode = encode_ts_bitmap(Next),
-        <<Bin/binary, Encode/binary>>
-    end, <<>>, Bitmaps),
+    BitmapsBin = << <<(encode_ts_bitmap(B))/binary>> || B <- Bitmaps >>,
+    true = (N < 1 bsl 16),
+    true = (byte_size(BitmapsBin) < 1 bsl 16),
     <<N:16/little, BitmapsBin/binary>>.
 
 decode_ts_inpevt(16#0000, Bin) ->

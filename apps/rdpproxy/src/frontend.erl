@@ -31,6 +31,17 @@ start_link(Sock, Sup) ->
 -record(mcs_state, {us=none, them=none, iochan=none, msgchan=none, chans=[]}).
 -record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session, client_info, peer}).
 
+hexdump(Offset, []) -> ok;
+hexdump(Offset, Bytes) ->
+    {ThisLine,Rest} = if
+        (length(Bytes) > 16) -> lists:split(16, Bytes);
+        true -> {Bytes, []}
+    end,
+    io:format("~4.16.0B   ~s\n", [Offset, string:join(ThisLine, " ")]),
+    hexdump(Offset + length(ThisLine), Rest).
+hexdump(B) ->
+    hexdump(0, [io_lib:format("~2.16.0B",[X]) || <<X:8>> <= B]).
+
 send_dpdu(SslSock, McsPkt) ->
     {ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
     {ok, DtData} = x224:encode(#x224_dt{data = McsData}),
@@ -383,6 +394,8 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
 
             {ok, Ui} = ui_fsm_sup:start_ui(self()),
             lager:debug("frontend for ~p spawned ui_fsm ~p", [Data#data.peer, Ui]),
+            %send_update(Data, #ts_update_orders{orders = [
+            %    #ts_order_opaquerect{dest = {0,0}, size = {100,100}, color = {100,100,100}}]}),
             {next_state, run_ui, Data};
 
         {ok, #ts_sharedata{} = SD} ->
