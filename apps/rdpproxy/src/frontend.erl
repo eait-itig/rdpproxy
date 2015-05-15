@@ -29,7 +29,7 @@ start_link(Sock, Sup) ->
 
 -record(x224_state, {us=none, them=none}).
 -record(mcs_state, {us=none, them=none, iochan=none, msgchan=none, chans=[]}).
--record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session, client_info, peer}).
+-record(data, {lsock, sock, sup, unused, uis=[], sslsock=none, backsock=none, chansavail=[], backend=none, queue=[], waitchans=[], tsud_core={}, tsuds=[], caps=[], askedfor=[], shareid=0, x224=#x224_state{}, mcs=#mcs_state{}, session, client_info, peer, bpp}).
 
 hexdump(Offset, []) -> ok;
 hexdump(Offset, Bytes) ->
@@ -304,6 +304,15 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = LicData}),
 
             Core = Data#data.tsud_core,
+            {Bpp,Format} = case Core#tsud_core.color of
+                '16bpp' -> {16, '16bpp'};
+                _ ->
+                    case lists:member('24bpp', Core#tsud_core.colors) of
+                        true -> {24, '24bpp'};
+                        false -> {16, '16bpp'}
+                    end
+            end,
+            true = lists:member(Format, Core#tsud_core.colors),
             Rand = 1,
             <<ShareId:32/big>> = <<Rand:16/big, Us:16/big>>,
             {ok, DaPkt} = rdpp:encode_sharecontrol(#ts_demand{
@@ -333,7 +342,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
             %error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = DaPkt}),
 
-            {next_state, rdp_capex, Data#data{shareid = ShareId, client_info = InfoPkt}};
+            {next_state, rdp_capex, Data#data{shareid = ShareId, client_info = InfoPkt, bpp = Bpp}};
         {ok, RdpPkt} ->
             lager:info("rdp packet: ~s", [rdpp:pretty_print(RdpPkt)]),
             {next_state, rdp_clientinfo, Data};
@@ -409,8 +418,8 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
 
     end.
 
-run_ui(get_canvas, From, D = #data{caps = Caps}) ->
-    #ts_cap_bitmap{bpp = Bpp, width = W, height = H} = lists:keyfind(ts_cap_bitmap, 1, Caps),
+run_ui(get_canvas, From, D = #data{caps = Caps, bpp = Bpp}) ->
+    #ts_cap_bitmap{width = W, height = H} = lists:keyfind(ts_cap_bitmap, 1, Caps),
     gen_fsm:reply(From, {W, H, Bpp}),
     {next_state, run_ui, D};
 
