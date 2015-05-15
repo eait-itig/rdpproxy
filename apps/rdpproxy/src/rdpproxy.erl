@@ -83,5 +83,5 @@ init(_Args) ->
                  {size, RiakSize},
                  {max_overflow, RiakSize*2}],
                 [RiakHost, RiakPort])
-        ]% ++ LdapPools
+        ] ++ LdapPools
     }}.
