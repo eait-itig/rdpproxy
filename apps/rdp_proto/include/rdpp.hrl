@@ -62,9 +62,9 @@
 -record(ts_fontlist, {}).
 -record(ts_fontmap, {}).
 
--record(ts_order_opaquerect, {flags=[], dest, size, color=[0,0,0]}).
+-record(ts_order_opaquerect, {flags=[], dest, size, color={0,0,0}, bpp = 24}).
 -record(ts_order_srcblt, {flags=[], dest, src, size, rop = ?ROP_SRCCOPY}).
--record(ts_order_line, {flags=[], start, finish, rop=?ROP_PATCOPY, color=[0,0,0]}).
+-record(ts_order_line, {flags=[], start, finish, rop=?ROP_PATCOPY, color={0,0,0}, bpp = 24}).
 -record(ts_update_orders, {orders=[]}).
 
 -record(ts_bitmap_comp_info, {flags=[], scan_width, full_size}).

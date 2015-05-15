@@ -36,12 +36,13 @@ handle({set_text, Text}, Wd = #widget{state = S, size = Sz}) ->
     S2 = S#state{text = Text},
     handle({resize, Sz}, Wd#widget{state = S2});
 
-handle({resize, {W,H}}, Wd = #widget{state = S}) ->
+handle({resize, {W,H}}, Wd = #widget{state = S, format = F}) ->
     #state{align = Align, text = Text, bgcolor = Bg, fgcolor = Fg} = S,
     Lines = binary:split(Text, <<"\n">>, [global]),
     NLines = lists:zip(lists:seq(1, length(Lines)), Lines),
     LineH = H / length(Lines),
-    Image0 = #cairo_image{width = round(W), height = round(H), data = <<>>},
+    Image0 = #cairo_image{width = round(W), height = round(H),
+        format = F, data = <<>>},
     {ok, Tags, _} = cairerl_nif:draw(Image0, [], [
         #cairo_select_font_face{family= <<"sans-serif">>},
         #cairo_set_font_size{size = 0.8 * LineH},

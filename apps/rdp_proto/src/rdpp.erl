@@ -869,8 +869,13 @@ encode_primary_ts_order(Type, Fields, Flags, Inner) ->
 
     <<ControlFlags:8, Type:8, FieldN:FieldBits/little, Inner/binary>>.
 
-encode_ts_order(#ts_order_opaquerect{flags = Flags, dest={X,Y}, size={W,H}, color={R,G,B}}) ->
-    Inner = <<X:16/little-signed, Y:16/little-signed, W:16/little-signed, H:16/little-signed, R:8, G:8, B:8>>,
+encode_ts_order(#ts_order_opaquerect{flags = Flags, dest={X,Y}, size={W,H}, color={R,G,B}, bpp = Bpp}) ->
+    {RBits,GBits,BBits,ZBits} = case Bpp of
+        24 -> {8,8,8,0};
+        16 -> {5,6,5,0};
+        15 -> {5,5,5,1}
+    end,
+    Inner = <<X:16/little-signed, Y:16/little-signed, W:16/little-signed, H:16/little-signed, R:RBits, G:GBits, B:BBits, 0:ZBits>>,
     encode_primary_ts_order(16#0a, [1,1,1,1,1,1,1], Flags, Inner);
 
 encode_ts_order(#ts_order_srcblt{flags = Flags, dest = {X1,Y1}, src = {X2, Y2}, size = {W,H}, rop = Rop}) ->

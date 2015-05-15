@@ -51,14 +51,15 @@ handle(mouse_out, Wd = #widget{tags = T, size = Sz}) ->
         _ -> handle({resize, Sz}, Wd#widget{tags = T -- [mouse_in, mouse_down]})
     end;
 
-handle({resize, {W,H}}, Wd = #widget{state = S, tags = T}) ->
+handle({resize, {W,H}}, Wd = #widget{state = S, tags = T, format = F}) ->
     MouseIn = lists:member(mouse_in, T),
     MouseDown = lists:member(mouse_down, T),
     IdleBg = {16#78 / 256, 16#1a / 256, 16#97 / 256},
     ActiveBg = {16#99 / 256, 16#2a / 256, 16#c1 /256},
     Fg = {0.95,0.95,1},
     #state{text = Text} = S,
-    Image0 = #cairo_image{width = round(W), height = round(H), data = <<>>},
+    Image0 = #cairo_image{width = round(W), height = round(H),
+        format = F, data = <<>>},
     {ok, _, Image1} = cairerl_nif:draw(Image0, [], [
         color_set_order(IdleBg),
         #cairo_rectangle{width=W,height=H},

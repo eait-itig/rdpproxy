@@ -24,7 +24,7 @@
 start_link(Frontend) ->
     gen_fsm:start_link(?MODULE, [Frontend], []).
 
--record(state, {frontend, mref, w, h, bpp, root, sess}).
+-record(state, {frontend, mref, w, h, bpp, format, root, sess}).
 
 %% @private
 init([Frontend]) ->
@@ -32,8 +32,8 @@ init([Frontend]) ->
     MRef = monitor(process, Frontend),
     {ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
 
-send_orders(F, Orders) ->
-    Updates = ui:orders_to_updates(ui:dedupe_orders(Orders)),
+send_orders(#state{frontend = F, format = Fmt}, Orders) ->
+    Updates = ui:orders_to_updates(ui:dedupe_orders(Orders), Fmt),
     lists:foreach(fun(U) ->
         gen_fsm:send_event(F, {send_update, U})
     end, Updates).
@@ -43,12 +43,18 @@ handle_root_events(State, S = #state{frontend = F, root = Root}, Events) ->
     lists:foreach(fun(UiEvt) ->
         gen_fsm:send_event(self(), {ui, UiEvt})
     end, UiEvts),
-    send_orders(F, Orders),
+    send_orders(S, Orders),
     {next_state, State, S#state{root = Root2}}.
 
 startup(timeout, S = #state{frontend = F}) ->
     {W, H, Bpp} = gen_fsm:sync_send_event(F, get_canvas),
-    S2 = S#state{w = W, h = H, bpp = Bpp},
+    Format = case Bpp of
+        24 -> rgb24;
+        16 -> rgb16_565;
+        _ -> error({bad_bpp, Bpp})
+    end,
+    S2 = S#state{w = W, h = H, bpp = Bpp, format = Format},
+    lager:debug("starting session ~px~p @~p bpp (format ~p)", [W, H, Bpp, Format]),
     case gen_fsm:sync_send_event(F, get_redir_support) of
         false ->
             lager:debug("redir not supported, presenting error screen"),
@@ -57,9 +63,9 @@ startup(timeout, S = #state{frontend = F}) ->
             login(setup_ui, S2)
     end.
 
-no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
+no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
-    {Root, _, []} = ui:new({float(W), float(H)}),
+    {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
@@ -104,7 +110,7 @@ no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
         { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
-    send_orders(F, Orders),
+    send_orders(S, Orders),
     {next_state, no_redir, S#state{root = Root2}};
 
 no_redir({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
@@ -132,9 +138,9 @@ no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
     gen_fsm:send_event(F, close),
     {stop, normal, S}.
 
-login(setup_ui, S = #state{frontend = F, w = W, h = H}) ->
+login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
-    {Root, _, []} = ui:new({float(W), float(H)}),
+    {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
@@ -188,7 +194,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H}) ->
         { [{id, userinp}],      focus }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
-    send_orders(F, Orders),
+    send_orders(S, Orders),
 
     {_Autologon, U, _D, P} = gen_fsm:sync_send_event(F, get_autologon),
     Events2 = [
@@ -200,7 +206,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H}) ->
     end,
 
     {Root3, Orders2, []} = ui:handle_events(Root2, Events2),
-    send_orders(F, Orders2),
+    send_orders(S, Orders2),
 
     {next_state, login, S#state{root = Root3}};
 
@@ -291,9 +297,9 @@ login(invalid_login, S = #state{}) ->
     ],
     handle_root_events(login, S, Events).
 
-waiting(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
+waiting(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
-    {Root, _, []} = ui:new({float(W), float(H)}),
+    {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
@@ -331,7 +337,7 @@ waiting(setup_ui, S = #state{frontend = F, w = W, h = H, bpp = _Bpp}) ->
         { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
-    send_orders(F, Orders),
+    send_orders(S, Orders),
     {ok, _} = timer:send_after(1000, find_machine),
     {next_state, waiting, S#state{root = Root2}};
 

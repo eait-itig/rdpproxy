@@ -318,7 +318,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
                     #ts_cap_bitmap_codecs{codecs = [
                         #ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]}
                     ]},
-                    #ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,skip_alpha,multirect]},
+                    #ts_cap_bitmap{bpp = 16, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,skip_alpha,multirect]},
                     #ts_cap_order{},
                     #ts_cap_pointer{},
                     #ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},

@@ -11,13 +11,16 @@
 -include("ui.hrl").
 -include_lib("cairerl/include/cairerl.hrl").
 
--export([new/1, handle_events/2, select/2, print/1]).
+-export([new/1, new/2, handle_events/2, select/2, print/1]).
 -export([default_handler/2, selector_matches/2]).
--export([divide_bitmap/1, divide_bitmap/2, orders_to_updates/1, dedupe_orders/1]).
+-export([divide_bitmap/1, divide_bitmap/2, orders_to_updates/2, dedupe_orders/1]).
 
 -spec new(Size :: size()) -> {widget(), [order()]}.
-new(Size) ->
-    Root = #widget{id = root, mod = ui_root, size = Size, dest = {0.0, 0.0}},
+new(Size) -> new(Size, rgb24).
+
+-spec new(Size :: size(), Format :: cairerl:pixel_format()) -> {widget(), [order()]}.
+new(Size, Format) ->
+    Root = #widget{id = root, mod = ui_root, size = Size, dest = {0.0, 0.0}, format = Format},
     handle_events(Root, [{ [{id, root}], init }]).
 
 -type selector() :: {id, term()} |
@@ -185,16 +188,16 @@ handle_recurse(W = #widget{dest = D, mod = M, orders = OldOrders, children = Kid
 
 default_handler({children_updated, _OldKids}, Wd = #widget{}) ->
     {ok, Wd, []};
-default_handler({add_child, K}, Wd = #widget{children = Kids}) ->
+default_handler({add_child, K}, Wd = #widget{children = Kids, format = Fmt}) ->
     K2 = case K#widget.id of
-        undefined -> K#widget{id = make_ref()};
-        _ -> K
+        undefined -> K#widget{id = make_ref(), format = Fmt};
+        _ -> K#widget{format = Fmt}
     end,
     {ok, Wd#widget{children = Kids ++ [K2]}, []};
-default_handler({add_child, {before, Sel}, K}, Wd = #widget{children = Kids}) ->
+default_handler({add_child, {before, Sel}, K}, Wd = #widget{children = Kids, format = Fmt}) ->
     K2 = case K#widget.id of
-        undefined -> K#widget{id = make_ref()};
-        _ -> K
+        undefined -> K#widget{id = make_ref(), format = Fmt};
+        _ -> K#widget{format = Fmt}
     end,
     {BeforeNew, AfterNew} = lists:splitwith(fun(Kid) -> not selector_matches(Kid, Sel) end, Kids),
     {ok, Wd#widget{children = BeforeNew ++ [K2 | AfterNew]}, []};
@@ -222,8 +225,8 @@ slice_bitmap(I = #cairo_image{}, Xs, [FromY, ToY | RestY]) ->
     slice_bitmap(I, Xs, [ToY | RestY]).
 slice_bitmap_x(_I, [], _) -> [];
 slice_bitmap_x(_I, [_X], _) -> [];
-slice_bitmap_x(I = #cairo_image{}, [FromX, ToX | RestX], [FromY, ToY | RestY]) ->
-    Image0 = #cairo_image{width = ToX - FromX, height = ToY - FromY, data = <<>>},
+slice_bitmap_x(I = #cairo_image{format = Fmt}, [FromX, ToX | RestX], [FromY, ToY | RestY]) ->
+    Image0 = #cairo_image{width = ToX - FromX, height = ToY - FromY, data = <<>>, format = Fmt},
     {ok, _, Image1} = cairerl_nif:draw(Image0, [], [
         #cairo_pattern_create_for_surface{tag=img, image=I},
         #cairo_pattern_translate{tag=img, x=float(FromX), y=float(FromY)},
@@ -253,16 +256,19 @@ divide_bitmap(I = #cairo_image{width = W, height = H}, {X0,Y0})
     lists:flatmap(fun({X, Y, Slice}) ->
         divide_bitmap(Slice, {X0 + X, Y0 + Y})
     end, Slices);
-divide_bitmap(I = #cairo_image{data = D, width = W, height = H}, {X,Y}) ->
-    ShouldBeSize = W * H * 4,
-    ShouldBeSize = byte_size(D),
-    {ok, Compr} = rle_nif:compress(D, W, H),
+divide_bitmap(I = #cairo_image{data = D, width = W, height = H, format = Fmt}, {X,Y}) ->
+    Bpp = case Fmt of
+        rgb24 -> 24;
+        rgb16_565 -> 16;
+        _ -> error({bad_format, Fmt})
+    end,
+    {ok, Compr} = rle_nif:compress(D, W, H, Bpp),
     CompInfo = #ts_bitmap_comp_info{
         flags = [compressed]},
         %full_size = byte_size(D),
         %scan_width = W},
     true = (byte_size(Compr) < 1 bsl 16),
-    [#ts_bitmap{dest={X,Y}, size={W,H}, bpp=24, data = Compr,
+    [#ts_bitmap{dest={X,Y}, size={W,H}, bpp=Bpp, data = Compr,
         comp_info = CompInfo}].
 
 rect_to_ts_order(#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
@@ -287,17 +293,27 @@ dedupe_orders([O = #image{dest = {X,Y}, image = #cairo_image{width=W, height=H}}
 dedupe_orders([O = #null_order{} | Rest], SoFar, Set) ->
     dedupe_orders(Rest, [O | SoFar], Set).
 
-orders_to_updates([]) -> [];
-orders_to_updates(L = [#rect{} | _]) ->
+orders_to_updates([], _Fmt) -> [];
+orders_to_updates(L = [#rect{} | _], Fmt) ->
     {Rects, Rest} = lists:splitwith(fun(#rect{}) -> true; (_) -> false end, L),
-    [#ts_update_orders{orders = lists:map(fun rect_to_ts_order/1, Rects)} |
-        orders_to_updates(Rest)];
-orders_to_updates([#image{dest = {X,Y}, image = Im} | Rest]) ->
+    Orders = lists:map(fun
+        (#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
+            #ts_order_opaquerect{dest={round(X),round(Y)},
+                size={round(W),round(H)},
+                color={
+                    round(R*(1 bsl 8)),
+                    round(G*(1 bsl 8)),
+                    round(B*(1 bsl 8))}}
+    end, Rects),
+    [#ts_update_orders{orders = Orders} |
+        orders_to_updates(Rest, Fmt)];
+orders_to_updates([#image{dest = {X,Y}, image = Im} | Rest], Fmt) ->
+    #cairo_image{format = Fmt} = Im,
     Bitmaps = divide_bitmap(Im, {round(X), round(Y)}),
     Orders = bitmaps_to_orders(Bitmaps),
-    Orders ++ orders_to_updates(Rest);
-orders_to_updates([#null_order{} | Rest]) ->
-    orders_to_updates(Rest).
+    Orders ++ orders_to_updates(Rest, Fmt);
+orders_to_updates([#null_order{} | Rest], Fmt) ->
+    orders_to_updates(Rest, Fmt).
 
 bitmaps_to_orders(Bms) ->
     lists:reverse(bitmaps_to_orders(0, [], Bms)).

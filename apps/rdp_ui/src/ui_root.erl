@@ -44,14 +44,14 @@ handle({children_updated, _OldKids}, Wd = #widget{children = NewKids, state = S 
             {ok, Wd#widget{state = S2}, UnfocusEvts}
     end;
 
-handle({add_child, K}, Wd = #widget{children = Kids, size = Sz}) ->
+handle({add_child, K}, Wd = #widget{children = Kids, size = Sz, format = F}) ->
     case Kids of
         [] -> ok;
         _ -> lager:warning("root widget replacing child")
     end,
     K2 = case K#widget.id of
-        undefined -> K#widget{id = make_ref(), dest = {0.0,0.0}};
-        _ -> K#widget{dest = {0.0,0.0}}
+        undefined -> K#widget{id = make_ref(), dest = {0.0,0.0}, format = F};
+        _ -> K#widget{dest = {0.0,0.0}, format = F}
     end,
     {ok, Wd#widget{children = [K2]}, [{ [{id, K2#widget.id}], {resize, Sz} }]};
 

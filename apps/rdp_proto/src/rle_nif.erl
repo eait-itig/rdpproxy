@@ -8,7 +8,7 @@
 
 -module(rle_nif).
 
--export([compress/3, uncompress/3]).
+-export([compress/4, uncompress/4]).
 -on_load(init/0).
 
 init() ->
@@ -25,10 +25,10 @@ init() ->
 -type bitmap() :: binary().
 -type rle_bitmap() :: binary().
 
--spec compress(Pixels :: bitmap(), Width :: integer(), Height :: integer()) -> {ok, rle_bitmap()} | {error, term()}.
-compress(_Pixels, _Width, _Height) ->
+-spec compress(Pixels :: bitmap(), Width :: integer(), Height :: integer(), Bpp :: integer()) -> {ok, rle_bitmap()} | {error, term()}.
+compress(_Pixels, _Width, _Height, _Bpp) ->
     error(bad_nif).
 
--spec uncompress(Compressed :: rle_bitmap(), Width :: integer(), Height :: integer()) -> {ok, bitmap()} | {error, term()}.
-uncompress(_Compr, _W, _H) ->
+-spec uncompress(Compressed :: rle_bitmap(), Width :: integer(), Height :: integer(), Bpp :: integer()) -> {ok, bitmap()} | {error, term()}.
+uncompress(_Compr, _W, _H, _Bpp) ->
     error(bad_nif).

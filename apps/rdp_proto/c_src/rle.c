@@ -22,7 +22,7 @@ uncompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	ErlNifBinary in, out, temp;
 	ERL_NIF_TERM err;
-	int ret, w, h;
+	int ret, w, h, bpp, outbpp;
 
 	memset(&in, 0, sizeof(in));
 	memset(&out, 0, sizeof(out));
@@ -40,10 +40,18 @@ uncompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		err = enif_make_atom(env, "bad_height");
 		goto fail;
 	}
+	if (!enif_get_int(env, argv[3], &bpp) ||
+			!(bpp == 16 || bpp == 24)) {
+		err = enif_make_atom(env, "bad_bpp");
+		goto fail;
+	}
 
-	assert(enif_alloc_binary(w*h*4, &out));
+	outbpp = (bpp == 24) ? 32 : bpp;
 
-	ret = bitmap_decompress(in.data, out.data, w, h, in.size, 24, 32);
+	assert(enif_alloc_binary(w*h*outbpp/8, &out));
+
+	ret = bitmap_decompress(in.data, out.data, w, h, in.size,
+		bpp, outbpp);
 
 	if (ret <= 0) {
 		err = enif_make_atom(env, "decompress_failure");
@@ -76,7 +84,7 @@ compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	ErlNifBinary in;
 	ERL_NIF_TERM err;
-	int w, h, ret;
+	int w, h, ret, bpp;
 	struct stream out, temp;
 
 	memset(&in, 0, sizeof(in));
@@ -95,7 +103,12 @@ compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		err = enif_make_atom(env, "bad_height");
 		goto fail;
 	}
-	if (in.size != w*h*4) {
+	if (!enif_get_int(env, argv[3], &bpp) ||
+			!(bpp == 16 || bpp == 24)) {
+		err = enif_make_atom(env, "bad_bpp");
+		goto fail;
+	}
+	if (in.size < w * h * bpp / 8) {
 		err = enif_make_atom(env, "bad_size");
 		goto fail;
 	}
@@ -104,7 +117,7 @@ compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	assert(enif_alloc_binary(1*1024*1024, &temp.bin));
 
 	ret = xrdp_bitmap_compress((char *)in.data, w, h,
-		&out, 24, 1*1024*1024, &temp);
+		&out, bpp, 1*1024*1024, &temp);
 	if (ret <= 0) {
 		err = enif_make_atom(env, "no_lines_sent");
 		goto fail;
@@ -141,8 +154,8 @@ unload_cb(ErlNifEnv *env, void *priv_data)
 
 static ErlNifFunc nif_funcs[] =
 {
-	{"compress", 3, compress},
-	{"uncompress", 3, uncompress}
+	{"compress", 4, compress},
+	{"uncompress", 4, uncompress}
 };
 
 ERL_NIF_INIT(rle_nif, nif_funcs, load_cb, NULL, NULL, unload_cb)

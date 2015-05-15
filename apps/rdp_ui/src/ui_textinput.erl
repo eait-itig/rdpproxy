@@ -20,12 +20,13 @@ color_set_order({R, G, B}) ->
 get_text(#widget{state = #state{text = Txt}}) ->
     Txt.
 
-base(T, {W, H}) ->
+base(T, {W, H}, F) ->
     MouseIn = lists:member(mouse_in, T),
     Focus = lists:member(focus, T),
     IdleBg = {0.9, 0.9, 0.9},
     ActiveBg = {1.0, 1.0, 1.0},
-    Image0 = #cairo_image{width = round(W), height = round(H), data = <<>>},
+    Image0 = #cairo_image{width = round(W), height = round(H),
+        format = F, data = <<>>},
     {ok, _, Image1} = cairerl_nif:draw(Image0, [], [
         color_set_order(IdleBg),
         #cairo_rectangle{width=W,height=H},
@@ -257,8 +258,8 @@ handle(blur, Wd = #widget{tags = T}) ->
 handle({resize, {W,H}}, Wd = #widget{state = S, tags = T}) ->
     handle(redraw_base, Wd#widget{size = {W,H}});
 
-handle(redraw_base, Wd = #widget{state = S, tags = T, size = Sz}) ->
-    Img = base(T, Sz),
+handle(redraw_base, Wd = #widget{state = S, tags = T, size = Sz, format = F}) ->
+    Img = base(T, Sz, F),
     S2 = S#state{base = Img},
     handle(redraw_text, Wd#widget{state = S2});
 
