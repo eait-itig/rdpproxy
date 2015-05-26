@@ -717,11 +717,9 @@ handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
     {stop, normal, Data};
     %?MODULE:State(disconnect, Data);
 
-handle_info({'EXIT', Backend, Reason}, State, #data{backend = Backend, sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = IoChan}, shareid = ShareId} = Data) ->
+handle_info({'EXIT', Backend, Reason}, State, #data{backend = Backend, sslsock = SslSock} = Data) ->
     lager:debug("frontend lost backend due to termination: ~p", [Reason]),
-    lager:debug("sending deactivate and close"),
-    {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
-    send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+    lager:debug("sending dpu"),
     send_dpdu(SslSock, #mcs_dpu{}),
     ssl:close(SslSock),
     {stop, normal, Data};
