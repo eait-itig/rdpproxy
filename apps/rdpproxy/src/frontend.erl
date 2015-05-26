@@ -63,6 +63,7 @@ send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
 %% @private
 init([LSock, Sup]) ->
     random:seed(erlang:now()),
+    process_flag(trap_exit, true),
     {ok, accept, #data{sup = Sup, lsock = LSock, chansavail=lists:seq(1002,1002+35)}, 0}.
 
 take_el(El, []) -> {false, []};
@@ -111,7 +112,7 @@ initiation({x224_pdu, #x224_cr{class = 0, dst = 0} = Pkt}, #data{sock = Sock, x2
 
             _ ->
                 UsRef = 1000 + random:uniform(1000),
-                Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata,dynvc_gfx]},
+                Resp = #x224_cc{src = UsRef, dst = ThemRef, rdp_selected = [ssl], rdp_flags = [extdata,restricted_admin]},
                 {ok, RespData} = x224:encode(Resp),
                 {ok, Packet} = tpkt:encode(RespData),
                 inet:setopts(Sock, [{packet, raw}]),
@@ -327,7 +328,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
                     #ts_cap_bitmap_codecs{codecs = [
                         #ts_cap_bitmap_codec{codec = nscodec, id = 1, properties = [{dynamic_fidelity, true}, {subsampling, true}, {color_loss_level, 3}]}
                     ]},
-                    #ts_cap_bitmap{bpp = 24, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,skip_alpha,multirect]},
+                    #ts_cap_bitmap{bpp = Bpp, width = Core#tsud_core.width, height = Core#tsud_core.height, flags = [resize,compression,dynamic_bpp,skip_alpha,multirect]},
                     #ts_cap_order{},
                     #ts_cap_pointer{},
                     #ts_cap_input{flags = [mousex, scancodes, unicode, fastpath, fastpath2], kbd_layout = 0, kbd_type = 0, kbd_fun_keys = 0},
@@ -480,6 +481,7 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
     lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+    send_dpdu(SslSock, #mcs_dpu{}),
     ssl:close(SslSock),
     {stop, normal, D};
 
@@ -487,6 +489,7 @@ run_ui(close, D = #data{sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = Io
     lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+    send_dpdu(SslSock, #mcs_dpu{}),
     ssl:close(SslSock),
     {stop, normal, D};
 
@@ -713,6 +716,15 @@ handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
     end,
     {stop, normal, Data};
     %?MODULE:State(disconnect, Data);
+
+handle_info({'EXIT', Backend, Reason}, State, #data{backend = Backend, sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = IoChan}, shareid = ShareId} = Data) ->
+    lager:debug("frontend lost backend due to termination: ~p", [Reason]),
+    lager:debug("sending deactivate and close"),
+    {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
+    send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+    send_dpdu(SslSock, #mcs_dpu{}),
+    ssl:close(SslSock),
+    {stop, normal, Data};
 
 handle_info(_Msg, State, Data) ->
     {next_state, State, Data}.

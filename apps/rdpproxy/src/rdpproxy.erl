@@ -39,11 +39,11 @@ config(ConfigKey, Default) ->
 
 %% @doc Starts the rdpproxy application.
 start() ->
+    fuse:install(ldap_fuse, { {standard, 3, 10}, {reset, 30000} }),
     supervisor:start_link(?MODULE, []).
 
 %% @private
 start(_StartType, _StartArgs) ->
-    fuse:install(ldap_fuse, { {standard, 3, 10}, {reset, 30000} }),
     start().
 
 %% @private

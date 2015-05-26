@@ -265,8 +265,8 @@ divide_bitmap(I = #cairo_image{data = D, width = W, height = H, format = Fmt}, {
     {ok, Compr} = rle_nif:compress(D, W, H, Bpp),
     CompInfo = #ts_bitmap_comp_info{
         flags = [compressed]},
-        %full_size = byte_size(D),
-        %scan_width = W},
+        % full_size = byte_size(D),
+        % scan_width = W},
     true = (byte_size(Compr) < 1 bsl 16),
     [#ts_bitmap{dest={X,Y}, size={W,H}, bpp=Bpp, data = Compr,
         comp_info = CompInfo}].
@@ -296,14 +296,20 @@ dedupe_orders([O = #null_order{} | Rest], SoFar, Set) ->
 orders_to_updates([], _Fmt) -> [];
 orders_to_updates(L = [#rect{} | _], Fmt) ->
     {Rects, Rest} = lists:splitwith(fun(#rect{}) -> true; (_) -> false end, L),
+    {Bpp,RBits,GBits,BBits} = case Fmt of
+        rgb24 -> {24,8,8,8};
+        rgb16_565 -> {16,5,6,5};
+        _ -> error({bad_format, Fmt})
+    end,
     Orders = lists:map(fun
         (#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
             #ts_order_opaquerect{dest={round(X),round(Y)},
                 size={round(W),round(H)},
+                bpp=Bpp,
                 color={
-                    round(R*(1 bsl 8)),
-                    round(G*(1 bsl 8)),
-                    round(B*(1 bsl 8))}}
+                    trunc(R*(1 bsl RBits)),
+                    trunc(G*(1 bsl GBits)),
+                    trunc(B*(1 bsl BBits))}}
     end, Rects),
     [#ts_update_orders{orders = Orders} |
         orders_to_updates(Rest, Fmt)];

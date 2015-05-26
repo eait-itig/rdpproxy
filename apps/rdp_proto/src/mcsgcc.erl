@@ -36,6 +36,7 @@ pretty_print(Record) ->
 ?pp(mcs_tir);
 ?pp(mcs_data);
 ?pp(mcs_srv_data);
+?pp(mcs_dpu);
 pretty_print(_, _) ->
     no.
 
@@ -61,6 +62,7 @@ encode(#mcs_cjc{} = Rec) -> encode_dpdu(Rec);
 encode(#mcs_auc{} = Rec) -> encode_dpdu(Rec);
 encode(#mcs_data{} = Rec) -> encode_dpdu(Rec);
 encode(#mcs_srv_data{} = Rec) -> encode_dpdu(Rec);
+encode(#mcs_dpu{} = Rec) -> encode_dpdu(Rec);
 encode(_) -> {error, bad_mcsgcc}.
 
 padding_only(Bin) ->
@@ -104,6 +106,8 @@ encode_dpdu(#mcs_data{user = UserId, channel = Channel, priority = Priority, dat
     mcsp_per:encode('DomainMCSPDU', {sendDataRequest, #'SendDataRequest'{initiator = UserId, channelId = Channel, dataPriority = Priority, segmentation = 3, userData = Binary}});
 encode_dpdu(#mcs_srv_data{user = UserId, channel = Channel, priority = Priority, data = Binary}) ->
     mcsp_per:encode('DomainMCSPDU', {sendDataIndication, #'SendDataIndication'{initiator = UserId, channelId = Channel, dataPriority = Priority, segmentation = 3, userData = Binary}});
+encode_dpdu(#mcs_dpu{reason = Reason}) ->
+    mcsp_per:encode('DomainMCSPDU', {disconnectProviderUltimatum, #'DisconnectProviderUltimatum'{reason = Reason}});
 encode_dpdu(_) -> {error, bad_dpdu}.
 
 decode_ci(Bin) ->

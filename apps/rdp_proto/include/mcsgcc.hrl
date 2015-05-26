@@ -19,3 +19,4 @@
 -record(mcs_tic, {user, token, status='rt-successful', token_status='notInUse'}).
 -record(mcs_data, {user, channel, priority=high, data}).
 -record(mcs_srv_data, {user, channel, priority=high, data}).
+-record(mcs_dpu, {reason='rn-user-requested'}).

@@ -505,7 +505,7 @@ encode_tscap(#ts_cap_vchannel{flags=FlagAtoms, chunksize=ChunkSize}) ->
 
 encode_tscap(#ts_cap_bitmap{bpp = Bpp, flags = Flags, width = Width, height = Height}) ->
     <<DrawingFlags:8, Resize:1, Compression:1, Multirect:1>> = encode_bit_flags(sets:from_list(Flags), ?ts_cap_bitmap_flags),
-    Inner = <<Bpp:16/little, 1:16/little, 1:16/little, 1:16/little, Width:16/little, Height:16/little, 0:16, Resize:16/little, Compression:16/little, 0:8, DrawingFlags:8, Multirect:16/little, 0:16>>,
+    Inner = <<Bpp:16/little, 1:16/little, 1:16/little, 1:16/little, Width:16/little, Height:16/little, 0:16, Resize:16/little, Compression:16/little, 1:8, DrawingFlags:8, Multirect:16/little, 0:16>>,
     % this is different in the example versus spec
     encode_tscap({16#02, Inner});
 
@@ -870,12 +870,12 @@ encode_primary_ts_order(Type, Fields, Flags, Inner) ->
     <<ControlFlags:8, Type:8, FieldN:FieldBits/little, Inner/binary>>.
 
 encode_ts_order(#ts_order_opaquerect{flags = Flags, dest={X,Y}, size={W,H}, color={R,G,B}, bpp = Bpp}) ->
-    {RBits,GBits,BBits,ZBits} = case Bpp of
-        24 -> {8,8,8,0};
-        16 -> {5,6,5,0};
-        15 -> {5,5,5,1}
+    Colour = case Bpp of
+        24 -> <<R:8,G:8,B:8>>;
+        16 -> <<C:16/big>> = <<R:5,G:6,B:5>>, <<C:24/little>>;
+        15 -> <<C:16/big>> = <<R:5,G:5,B:5,0:1>>, <<C:24/little>>
     end,
-    Inner = <<X:16/little-signed, Y:16/little-signed, W:16/little-signed, H:16/little-signed, R:RBits, G:GBits, B:BBits, 0:ZBits>>,
+    Inner = <<X:16/little-signed, Y:16/little-signed, W:16/little-signed, H:16/little-signed, Colour/bitstring>>,
     encode_primary_ts_order(16#0a, [1,1,1,1,1,1,1], Flags, Inner);
 
 encode_ts_order(#ts_order_srcblt{flags = Flags, dest = {X1,Y1}, src = {X2, Y2}, size = {W,H}, rop = Rop}) ->
@@ -900,8 +900,8 @@ encode_ts_bitmap(#ts_bitmap{dest={X,Y}, size={W,H}, bpp=Bpp, comp_info=CompInfo,
     ComprFlag = case Compressed of true -> 1; _ -> 0 end,
     NoComprFlag = case ScanWidth of undefined when Compressed -> 1; _ -> 0 end,
     <<Flags:16/big>> = <<0:5, NoComprFlag:1, 0:9, ComprFlag:1>>,
-    X2 = X + W,
-    Y2 = Y + H,
+    X2 = X + W - 1,
+    Y2 = Y + H - 1,
     Body = if
         Compressed and (NoComprFlag == 0) ->
             CompSize = byte_size(Data),
