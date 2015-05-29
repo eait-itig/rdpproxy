@@ -367,17 +367,17 @@ cull_masks([M = #mask{bitmap = B, geom = G} | Rest]) ->
         <<0:N>> ->
             cull_masks(Rest);
         _ ->
-            SubRest = lists:foldl(fun(M2 = #mask{bitmap = B2, geom = G2}, Acc) ->
+            SubRest = lists:map(fun(M2 = #mask{bitmap = B2, geom = G2}) ->
                 case rect_overlap(G, G2) of
                     true ->
                         BM = make_bitmap_mask(G, G2),
                         B22 = binsub(B2, BM),
-                        [M2#mask{bitmap = B22} | Acc];
+                        M2#mask{bitmap = B22};
                     false ->
-                        [M2 | Acc]
+                        M2
                 end
-            end, [], Rest),
-            [M | cull_masks(lists:reverse(SubRest))]
+            end, Rest),
+            [M | cull_masks(SubRest)]
     end.
 
 orders_to_prim_updates([], _Fmt) -> [];
