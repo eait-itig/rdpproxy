@@ -15,6 +15,8 @@
 -record(fp_inp_sync, {flags = []}).
 -record(fp_inp_unicode, {code = 0, action = down}).
 
+-record(fp_update_mouse, {mode = default :: default | hidden}).
+
 -record(ts_surface_set_bits, {
 	dest :: {X :: integer(), Y :: integer()},
 	size :: {W :: integer(), H :: integer()},

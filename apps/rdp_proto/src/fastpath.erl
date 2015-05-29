@@ -23,6 +23,7 @@ pretty_print(Rec, N) ->
 pretty_print(Record) ->
     io_lib_pretty:print(Record, fun pretty_print/2).
 ?pp(fp_pdu);
+?pp(fp_update_mouse);
 ?pp(fp_inp_scancode);
 ?pp(fp_inp_mouse);
 ?pp(fp_inp_wheel);
@@ -112,6 +113,12 @@ encode_update(#ts_update_orders{orders = Orders}) ->
 encode_update(Ub = #ts_update_bitmaps{bitmaps = Bitmaps}) ->
     Inner = rdpp:encode_ts_update_bitmaps(Ub),
     encode_update({16#01, single, <<1:16/little, Inner/binary>>});
+
+encode_update(#fp_update_mouse{mode = hidden}) ->
+    encode_update({16#05, single, <<>>});
+
+encode_update(#fp_update_mouse{mode = default}) ->
+    encode_update({16#06, single, <<>>});
 
 encode_update(#ts_update_surfaces{surfaces = Surfs}) ->
     SurfBins = << <<(encode_surface(Surf))/binary>> || Surf <- Surfs >>,

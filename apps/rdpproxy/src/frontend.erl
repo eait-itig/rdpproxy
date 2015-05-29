@@ -404,6 +404,9 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
             {ok, FontMap} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_fontmap{}}),
             send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
+            % make sure the mouse pointer is visible
+            send_update(Data, #fp_update_mouse{mode = default}),
+
             {ok, Ui} = ui_fsm_sup:start_ui(self()),
             lager:debug("frontend for ~p spawned ui_fsm ~p", [Data#data.peer, Ui]),
             % send_update(Data, #ts_update_orders{orders = [
