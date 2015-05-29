@@ -310,8 +310,8 @@ decode_tscaps(N, Bin) ->
 decode_tscap(16#1, Bin) ->
     <<MajorNum:16/little, MinorNum:16/little, _:16, _:16, _:16, ExtraFlags:16/little, _:16, _:16, _:16, RefreshRect:8, SuppressOutput:8>> = Bin,
 
-    Major = case MajorNum of 1 -> windows; 2 -> os2; 3 -> macintosh; 4 -> unix; _ -> other end,
-    Minor = case MinorNum of 1 -> win31x; 2 -> win95; 3 -> winnt; 4 -> os2v21; 5 -> powerpc; 6 -> macintosh; 7 -> native_x11; 8 -> pseudo_x11; _ -> other end,
+    Major = case MajorNum of 1 -> windows; 2 -> os2; 3 -> macintosh; 4 -> unix; 5 -> ios; 6 -> osx; 7 -> android; _ -> unknown end,
+    Minor = case MinorNum of 1 -> win31x; 2 -> win95; 3 -> winnt; 4 -> os2v21; 5 -> powerpc; 6 -> macintosh; 7 -> native_x11; 8 -> pseudo_x11; _ -> unknown end,
 
     FlagSet = decode_bit_flags(<<ExtraFlags:16/big, RefreshRect:1, SuppressOutput:1>>, ?ts_cap_general_flags),
 
@@ -490,7 +490,7 @@ decode_tscap(Type, Bin) ->
     {Type, Bin}.
 
 encode_tscap(#ts_cap_general{os = [Major,Minor], flags=Flags}) ->
-    MajorNum = case Major of windows -> 1; os2 -> 2; macintosh -> 3; unix -> 4; _ -> 0 end,
+    MajorNum = case Major of windows -> 1; os2 -> 2; macintosh -> 3; unix -> 4; ios -> 5; osx -> 6; android -> 7; _ -> 0 end,
     MinorNum = case Minor of win31x -> 1; win95 -> 2; winnt -> 3; os2v21 -> 4; powerpc -> 5; macintosh -> 6; native_x11 -> 7; pseudo_x11 -> 8; _ -> 0 end,
     <<ExtraFlags:16/big, RefreshRect:1, SuppressOutput:1>> = encode_bit_flags(sets:from_list(Flags), ?ts_cap_general_flags),
     Inner = <<MajorNum:16/little, MinorNum:16/little, 16#200:16/little, 0:16, 0:16, ExtraFlags:16/little, 0:16, 0:16, 0:16, RefreshRect:8, SuppressOutput:8>>,

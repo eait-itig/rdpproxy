@@ -363,6 +363,8 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = Them} 
 rdp_capex({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them, iochan = IoChan}, shareid = ShareId} = Data) ->
     case rdpp:decode_sharecontrol(RdpData) of
         {ok, #ts_confirm{shareid = ShareId, capabilities = Caps} = Pkt} ->
+            #ts_cap_general{os = OS, flags = Fl} = lists:keyfind(ts_cap_general, 1, Caps),
+            lager:debug("client OS = ~p, flags = ~p", [OS, Fl]),
             {next_state, init_finalize, Data#data{caps = Caps}};
         {ok, RdpPkt} ->
             %lager:info("rdp_capex got ~s", [rdpp:pretty_print(RdpPkt)]),
@@ -464,24 +466,27 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
     {ok, Redir} = rdpp:encode_sharecontrol(#ts_redir{
         channel = Us,
         shareid = ShareId,
-        sessionid = 0,
-        flags = [logon],
+        sessionid = crypto:rand_uniform(0,1 bsl 16),
+        flags = [],
         % always send the address if it's the official OSX client (it won't actually redir
         % if we don't, even though this is invalid by the spec)
-        address = if GeneralCap#ts_cap_general.os =:= [other,other] ->
-            unicode:characters_to_binary(<<Hostname/binary,0>>, latin1, {utf16, little});
-            true -> undefined end,
-        username = unicode:characters_to_binary(<<Username/binary,0>>, latin1, {utf16,little}),
-        domain = unicode:characters_to_binary(<<Domain/binary,0>>, latin1, {utf16,little}),
-        password = unicode:characters_to_binary(<<Password/binary, 0>>, latin1, {utf16,little}),
+        address = case GeneralCap#ts_cap_general.os of
+            [osx,_] -> unicode:characters_to_binary(<<Hostname/binary,0>>, latin1, {utf16, little});
+            _ -> undefined
+        end,
+        %username = unicode:characters_to_binary(<<Username/binary,0>>, latin1, {utf16,little}),
+        %domain = unicode:characters_to_binary(<<Domain/binary,0>>, latin1, {utf16,little}),
+        %password = unicode:characters_to_binary(<<Password/binary, 0>>, latin1, {utf16,little}),
         cookie = <<Cookie/binary, 16#0d, 16#0a>>
     }),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Redir}),
+    timer:sleep(200),
 
     lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
     send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
     send_dpdu(SslSock, #mcs_dpu{}),
+    timer:sleep(500),
     ssl:close(SslSock),
     {stop, normal, D};
 
