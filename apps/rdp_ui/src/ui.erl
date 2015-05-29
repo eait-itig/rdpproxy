@@ -13,7 +13,7 @@
 
 -export([new/1, new/2, handle_events/2, select/2, print/1]).
 -export([default_handler/2, selector_matches/2]).
--export([divide_bitmap/1, divide_bitmap/2, orders_to_updates/2, dedupe_orders/1]).
+-export([divide_bitmap/1, divide_bitmap/2, orders_to_updates/2]).
 
 -spec new(Size :: size()) -> {widget(), [order()]}.
 new(Size) -> new(Size, rgb24).
@@ -236,7 +236,7 @@ slice_bitmap_x(I = #cairo_image{format = Fmt}, [FromX, ToX | RestX], [FromY, ToY
     ]),
     [{FromX, FromY, Image1} | slice_bitmap_x(I, [ToX | RestX], [FromY, ToY | RestY])].
 
--define(BITMAP_SLICE_TGT, (4000 div 4)).
+-define(BITMAP_SLICE_TGT, (8000 div 4)).
 
 divide_bitmap(I = #cairo_image{}) ->
     divide_bitmap(I, {0,0}).
@@ -276,50 +276,146 @@ rect_to_ts_order(#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
         size={round(W),round(H)},
         color={round(R*256), round(G*256), round(B*256)}}.
 
-dedupe_orders(L) ->
-    dedupe_orders(lists:reverse(L), [], gb_sets:new()).
+orders_to_updates(Orders, Fmt) ->
+    T1 = os:timestamp(),
+    PrimUpdates = orders_to_prim_updates(Orders, Fmt),
+    Culled = cull_prims(lists:reverse(PrimUpdates)),
+    Updates = pack_prims(Culled),
+    T2 = os:timestamp(),
+    Delta = timer:now_diff(T2,T1)/1000,
+    if (Delta > 5) ->
+        lager:debug("processing orders took ~p ms", [Delta]);
+    true -> ok end,
+    Updates.
 
-dedupe_orders([], SoFar, _) -> SoFar;
-dedupe_orders([O = #rect{dest = {X,Y}, size = {W,H}} | Rest], SoFar, Set) ->
-    case gb_sets:is_element({X,Y,W,H}, Set) of
-        true -> dedupe_orders(Rest, SoFar, Set);
-        false -> dedupe_orders(Rest, [O | SoFar], gb_sets:add_element({X,Y,W,H}, Set))
-    end;
-dedupe_orders([O = #image{dest = {X,Y}, image = #cairo_image{width=W, height=H}} | Rest], SoFar, Set) ->
-    case gb_sets:is_element({X,Y,W,H}, Set) of
-        true -> dedupe_orders(Rest, SoFar, Set);
-        false -> dedupe_orders(Rest, [O | SoFar], gb_sets:add_element({X,Y,W,H}, Set))
-    end;
-dedupe_orders([O = #null_order{} | Rest], SoFar, Set) ->
-    dedupe_orders(Rest, [O | SoFar], Set).
+-spec binsub(bitstring(), bitstring()) -> bitstring().
+binsub(<<>>, <<>>) -> <<>>;
+binsub(B1, B2) ->
+    Sz = bit_size(B1),
+    Sz = bit_size(B2),
+    <<N:Sz>> = B1,
+    <<M:Sz>> = B2,
+    X = N band (bnot M),
+    <<X:Sz>>.
 
-orders_to_updates([], _Fmt) -> [];
-orders_to_updates(L = [#rect{} | _], Fmt) ->
-    {Rects, Rest} = lists:splitwith(fun(#rect{}) -> true; (_) -> false end, L),
+-type ts_order() :: #ts_order_opaquerect{} | #ts_bitmap{}.
+-type rect() :: {X :: integer(), Y :: integer(), X2 :: integer(), Y2 :: integer()}.
+-spec order_geom(ts_order()) -> rect().
+-define(clip(X), if ((X) < 0) -> 0; true -> (X) end).
+-define(min(X,Y), if ((X) < (Y)) -> (X); true -> (Y) end).
+-define(max(X,Y), if ((X) > (Y)) -> (X); true -> (Y) end).
+-define(bound(X,X0,X1), if ((X) < (X0)) -> X0; ((X) > (X1)) -> X1; true -> X end).
+order_geom(#ts_order_opaquerect{dest={X,Y},size={W,H}}) ->
+    {X,Y,X+W,Y+H};
+order_geom(#ts_bitmap{dest={X,Y},size={W,H}}) ->
+    {X,Y,X+W,Y+H}.
+
+rect_overlap({AX, AY, AX2, AY2}, {BX, BY, BX2, BY2}) ->
+    not (
+        (AX > BX2) orelse
+        (AY > BY2) orelse
+        (AX2 < BX) orelse
+        (AY2 < BY)
+        ).
+
+-spec make_bitmap_mask(Geom :: rect(), ParentGeom :: rect()) -> bitstring().
+make_bitmap_mask({X,Y,X2,Y2}, {PX,PY,PX2,PY2}) ->
+    Scan = PX2 - PX,
+    OnesStart = ?bound(X, PX, PX2),
+    PreZeroLen = OnesStart - PX,
+    OnesFinish = ?bound(X2, OnesStart, PX2),
+    OnesLen = OnesFinish - OnesStart,
+    PostZeroLen = PX2 - OnesFinish,
+    Scan = PreZeroLen + OnesLen + PostZeroLen,
+    lists:foldl(fun(CY, Acc) ->
+        if
+            (CY >= Y) andalso (CY =< Y2) ->
+                <<0:PreZeroLen, (1 bsl OnesLen - 1):OnesLen, 0:PostZeroLen, Acc/bitstring>>;
+            true ->
+                <<0:Scan, Acc/bitstring>>
+        end
+    end, <<>>, lists:reverse(lists:seq(PY, PY2))).
+
+-record(mask, {bitmap, geom, order}).
+to_masks([]) -> [];
+to_masks([P | Rest]) ->
+    G = order_geom(P),
+    M = make_bitmap_mask(G, G),
+    [#mask{bitmap = M, geom = G, order = P} | to_masks(Rest)].
+
+cull_prims(Prims) ->
+    Masks0 = [#mask{geom = order_geom(P), order = P}
+        || P <- Prims],
+    Masks1 = cull_identical(Masks0),
+    Masks2 = [M#mask{bitmap = make_bitmap_mask(G, G)}
+        || M = #mask{geom = G} <- Masks1],
+    Masks3 = cull_masks(Masks2),
+    [M#mask.order || M <- Masks3].
+
+cull_identical(List) -> cull_identical(List, gb_trees:empty()).
+cull_identical([], _) -> [];
+cull_identical([M = #mask{geom = G} | Rest], Seen) ->
+    case gb_trees:is_defined(G, Seen) of
+        true -> cull_identical(Rest, Seen);
+        false -> [M | cull_identical(Rest, gb_trees:insert(G, true, Seen))]
+    end.
+
+cull_masks([]) -> [];
+cull_masks([M = #mask{bitmap = B, geom = G} | Rest]) ->
+    N = bit_size(B),
+    case B of
+        <<0:N>> ->
+            cull_masks(Rest);
+        _ ->
+            SubRest = lists:foldl(fun(M2 = #mask{bitmap = B2, geom = G2}, Acc) ->
+                case rect_overlap(G, G2) of
+                    true ->
+                        BM = make_bitmap_mask(G, G2),
+                        B22 = binsub(B2, BM),
+                        [M2#mask{bitmap = B22} | Acc];
+                    false ->
+                        [M2 | Acc]
+                end
+            end, [], Rest),
+            [M | cull_masks(lists:reverse(SubRest))]
+    end.
+
+orders_to_prim_updates([], _Fmt) -> [];
+orders_to_prim_updates([Rect = #rect{} | Rest], Fmt) ->
     {Bpp,RBits,GBits,BBits} = case Fmt of
         rgb24 -> {24,8,8,8};
         rgb16_565 -> {16,5,6,5};
         _ -> error({bad_format, Fmt})
     end,
-    Orders = lists:map(fun
-        (#rect{dest={X,Y}, size={W,H}, color={R,G,B}}) ->
-            #ts_order_opaquerect{dest={round(X),round(Y)},
+    #rect{dest={X,Y}, size={W,H}, color={R,G,B}} = Rect,
+    [#ts_order_opaquerect{dest={round(X),round(Y)},
                 size={round(W),round(H)},
                 bpp=Bpp,
                 color={
                     trunc(R*(1 bsl RBits)),
                     trunc(G*(1 bsl GBits)),
-                    trunc(B*(1 bsl BBits))}}
-    end, Rects),
-    [#ts_update_orders{orders = Orders} |
-        orders_to_updates(Rest, Fmt)];
-orders_to_updates([#image{dest = {X,Y}, image = Im} | Rest], Fmt) ->
+                    trunc(B*(1 bsl BBits))}} |
+        orders_to_prim_updates(Rest, Fmt)];
+orders_to_prim_updates([#image{dest = {X,Y}, image = Im} | Rest], Fmt) ->
     #cairo_image{format = Fmt} = Im,
     Bitmaps = divide_bitmap(Im, {round(X), round(Y)}),
-    Orders = bitmaps_to_orders(Bitmaps),
-    Orders ++ orders_to_updates(Rest, Fmt);
-orders_to_updates([#null_order{} | Rest], Fmt) ->
-    orders_to_updates(Rest, Fmt).
+    Bitmaps ++ orders_to_prim_updates(Rest, Fmt);
+orders_to_prim_updates([#null_order{} | Rest], Fmt) ->
+    orders_to_prim_updates(Rest, Fmt).
+
+pack_prims([]) -> [];
+pack_prims(L = [#ts_order_opaquerect{} | _]) ->
+    {Rects, Rest} = lists:splitwith(fun
+        (#ts_order_opaquerect{}) -> true;
+        (_) -> false
+    end, L),
+    [#ts_update_orders{orders = Rects} | pack_prims(Rest)];
+pack_prims(L = [#ts_bitmap{} | _]) ->
+    {Bitmaps, Rest} = lists:splitwith(fun
+        (#ts_bitmap{}) -> true;
+        (_) -> false
+    end, L),
+    bitmaps_to_orders(Bitmaps) ++ pack_prims(Rest).
 
 bitmaps_to_orders(Bms) ->
     lists:reverse(bitmaps_to_orders(0, [], Bms)).

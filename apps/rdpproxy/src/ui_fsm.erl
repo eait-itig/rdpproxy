@@ -33,7 +33,7 @@ init([Frontend]) ->
     {ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
 
 send_orders(#state{frontend = F, format = Fmt}, Orders) ->
-    Updates = ui:orders_to_updates(ui:dedupe_orders(Orders), Fmt),
+    Updates = ui:orders_to_updates(Orders, Fmt),
     lists:foreach(fun(U) ->
         gen_fsm:send_event(F, {send_update, U})
     end, Updates).

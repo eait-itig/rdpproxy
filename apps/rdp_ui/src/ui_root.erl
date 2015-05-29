@@ -15,10 +15,20 @@
 
 -record(state, {bgcolor = {0,0,0}, focus=[]}).
 
-handle(init, Wd = #widget{size = Sz}) ->
+rect_order(Sz = {W, H}, Color = {R,G,B}, Fmt) ->
+    Image0 = #cairo_image{width = round(W), height = round(H),
+        format = Fmt, data = <<>>},
+    {ok, _, Image1} = cairerl_nif:draw(Image0, [], [
+        #cairo_set_source_rgba{r = float(R), g = float(G), b = float(B)},
+        #cairo_rectangle{width=W,height=H},
+        #cairo_fill{}
+        ]),
+    #image{image = Image1}.
+
+handle(init, Wd = #widget{size = Sz, format = Fmt}) ->
     State = #state{},
     {ok, Wd#widget{state = State, orders = [
-        #rect{size = Sz, color = State#state.bgcolor}
+        rect_order(Sz, State#state.bgcolor, Fmt)
     ]}, []};
 
 handle(focus_next, Wd = #widget{state = S}) ->
@@ -61,15 +71,15 @@ handle({remove_child, Sel}, Wd = #widget{children = Kids}) ->
     end, Kids),
     {ok, Wd#widget{children = Kept}, []};
 
-handle({resize, NewSize}, Wd = #widget{state = S = #state{bgcolor = Bg}, children = Kids}) ->
+handle({resize, NewSize}, Wd = #widget{state = S = #state{bgcolor = Bg}, children = Kids, format = Fmt}) ->
     {ok, Wd#widget{state = S, size = NewSize, orders = [
-        #rect{size = NewSize, color = Bg}
+        rect_order(NewSize, Bg, Fmt)
     ]}, [{ [{id, Kid#widget.id}], {resize, NewSize} } || Kid <- Kids]};
 
-handle({set_bgcolor, BgColor}, Wd = #widget{size = Size, state = S = #state{}}) ->
+handle({set_bgcolor, BgColor}, Wd = #widget{size = Size, state = S = #state{}, format = Fmt}) ->
     S2 = S#state{bgcolor = BgColor},
     {ok, Wd#widget{state = S2, orders = [
-        #rect{size = Size, color = BgColor}
+        rect_order(Size, BgColor, Fmt)
     ]}, []};
 
 handle(Event, Wd) ->
