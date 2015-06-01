@@ -46,7 +46,7 @@ send_dpdu(SslSock, McsPkt) ->
     {ok, McsData} = mcsgcc:encode_dpdu(McsPkt),
     {ok, DtData} = x224:encode(#x224_dt{data = McsData}),
     {ok, Packet} = tpkt:encode(DtData),
-    ok = ssl:send(SslSock, Packet).
+    ssl:send(SslSock, Packet).
 
 send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
     #ts_cap_general{flags = Flags} = lists:keyfind(ts_cap_general, 1, Caps),
@@ -57,7 +57,7 @@ send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
         _ ->
             #data{shareid = ShareId, mcs = #mcs_state{us = Us, iochan = IoChan}} = Data,
             {ok, Bin} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = TsUpdate}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Bin})
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Bin})
     end.
 
 %% @private
@@ -255,7 +255,7 @@ mcs_attach_user({mcs_pdu, #mcs_edr{}}, Data) ->
     {next_state, mcs_attach_user, Data};
 
 mcs_attach_user({mcs_pdu, #mcs_aur{}}, #data{sslsock = SslSock, mcs = #mcs_state{them = Them}} = Data) ->
-    send_dpdu(SslSock, #mcs_auc{user = Them, status = 'rt-successful'}),
+    ok = send_dpdu(SslSock, #mcs_auc{user = Them, status = 'rt-successful'}),
     {next_state, mcs_chans, Data};
 
 mcs_attach_user({mcs_pdu, Pdu}, Data) ->
@@ -267,7 +267,7 @@ mcs_chans({mcs_pdu, #mcs_cjr{user = Them, channel = Chan}}, #data{sslsock = SslS
     NewChans = Chans -- [Chan],
     NewData = Data#data{waitchans = NewChans},
 
-    send_dpdu(SslSock, #mcs_cjc{user = Us, channel = Chan, status = 'rt-successful'}),
+    ok = send_dpdu(SslSock, #mcs_cjc{user = Us, channel = Chan, status = 'rt-successful'}),
 
     if (length(NewChans) == 0) ->
         lager:info("~p mcs_chans all ok (chans = ~p)", [Data#data.peer, NewData#data.mcs#mcs_state.chans]),
@@ -302,7 +302,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
     case rdpp:decode_basic(RdpData) of
         {ok, #ts_info{} = InfoPkt} ->
             {ok, LicData} = rdpp:encode_basic(#ts_license_vc{secflags=[encrypt_license]}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = LicData}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = LicData}),
 
             Core = Data#data.tsud_core,
             {Bpp,Format} = case Core#tsud_core.color of
@@ -341,7 +341,7 @@ rdp_clientinfo({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan
             %file:write_file("my_demand", DaPkt),
             %{ok, Da} = rdpp:decode_sharecontrol(DaPkt),
             %error_logger:info_report(["sending demand packet: ", rdpp:pretty_print(Da)]),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = DaPkt}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = DaPkt}),
 
             {next_state, rdp_capex, Data#data{shareid = ShareId, client_info = InfoPkt, bpp = Bpp}};
         {ok, RdpPkt} ->
@@ -387,22 +387,22 @@ init_finalize({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}
     case rdpp:decode_sharecontrol(RdpData) of
         {ok, #ts_sharedata{shareid = ShareId, data = #ts_sync{}}} ->
             {ok, SyncData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_sync{user = Us}}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = SyncData}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = SyncData}),
             {next_state, init_finalize, Data};
 
         {ok, #ts_sharedata{shareid = ShareId, data = #ts_control{action=cooperate}}} ->
             {ok, CoopData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_control{action = cooperate, controlid = Us, grantid = Them}}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = CoopData}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = CoopData}),
             {next_state, init_finalize, Data};
 
         {ok, #ts_sharedata{shareid = ShareId, data = #ts_control{action=request}}} ->
             {ok, GrantData} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_control{action = granted, controlid = Us, grantid = Them}}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = GrantData}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = GrantData}),
             {next_state, init_finalize, Data};
 
         {ok, #ts_sharedata{shareid = ShareId, data = #ts_fontlist{}}} ->
             {ok, FontMap} = rdpp:encode_sharecontrol(#ts_sharedata{channel = Us, shareid = ShareId, data = #ts_fontmap{}}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = FontMap}),
 
             % make sure the mouse pointer is visible
             send_update(Data, #fp_update_mouse{mode = default}),
@@ -482,13 +482,13 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
         %password = unicode:characters_to_binary(<<Password/binary, 0>>, latin1, {utf16,little}),
         cookie = <<Cookie/binary, 16#0d, 16#0a>>
     }),
-    send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Redir}),
+    ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Redir}),
     timer:sleep(200),
 
     lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
-    send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
-    send_dpdu(SslSock, #mcs_dpu{}),
+    ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+    _ = send_dpdu(SslSock, #mcs_dpu{}),
     timer:sleep(500),
     ssl:close(SslSock),
     {stop, normal, D};
@@ -496,8 +496,8 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
 run_ui(close, D = #data{sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = IoChan}, shareid = ShareId}) ->
     lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
-    send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
-    send_dpdu(SslSock, #mcs_dpu{}),
+    ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+    _ = send_dpdu(SslSock, #mcs_dpu{}),
     ssl:close(SslSock),
     {stop, normal, D};
 
@@ -521,7 +521,7 @@ run_ui({mcs_pdu, #mcs_data{user = Them, data = RdpData, channel = IoChan}}, D = 
 
         {ok, #ts_sharedata{shareid = ShareId, data = #ts_shutdown{}}} ->
             {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
-            send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
+            ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
             ssl:close(SslSock),
             {stop, normal, D};
 
@@ -728,7 +728,7 @@ handle_info({tcp_closed, Sock}, State, #data{sock = Sock} = Data) ->
 handle_info({'EXIT', Backend, Reason}, State, #data{backend = Backend, sslsock = SslSock} = Data) ->
     lager:debug("frontend lost backend due to termination: ~p", [Reason]),
     lager:debug("sending dpu"),
-    send_dpdu(SslSock, #mcs_dpu{}),
+    _ = send_dpdu(SslSock, #mcs_dpu{}),
     ssl:close(SslSock),
     {stop, normal, Data};
 
