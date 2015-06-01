@@ -21,4 +21,4 @@ init([]) ->
     Ui = {undefined,
         {ui_fsm, start_link, []},
         transient, 1000, worker, [ui_fsm]},
-    {ok, {{simple_one_for_one, 60, 600}, [Ui]}}.
+    {ok, {{simple_one_for_one, 60, 60}, [Ui]}}.

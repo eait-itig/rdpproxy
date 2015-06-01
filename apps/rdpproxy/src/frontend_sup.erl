@@ -28,5 +28,5 @@ init([Port]) ->
     spawn_link(?MODULE, initial_listeners, [self()]),
     Server = {undefined,
         {frontend, start_link, [ListenSocket, self()]},
-        transient, 1000, worker, [frontend]},
-    {ok, {{simple_one_for_one, 60, 600}, [Server]}}.
+        temporary, 1000, worker, [frontend]},
+    {ok, {{simple_one_for_one, 60, 60}, [Server]}}.

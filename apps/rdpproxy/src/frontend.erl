@@ -483,15 +483,23 @@ run_ui({redirect, Cookie, Hostname, Username, Domain, Password}, D = #data{sslso
         cookie = <<Cookie/binary, 16#0d, 16#0a>>
     }),
     ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Redir}),
-    timer:sleep(200),
+    timer:sleep(500),
 
     lager:debug("sending deactivate and close"),
     {ok, Deact} = rdpp:encode_sharecontrol(#ts_deactivate{channel = Us, shareid = ShareId}),
-    ok = send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}),
-    _ = send_dpdu(SslSock, #mcs_dpu{}),
-    timer:sleep(500),
-    ssl:close(SslSock),
-    {stop, normal, D};
+
+    case send_dpdu(SslSock, #mcs_srv_data{user = Us, channel = IoChan, data = Deact}) of
+        ok ->
+            _ = send_dpdu(SslSock, #mcs_dpu{}),
+            timer:sleep(500),
+            ssl:close(SslSock),
+            {stop, normal, D};
+
+        {error, closed} ->
+            % some clients disconnect right away when they get redir
+            ssl:close(SslSock),
+            {stop, normal, D}
+    end;
 
 run_ui(close, D = #data{sslsock = SslSock, mcs = #mcs_state{us = Us, iochan = IoChan}, shareid = ShareId}) ->
     lager:debug("sending deactivate and close"),
