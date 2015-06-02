@@ -337,11 +337,6 @@ make_bitmap_mask({X,Y,X2,Y2}, {PX,PY,PX2,PY2}) ->
     end, <<>>, lists:reverse(lists:seq(PY, PY2))).
 
 -record(mask, {bitmap, geom, order}).
-to_masks([]) -> [];
-to_masks([P | Rest]) ->
-    G = order_geom(P),
-    M = make_bitmap_mask(G, G),
-    [#mask{bitmap = M, geom = G, order = P} | to_masks(Rest)].
 
 cull_prims(Prims) ->
     Masks0 = [#mask{geom = order_geom(P), order = P}
