@@ -42,8 +42,8 @@
 	{"updated", integer_index, [<<"updated">>]}
 	]).
 
-merge2([{Ts, V}]) -> V;
-merge2([{Ts, V} | Rest]) ->
+merge2([{_Ts, V}]) -> V;
+merge2([{_Ts, V} | Rest]) ->
 	lists:ukeymerge(1, V, merge2(Rest)).
 merge(Vals) ->
 	merge2(lists:reverse(lists:sort(decode_vals(Vals)))).
@@ -57,7 +57,7 @@ decode_vals([]) -> [];
 decode_vals([V | Rest]) when is_binary(V) and (byte_size(V) > 0) ->
 	<<MS:44/big, S:20/big, Val/binary>> = V,
 	[{{MS,S}, binary_to_term(Val)} | decode_vals(Rest)];
-decode_vals([V | Rest]) -> decode_vals(Rest).
+decode_vals([_V | Rest]) -> decode_vals(Rest).
 
 get(Ip) ->
 	poolboy:transaction(?POOL, fun(C) ->

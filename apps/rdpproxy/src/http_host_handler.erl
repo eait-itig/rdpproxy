@@ -78,7 +78,7 @@ content_types_accepted(Req, S = #state{}) ->
 	{Types, Req, S}.
 
 to_json(Req, S = #state{ip = undefined, meta = Metas}) ->
-	Updates = lists:sort([proplists:get_value(<<"updated">>, Plist) || {Ip, Plist} <- Metas]),
+	Updates = lists:sort([proplists:get_value(<<"updated">>, Plist) || {_Ip, Plist} <- Metas]),
 	LatestUpdate = lists:last(Updates),
 	Now = calendar:datetime_to_gregorian_seconds(erlang:localtime()),
 	Json = [

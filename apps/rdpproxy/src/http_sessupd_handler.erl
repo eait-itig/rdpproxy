@@ -66,7 +66,7 @@ init(Req, _Options) ->
             IpBin = cowboy_req:binding(ip, Req),
             case http_api:peer_allowed(IpBin, PeerIp) of
                 true ->
-                    UserBin = cowboy_req:binding(user, Req),
+                    %UserBin = cowboy_req:binding(user, Req),
                     %lager:info("~p register session for ~p", [IpBin, UserBin]),
                     Req2 = cowboy_req:reply(200, [], ["ok\n"], Req),
                     {ok, Req2, none};

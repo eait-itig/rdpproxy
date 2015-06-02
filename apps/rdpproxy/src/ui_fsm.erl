@@ -59,7 +59,7 @@ send_orders(#state{frontend = F, format = Fmt}, Orders) ->
         gen_fsm:send_event(F, {send_update, U})
     end, Updates).
 
-handle_root_events(State, S = #state{frontend = F, root = Root}, Events) ->
+handle_root_events(State, S = #state{root = Root}, Events) ->
     {Root2, Orders, UiEvts} = ui:handle_events(Root, Events),
     lists:foreach(fun(UiEvt) ->
         gen_fsm:send_event(self(), {ui, UiEvt})
@@ -84,7 +84,7 @@ startup(timeout, S = #state{frontend = F}) ->
             login(setup_ui, S2)
     end.
 
-no_redir(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
+no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     Events = [
@@ -268,7 +268,7 @@ login({ui, {submitted, passinp}}, S = #state{}) ->
 login({ui, {clicked, loginbtn}}, S = #state{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #state{frontend = F, root = Root}) ->
+login(check_creds, S = #state{root = Root}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
@@ -298,7 +298,7 @@ login(check_creds, S = #state{frontend = F, root = Root}) ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     waiting(setup_ui, S#state{sess =
                         #session{user = Username, domain = Domain, password = Password}});
-                R = {false, _} ->
+                {false, _} ->
                     lager:debug("auth for ~p failed", [Username]),
                     login(invalid_login, S)
             end
@@ -318,7 +318,7 @@ login(invalid_login, S = #state{}) ->
     ],
     handle_root_events(login, S, Events).
 
-waiting(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
+waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     Events = [
@@ -391,7 +391,7 @@ waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
 
 waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
     case db_host_meta:find(user, Sess#session.user) of
-        {ok, [{Ip, Meta} | _]} ->
+        {ok, [{Ip, _Meta} | _]} ->
             lager:debug("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
             case backend:probe(binary_to_list(Ip), 3389) of
                 ok ->

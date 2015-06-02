@@ -51,6 +51,6 @@ start() ->
         [{env, [{dispatch, Dispatch}]}]).
 
 peer_allowed(Ip, PeerIp) ->
-    {A,B,C,D} = PeerIp,
-    [A1,B1,C1,D1] = [list_to_integer(X) || X <- string:tokens(binary_to_list(Ip), ".")],
+    {A,B,_C,_D} = PeerIp,
+    [A1,B1,_C1,_D1] = [list_to_integer(X) || X <- string:tokens(binary_to_list(Ip), ".")],
     (A =:= 10) andalso (A =:= A1) andalso (B =:= B1).
