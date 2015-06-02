@@ -62,7 +62,7 @@ send_update(Data = #data{sslsock = SslSock, caps = Caps}, TsUpdate) ->
 
 %% @private
 init([LSock, Sup]) ->
-    random:seed(erlang:now()),
+    random:seed(os:timestamp()),
     process_flag(trap_exit, true),
     {ok, accept, #data{sup = Sup, lsock = LSock, chansavail=lists:seq(1002,1002+35)}, 0}.
 

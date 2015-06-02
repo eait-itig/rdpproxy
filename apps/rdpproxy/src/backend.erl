@@ -54,7 +54,7 @@ init([Frontend, Address, Port]) ->
         }]);
 init([Frontend, Address, Port, OrigCr]) ->
     process_flag(trap_exit, true),
-    random:seed(erlang:now()),
+    random:seed(os:timestamp()),
     lager:debug("backend for frontend ~p", [Frontend]),
     case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}], 2000) of
         {ok, Sock} ->
