@@ -294,7 +294,7 @@ login(check_creds, S = #state{root = Root}) ->
             login(invalid_login, S);
         _ ->
             Creds = [{<<"username">>, Username}, {<<"password">>, Password}],
-            case {true,Creds} of %ldap_auth:process(rdpproxy:config(ldap, []), Creds) of
+            case ldap_auth:process(rdpproxy:config(ldap, []), Creds) of
                 {true, _} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     waiting(setup_ui, S#state{sess =

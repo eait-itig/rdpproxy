@@ -6,6 +6,7 @@ main(_) ->
 	application:load(rdpproxy),
     rdpproxy:start(),
     %backend:start_link(self(), "teak.eait.uq.edu.au", 3389),
+    shell:start(),
     receive
     	stop ->
     		done
