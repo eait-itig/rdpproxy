@@ -12,13 +12,13 @@ If the external user disconnects and re-connects later and their session is stil
 
 3 OTP applications:
 
- * `rdp_proto` -- core RDP protocol encoding/decoding (ASN.1 etc), plus bitmap compression algorithms (based on FreeRDP code)
+ * `rdp_proto` -- core RDP protocol encoding/decoding (ASN.1 etc), plus bitmap compression algorithms (based on FreeRDP code) and the protocol state machines
  * `rdp_ui` -- a very minimal widget toolkit used to draw the login screen and messages
  * `rdpproxy` -- rest of the code
 
 Within the `rdpproxy` application (in this repository), there are a couple of major components:
 
- * `frontend` and `frontend_sup` -- the main acceptor pool and protocol FSM that talks to Internet clients
+ * `frontend` -- an implementation of the `rdp_server` behaviour from `rdp_proto` which handles connections
  * `backend` (supervised by a `frontend`) -- simplified protocol FSM for probing and forwarding to/from a connection to a back-end machine
  * `ui_fsm` and `ui_fsm_sup` -- the login screen UI FSM, including code that uses `rdp_ui` to draw things on the screen and handle events
  * `db_cookie` and `db_host_meta` -- store session info and load-balancer metadata in Riak
