@@ -49,14 +49,15 @@ start_link(Frontend) ->
 
 %% @private
 init([Frontend]) ->
-    gen_fsm:send_event(Frontend, {subscribe, self()}),
-    MRef = monitor(process, Frontend),
+    {Pid, _} = Frontend,
+    gen_fsm:send_event(Pid, {subscribe, self()}),
+    MRef = monitor(process, Pid),
     {ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
 
 send_orders(#state{frontend = F, format = Fmt}, Orders) ->
     Updates = ui:orders_to_updates(Orders, Fmt),
     lists:foreach(fun(U) ->
-        gen_fsm:send_event(F, {send_update, U})
+        rdp_server:send_update(F, U)
     end, Updates).
 
 handle_root_events(State, S = #state{root = Root}, Events) ->
@@ -68,7 +69,7 @@ handle_root_events(State, S = #state{root = Root}, Events) ->
     {next_state, State, S#state{root = Root2}}.
 
 startup(timeout, S = #state{frontend = F}) ->
-    {W, H, Bpp} = gen_fsm:sync_send_event(F, get_canvas),
+    {W, H, Bpp} = rdp_server:get_canvas(F),
     Format = case Bpp of
         24 -> rgb24;
         16 -> rgb16_565;
@@ -76,7 +77,7 @@ startup(timeout, S = #state{frontend = F}) ->
     end,
     S2 = S#state{w = W, h = H, bpp = Bpp, format = Format},
     lager:debug("starting session ~px~p @~p bpp (format ~p)", [W, H, Bpp, Format]),
-    case gen_fsm:sync_send_event(F, get_redir_support) of
+    case rdp_server:get_redir_support(F) of
         false ->
             lager:debug("redir not supported, presenting error screen"),
             no_redir(setup_ui, S2);
@@ -134,13 +135,13 @@ no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     send_orders(S, Orders),
     {next_state, no_redir, S#state{root = Root2}};
 
-no_redir({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
+no_redir({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
             handle_root_events(no_redir, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
-            gen_fsm:send_event(F, close),
+            rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
@@ -156,7 +157,7 @@ no_redir({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
     end;
 
 no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
-    gen_fsm:send_event(F, close),
+    rdp_server:close(F),
     {stop, normal, S}.
 
 login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
@@ -217,7 +218,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(S, Orders),
 
-    {_Autologon, U, _D, P} = gen_fsm:sync_send_event(F, get_autologon),
+    {_Autologon, U, _D, P} = rdp_server:get_autologon(F),
     Events2 = [
         { [{id, userinp}], {set_text, U} },
         { [{id, passinp}], {set_text, P} }
@@ -231,13 +232,13 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
 
     {next_state, login, S#state{root = Root3}};
 
-login({input, F, Evt}, S = #state{frontend = F}) ->
+login({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
             handle_root_events(login, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
-            gen_fsm:send_event(F, close),
+            rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
@@ -293,7 +294,7 @@ login(check_creds, S = #state{root = Root}) ->
             login(invalid_login, S);
         _ ->
             Creds = [{<<"username">>, Username}, {<<"password">>, Password}],
-            case ldap_auth:process(rdpproxy:config(ldap, []), Creds) of
+            case {true,Creds} of %ldap_auth:process(rdpproxy:config(ldap, []), Creds) of
                 {true, _} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     waiting(setup_ui, S#state{sess =
@@ -362,13 +363,13 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     {ok, _} = timer:send_after(1000, find_machine),
     {next_state, waiting, S#state{root = Root2}};
 
-waiting({input, F, Evt}, S = #state{frontend = F, root = _Root}) ->
+waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
             handle_root_events(waiting, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
-            gen_fsm:send_event(F, close),
+            rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
             Event = { [{id, root}], focus_next },
@@ -397,9 +398,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                 ok ->
                     {ok, Cookie} = db_cookie:new(Sess#session{
                         host = Ip, port = 3389}),
-                    gen_fsm:send_event(F, {redirect,
-                        Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
-                        Sess#session.user, Sess#session.domain, Sess#session.password}),
+                    rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
                     {stop, normal, S};
                 _ ->
                     lager:debug("probe failed on ~p, looking at another machine", [Ip]),
@@ -437,9 +436,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                                 ok ->
                                     {ok, Cookie} = db_cookie:new(Sess#session{
                                         host = Ip, port = 3389}),
-                                    gen_fsm:send_event(F, {redirect,
-                                        Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>),
-                                        Sess#session.user, Sess#session.domain, Sess#session.password}),
+                                    rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
                                     {stop, normal, S};
                                 _ ->
                                     lager:debug("probe failed on ~p, looking at another machine", [Ip]),
@@ -457,7 +454,7 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
     end;
 
 waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
-    gen_fsm:send_event(F, close),
+    rdp_server:close(F),
     {stop, normal, S}.
 
 handle_info({'DOWN', MRef, process, _, _}, _State, S = #state{mref = MRef}) ->

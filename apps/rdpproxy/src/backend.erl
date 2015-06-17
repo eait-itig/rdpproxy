@@ -30,18 +30,15 @@
 -module(backend).
 -behaviour(gen_fsm).
 
--include_lib("rdp_proto/include/x224.hrl").
--include_lib("rdp_proto/include/mcsgcc.hrl").
--include_lib("rdp_proto/include/tsud.hrl").
--include_lib("rdp_proto/include/rdpp.hrl").
+-include_lib("rdp_proto/include/rdp_server.hrl").
 
--export([start_link/4, probe/2]).
+-export([start_link/3, probe/2]).
 -export([initiation/2, proxy_intercept/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
--spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number(), OrigCr :: tuple()) -> {ok, pid()}.
-start_link(Frontend, Address, Port, OrigCr) ->
-    gen_fsm:start_link(?MODULE, [Frontend, Address, Port, OrigCr], []).
+-spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()}.
+start_link(Frontend, Address, Port) ->
+    gen_fsm:start_link(?MODULE, [Frontend, Address, Port], []).
 
 probe(Address, Port) ->
     case (catch gen_fsm:start(?MODULE, [self(), Address, Port], [{timeout, 5000}])) of
@@ -54,7 +51,7 @@ probe(Address, Port) ->
 
 probe_rx(Pid, MonRef, RetVal) ->
     receive
-        {'$gen_event', {backend_ready, Pid, _, _}} ->
+        {backend_ready, Pid} ->
             gen_fsm:send_event(Pid, close),
             probe_rx(Pid, MonRef, ok);
         {'DOWN', MonRef, process, Pid, no_ssl} ->
@@ -66,25 +63,30 @@ probe_rx(Pid, MonRef, RetVal) ->
         probe_rx(Pid, MonRef, {error, timeout})
     end.
 
--record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, frontend, origcr}).
+-record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, server, origcr}).
 
 %% @private
-init([Frontend, Address, Port]) ->
-    init([Frontend, Address, Port, #x224_cr{
+init([Pid, Address, Port]) when is_pid(Pid) ->
+    init([Pid, Address, Port, #x224_cr{
         class = 0, dst = 0, src = crypto:rand_uniform(2000,9999)
         }]);
-init([Frontend, Address, Port, OrigCr]) ->
-    process_flag(trap_exit, true),
+
+init([Srv = {P, _}, Address, Port]) when is_pid(P) ->
+    #x224_state{cr = OrigCr} = rdp_server:x224_state(Srv),
+    init([Srv, Address, Port, OrigCr]);
+
+init([Srv, Address, Port, OrigCr]) ->
     random:seed(os:timestamp()),
-    lager:debug("backend for frontend ~p", [Frontend]),
+    #x224_cr{src = Us} = OrigCr,
+    lager:debug("backend for frontend ~p", [Srv]),
     case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}], 2000) of
         {ok, Sock} ->
-            Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
             lager:debug("backend connected to ~p", [Address]),
+            Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
             {ok, CrData} = x224:encode(Cr),
             {ok, Packet} = tpkt:encode(CrData),
             ok = gen_tcp:send(Sock, Packet),
-            {ok, initiation, #data{addr = Address, port = Port, frontend = Frontend, sock = Sock, usref = OrigCr#x224_cr.src, origcr = OrigCr}};
+            {ok, initiation, #data{addr = Address, port = Port, server = Srv, sock = Sock, usref = Us, origcr = OrigCr}};
 
         {error, Reason} ->
             db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
@@ -96,7 +98,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error 
     db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
     {stop, no_ssl, Data};
 
-initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, frontend = Frontend, addr = Address} = Data) ->
+initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, server = Srv, addr = Address} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected} = Pkt,
 
     HasSsl = lists:member(ssl, Selected),
@@ -107,7 +109,15 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
             rdpproxy:config([backend, ssl_options], [{verify, verify_none}])),
         ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
-        gen_fsm:send_event(Frontend, {backend_ready, self(), SslSock, Pkt}),
+        case Srv of
+            P when is_pid(P) ->
+                P ! {backend_ready, self()};
+            {P,_} when is_pid(P) ->
+                rdp_server:start_tls(Srv,
+                    rdpproxy:config([frontend, ssl_options], [
+                        {certfile, "etc/cert.pem"},
+                        {keyfile, "etc/key.pem"}]), Pkt)
+        end,
 
         {next_state, proxy_intercept, Data#data{sslsock = SslSock, themref = ThemRef}};
     true ->
@@ -117,7 +127,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
         {stop, no_ssl, Data}
     end.
 
-proxy_intercept({data, Bin}, #data{frontend = Frontend, origcr = OrigCr} = Data) ->
+proxy_intercept({data, Bin}, #data{server = Srv, origcr = OrigCr} = Data) ->
     case rdpp:decode_connseq(Bin) of
         {ok, {mcs_pdu, Cr = #mcs_cr{data = TsudsBin0}}, Rem} ->
             {ok, Tsuds0} = tsud:decode(TsudsBin0),
@@ -132,14 +142,14 @@ proxy_intercept({data, Bin}, #data{frontend = Frontend, origcr = OrigCr} = Data)
             {ok, OutCrData} = mcsgcc:encode_cr(Cr#mcs_cr{data = TsudsBin1}),
             {ok, OutDtData} = x224:encode(#x224_dt{data = OutCrData}),
             {ok, OutPkt} = tpkt:encode(OutDtData),
-            gen_fsm:send_event(Frontend, {backend_data, self(), <<OutPkt/binary, Rem/binary>>}),
+            rdp_server:send_raw(Srv, <<OutPkt/binary, Rem/binary>>),
             {next_state, proxy, Data};
         _ ->
-            gen_fsm:send_event(Frontend, {backend_data, self(), Bin}),
+            rdp_server:send_raw(Srv, Bin),
             {next_state, proxy_intercept, Data}
     end;
 
-proxy_intercept({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = SslSock, frontend = Frontend} = Data) ->
+proxy_intercept({frontend_data, Bin}, #data{sock = Sock, sslsock = SslSock} = Data) ->
     if SslSock =:= none ->
         ok = gen_tcp:send(Sock, Bin);
     true ->
@@ -150,11 +160,11 @@ proxy_intercept({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = Ssl
 proxy_intercept(close, Data) ->
     {stop, normal, Data}.
 
-proxy({data, Bin}, #data{frontend = Frontend} = Data) ->
-    gen_fsm:send_event(Frontend, {backend_data, self(), Bin}),
+proxy({data, Bin}, #data{server = Srv} = Data) ->
+    rdp_server:send_raw(Srv, Bin),
     {next_state, proxy, Data};
 
-proxy({frontend_data, Frontend, Bin}, #data{sock = Sock, sslsock = SslSock, frontend = Frontend} = Data) ->
+proxy({frontend_data, Bin}, #data{sock = Sock, sslsock = SslSock} = Data) ->
     if SslSock =:= none ->
         ok = gen_tcp:send(Sock, Bin);
     true ->
