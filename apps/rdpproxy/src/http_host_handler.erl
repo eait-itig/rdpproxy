@@ -49,8 +49,12 @@ allowed_methods(Req, S = #state{}) ->
 forbidden(Req, S = #state{ip = undefined}) ->
 	{false, Req, S};
 forbidden(Req, S = #state{ip = Ip}) ->
-    {PeerIp, _PeerPort} = cowboy_req:peer(Req),
-    {(not http_api:peer_allowed(Ip, PeerIp)), Req, S#state{peer = PeerIp}}.
+	{PeerIp, _PeerPort} = cowboy_req:peer(Req),
+	Allowed = http_api:peer_allowed(Ip, PeerIp),
+	if (not Allowed) ->
+		lager:debug("denied status update request from ~p for host ~p", [PeerIp, Ip]);
+	true -> ok end,
+	{(not Allowed), Req, S#state{peer = PeerIp}}.
 
 content_types_provided(Req, S = #state{}) ->
 	Types = [
