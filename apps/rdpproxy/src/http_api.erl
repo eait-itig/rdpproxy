@@ -63,12 +63,12 @@ rev_lookup(Ip) ->
         E -> {error, E}
     end.
 
-is_rfc1918({A,B,C,D}) ->
+is_rfc1918({A,B,_C,_D}) ->
     (A =:= 10) orelse
         ((A =:= 192) andalso (B =:= 168)) orelse
         ((A =:= 172) andalso (B >= 16) andalso (B =< 31)).
 
-same_slash16({A,B,C,D}, {A1,B1,C1,D1}) ->
+same_slash16({A,B,_C,_D}, {A1,B1,_C1,_D1}) ->
     (A =:= A1) andalso (B =:= B1).
 
 peer_allowed(TargetIpStr, AgentIp) ->
