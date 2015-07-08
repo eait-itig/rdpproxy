@@ -35,9 +35,6 @@ start() ->
     Dispatch = cowboy_router:compile([
         {'_', [
             % legacy endpoints
-            {"/status_update/:ip/:status", http_statupd_handler, []},
-            {"/session_update/:ip", http_sessupd_handler, []},
-            {"/session_update/:ip/:type/:user/:time", http_sessupd_handler, []},
             {"/api/host/:ip", http_host_handler, []},
             {"/api/host_count", http_host_handler, []},
 
