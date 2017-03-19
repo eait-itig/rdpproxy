@@ -422,8 +422,8 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                             (RoleB =:= <<"vlab">>) and (not (RoleA =:= <<"vlab">>)) -> false;
                             IsLabA and (not IsLabB) -> true;
                             IsLabB and (not IsLabA) -> false;
-                            (ImageA > ImageB) -> false;
-                            (ImageA < ImageB) -> true;
+                            (ImageA > ImageB) -> true;
+                            (ImageA < ImageB) -> false;
                             (UpdatedA > UpdatedB) -> true;
                             (UpdatedA < UpdatedB) -> false;
                             true -> (IpA =< IpB)
