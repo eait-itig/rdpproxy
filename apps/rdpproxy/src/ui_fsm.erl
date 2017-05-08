@@ -413,6 +413,8 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                         RoleB = proplists:get_value(<<"role">>, B),
                         ImageA = proplists:get_value(<<"image">>, A, <<>>),
                         ImageB = proplists:get_value(<<"image">>, B, <<>>),
+			SessionsA = proplists:get_value(<<"sessions">>, A, []),
+			SessionsB = proplists:get_value(<<"sessions">>, B, []),
                         IsLabA = (binary:longest_common_prefix([ImageA, <<"lab">>]) =/= 0),
                         IsLabB = (binary:longest_common_prefix([ImageB, <<"lab">>]) =/= 0),
                         UpdatedA = proplists:get_value(<<"updated">>, A),
@@ -424,6 +426,8 @@ waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
                             IsLabB and (not IsLabA) -> false;
                             (ImageA > ImageB) -> true;
                             (ImageA < ImageB) -> false;
+			    (length(SessionsA) < length(SessionsB)) -> true;
+			    (length(SessionsA) > length(SessionsB)) -> false;
                             (UpdatedA > UpdatedB) -> true;
                             (UpdatedA < UpdatedB) -> false;
                             true -> (IpA =< IpB)
