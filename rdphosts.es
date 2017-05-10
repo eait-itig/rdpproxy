@@ -8,7 +8,8 @@ sessions(L) ->
 	lists:map(fun(S) ->
 		User = proplists:get_value(<<"user">>, S),
 		Start = proplists:get_value(<<"start_str">>, S, <<"incomplete">>),
-		io_lib:format("~s (~s)", [User, Start])
+		Idle = case proplists:get_value(<<"idle">>, S, 0) of 0 -> ""; _ -> <<" (idle)">> end,
+		io_lib:format("~s (~s)~s", [User, Start, Idle])
 	end, L).
 
 main([Query]) ->
