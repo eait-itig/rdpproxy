@@ -6,7 +6,9 @@ sessions([]) ->
 	["none"];
 sessions(L) ->
 	lists:map(fun(S) ->
-		binary:bin_to_list(proplists:get_value(<<"user">>, S))
+		User = proplists:get_value(<<"user">>, S),
+		Start = proplists:get_value(<<"start_str">>, S, <<"incomplete">>),
+		io_lib:format("~s (~s)", [User, Start])
 	end, L).
 
 main([Query]) ->
@@ -51,6 +53,22 @@ main([Query]) ->
                                         true -> (IpA =< IpB)
 				end
 			end, Metas);
+		<<"incomplete">> ->
+			{ok, Metas} = db_host_meta:find(status, <<"busy">>),
+			Incomplete = lists:filter(fun({_Ip, D}) ->
+				Sessions = proplists:get_value(<<"sessions">>, D),
+				case length(Sessions) of
+					0 -> true;
+					1 ->
+						S = lists:nth(1, Sessions),
+						case proplists:get_value(<<"start_str">>, S) of
+							undefined -> true;
+							_ -> false
+						end;
+					_ -> false
+				end
+			end, Metas),
+			lists:sort(fun({IpA,_}, {IpB,_}) -> (IpA =< IpB) end, Incomplete);
 		<<"dead">> ->
 			{ok, Metas} = db_host_meta:find(status, <<"dead">>),
 			lists:sort(fun({IpA,_}, {IpB,_}) -> (IpA =< IpB) end, Metas);
