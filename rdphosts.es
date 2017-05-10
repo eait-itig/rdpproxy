@@ -72,6 +72,11 @@ main([Query]) ->
 		<<"dead">> ->
 			{ok, Metas} = db_host_meta:find(status, <<"dead">>),
 			lists:sort(fun({IpA,_}, {IpB,_}) -> (IpA =< IpB) end, Metas);
+		<<"10.", _Rest/binary>> ->
+			case db_host_meta:get(Query) of
+				{ok, Host}  -> [{Query, Host}];
+				_ -> []
+			end;
 		_ ->
 			{ok, Metas} = db_host_meta:find(user, binary:list_to_bin(Query)),
 			Metas
