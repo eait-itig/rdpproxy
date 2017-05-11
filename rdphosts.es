@@ -79,7 +79,7 @@ main([Query]) ->
 			{ok, DMetas} = db_host_meta:find(role, <<"desktop">>),
 			Old = lists:filter(fun({_Ip, D}) ->
 				Then = proplists:get_value(<<"updated">>, D),
-				if Then < (Now - 600) ->
+				if Then < (Now - 1800) ->
 					true;
 				true ->
 					false
