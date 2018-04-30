@@ -40,6 +40,9 @@ start() ->
             {"/api/host/:ip", http_host_handler, []},
             {"/api/host_count", http_host_handler, []},
 
+            {"/", cowboy_static, {priv_file, rdpproxy, [<<"webroot/index.html">>],
+                [{mimetypes, cow_mimetypes, all}]
+            }},
             {"/[...]", cowboy_static,
                 {priv_dir, rdpproxy, [<<"webroot">>], [
                     {mimetypes, cow_mimetypes, all}
