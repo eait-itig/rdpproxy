@@ -121,13 +121,13 @@ init([Opts0]) ->
                 ok = fuse:melt(Fuse),
                 {ok, #state{opts = Opts0, fuse = Fuse}, 1000}
             end;
-        blown -> {ok, #state{opts = Opts0, fuse = Fuse}, 10000}
+        blown -> {ok, #state{opts = Opts0, fuse = Fuse}, 1000}
     end.
 
 handle_call({bind, _Dn, _Password}, _From, #state{c=undefined}=State) ->
-    {reply, {error, fuse_blown}, State};
+    {reply, {error, fuse_blown}, State, 1000};
 handle_call({search, _SearchOpts}, _From, #state{c=undefined}=State) ->
-    {reply, {error, fuse_blown}, State};
+    {reply, {error, fuse_blown}, State, 1000};
 
 handle_call({bind, Dn, Password}, From, #state{c=Conn,fuse=F}=State) ->
     case eldap:simple_bind(Conn, Dn, Password) of
@@ -162,7 +162,7 @@ handle_cast(_Msg, State) ->
 handle_info(timeout, #state{c = undefined, fuse =F} = State) ->
     case fuse:ask(F, sync) of
         ok -> {stop, normal, State};
-        blown -> {noreply, State, 10000}
+        blown -> {noreply, State, 1000}
     end;
 handle_info(timeout, State) ->
     {stop, normal, State};
