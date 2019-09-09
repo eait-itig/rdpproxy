@@ -62,7 +62,8 @@ handle_connect(Cookie, _Protocols, Srv, S = #state{}) ->
                 {set, <<"status">>, <<"busy">>},
                 {set, [<<"sessions">>, 0, <<"user">>], User}
             ], [])),
-            lager:debug("~p: presented cookie ~p, forwarding to ~p", [S#state.peer, Cookie, HostBin]),
+            lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
+                [S#state.peer, Cookie, User, HostBin]),
             {ok, Backend} = backend:start_link(Srv, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),
             {accept_raw, S#state{session = Sess, backend = Backend}};

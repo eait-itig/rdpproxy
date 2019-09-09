@@ -6,4 +6,5 @@
 %% Author: Alex Wilson <alex@uq.edu.au>
 %%
 
--record(session, {cookie=auto, host, port, user, password, domain}).
+-record(session, {cookie=auto, expiry, host, port, user, password, domain}).
+-define(COOKIE_TTL, 8*3600).

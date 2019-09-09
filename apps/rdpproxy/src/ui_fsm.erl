@@ -2,7 +2,7 @@
 %% rdpproxy
 %% remote desktop proxy
 %%
-%% Copyright 2012-2015 Alex Wilson <alex@uq.edu.au>
+%% Copyright 2012-2019 Alex Wilson <alex@uq.edu.au>
 %% The University of Queensland
 %% All rights reserved.
 %%
@@ -45,7 +45,7 @@
 start_link(Frontend) ->
     gen_fsm:start_link(?MODULE, [Frontend], []).
 
--record(state, {frontend, mref, w, h, bpp, format, root, sess}).
+-record(state, {frontend, mref, w, h, bpp, format, root, sess, allocpid, allocmref}).
 
 %% @private
 init([Frontend]) ->
@@ -360,8 +360,9 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(S, Orders),
-    {ok, _} = timer:send_after(1000, find_machine),
-    {next_state, waiting, S#state{root = Root2}};
+    {ok, AllocPid} = host_alloc_fsm:start(S#state.sess),
+    MRef = erlang:monitor(process, AllocPid),
+    {next_state, waiting, S#state{root = Root2, allocpid = AllocPid, allocmref = MRef}};
 
 waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
@@ -390,72 +391,16 @@ waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root})
             {next_state, waiting, S}
     end;
 
-waiting(find_machine, S = #state{sess = Sess, frontend = F}) ->
-    case db_host_meta:find(user, Sess#session.user) of
-        {ok, [{Ip, _Meta} | _]} ->
-            lager:debug("sending ~p back to their old session on ~p", [Sess#session.user, Ip]),
-            case backend:probe(binary_to_list(Ip), 3389) of
-                ok ->
-                    {ok, Cookie} = db_cookie:new(Sess#session{
-                        host = Ip, port = 3389}),
-                    rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
-                    {stop, normal, S};
-                _ ->
-                    lager:debug("probe failed on ~p, looking at another machine", [Ip]),
-                    {ok, _} = timer:send_after(500, find_machine),
-                    {next_state, waiting, S}
-            end;
-        _ ->
-            case db_host_meta:find(status, <<"available">>) of
-                {ok, Metas} ->
-                    SortedMetas = lists:sort(fun({IpA,A}, {IpB,B}) ->
-                        RoleA = proplists:get_value(<<"role">>, A),
-                        RoleB = proplists:get_value(<<"role">>, B),
-                        ImageA = proplists:get_value(<<"image">>, A, <<>>),
-                        ImageB = proplists:get_value(<<"image">>, B, <<>>),
-			SessionsA = proplists:get_value(<<"sessions">>, A, []),
-			SessionsB = proplists:get_value(<<"sessions">>, B, []),
-                        IsLabA = (binary:longest_common_prefix([ImageA, <<"lab">>]) =/= 0),
-                        IsLabB = (binary:longest_common_prefix([ImageB, <<"lab">>]) =/= 0),
-                        UpdatedA = proplists:get_value(<<"updated">>, A),
-                        UpdatedB = proplists:get_value(<<"updated">>, B),
-                        if
-                            (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) -> true;
-                            (RoleB =:= <<"vlab">>) and (not (RoleA =:= <<"vlab">>)) -> false;
-                            IsLabA and (not IsLabB) -> true;
-                            IsLabB and (not IsLabA) -> false;
-                            (ImageA > ImageB) -> true;
-                            (ImageA < ImageB) -> false;
-			    (length(SessionsA) < length(SessionsB)) -> true;
-			    (length(SessionsA) > length(SessionsB)) -> false;
-                            (UpdatedA > UpdatedB) -> true;
-                            (UpdatedA < UpdatedB) -> false;
-                            true -> (IpA =< IpB)
-                        end
-                    end, Metas),
-                    case SortedMetas of
-                        [{Ip, _Meta} | _] ->
-                            lager:debug("~p gets a new session on ~p", [Sess#session.user, Ip]),
-                            case backend:probe(binary_to_list(Ip), 3389) of
-                                ok ->
-                                    {ok, Cookie} = db_cookie:new(Sess#session{
-                                        host = Ip, port = 3389}),
-                                    rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
-                                    {stop, normal, S};
-                                _ ->
-                                    lager:debug("probe failed on ~p, looking at another machine", [Ip]),
-                                    {ok, _} = timer:send_after(500, find_machine),
-                                    {next_state, waiting, S}
-                            end;
-                        _ ->
-                            {ok, _} = timer:send_after(500, find_machine),
-                            {next_state, waiting, S}
-                    end;
-                _ ->
-                    {ok, _} = timer:send_after(500, find_machine),
-                    {next_state, waiting, S}
-            end
-    end;
+waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F, allocpid = AllocPid}) ->
+    #session{cookie = Cookie} = Sess,
+    erlang:demonitor(S#state.allocmref),
+    rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
+    {stop, normal, S};
+
+waiting({'DOWN', MRef, process, _, _}, S = #state{allocmref = MRef}) ->
+    {ok, AllocPid} = host_alloc_fsm:start(S#state.sess),
+    NewMRef = erlang:monitor(process, AllocPid),
+    {next_state, waiting, S#state{allocpid = AllocPid, allocmref = NewMRef}};
 
 waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
     rdp_server:close(F),
