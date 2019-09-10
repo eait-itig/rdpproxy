@@ -88,11 +88,15 @@ startup(timeout, S = #state{frontend = F}) ->
 no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
+    TopMod = case (H > W) of
+        true -> ui_vlayout;
+        false -> ui_hlayout
+    end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
-                                     mod = ui_hlayout}} },
+                                     mod = TopMod}} },
         { [{id, hlayout}],  init },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
@@ -163,11 +167,15 @@ no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
 login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
+    TopMod = case (H > W) of
+        true -> ui_vlayout;
+        false -> ui_hlayout
+    end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
-                                     mod = ui_hlayout}} },
+                                     mod = TopMod}} },
         { [{id, hlayout}],  init },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
@@ -322,11 +330,15 @@ login(invalid_login, S = #state{}) ->
 waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
+    TopMod = case (H > W) of
+        true -> ui_vlayout;
+        false -> ui_hlayout
+    end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
-                                     mod = ui_hlayout}} },
+                                     mod = TopMod}} },
         { [{id, hlayout}],  init },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
