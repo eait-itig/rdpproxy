@@ -187,6 +187,9 @@ check_host_cookies(timeout, S = #state{sess = Sess}) ->
                                 "on ~p, but still allocating ~p anyway "
                                 "(last was ~p sec ago, other users = ~p)",
                                 [Ip, U, CreatedAgo, OtherUsers]),
+                            % Delete the other cookies, we're effectively
+                            % evicting the other person
+                            [db_cookie:delete(K) || #session{cookie = K} <- NotMine],
                             {next_state, probe, S, 0};
                         true ->
                             {next_state, pick_new_session, S, 0}

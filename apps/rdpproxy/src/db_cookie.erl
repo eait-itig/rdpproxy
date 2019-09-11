@@ -31,7 +31,7 @@
 -include("session.hrl").
 -include_lib("riakc/include/riakc.hrl").
 
--export([get/1, new/1, expire/0, find/2]).
+-export([get/1, new/1, expire/0, find/2, delete/1]).
 
 -define(POOL, riakc_pool).
 -define(BUCKET, <<"rdp_cookie">>).
@@ -71,6 +71,16 @@ get(K) when is_binary(K) and (byte_size(K) > 0) ->
     end);
 get(K) when is_list(K) and (length(K) > 0) -> ?MODULE:get(list_to_binary(K));
 get(_) -> {error, not_found}.
+
+delete(K) when is_binary(K) and (byte_size(K) > 0) ->
+    poolboy:transaction(?POOL, fun(C) ->
+        case riakc_pb_socket:get(C, ?BUCKET, K) of
+            {ok, RObj} ->
+                riakc_pb_socket:delete_obj(C, RObj);
+            {error, Reason} ->
+                {error, Reason}
+        end
+    end).
 
 find(Type, V) when is_list(V) ->
     find(Type, list_to_binary(V));
