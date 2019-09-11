@@ -64,7 +64,17 @@ check_user_sessions(timeout, S = #state{sess = Sess = #session{user = U}}) ->
 check_user_cookies(timeout, S = #state{sess = Sess = #session{user = U}}) ->
     case db_cookie:find(user, U) of
         {ok, Cookies} when (length(Cookies) > 0) ->
-            [#session{host = Ip} | _] = Cookies,
+            % we want the latest cookie (highest expiry time value)
+            SortedCookies = lists:sort(fun(SessA, SessB) ->
+                #session{cookie = KeyA, expiry = ExpiryA} = SessA,
+                #session{cookie = KeyB, expiry = ExpiryB} = SessB,
+                if
+                    ExpiryA > ExpiryB -> true;
+                    ExpiryA < ExpiryB -> false;
+                    true -> (KeyA =< KeyB)
+                end
+            end, Cookies),
+            [#session{host = Ip} | _] = SortedCookies,
             Sess1 = Sess#session{host = Ip, port = 3389},
             lager:debug("existing cookie found for ~p on ~p", [U, Ip]),
             {next_state, check_host_cookies, S#state{tried = [Ip],
