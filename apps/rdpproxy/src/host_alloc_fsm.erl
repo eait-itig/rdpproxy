@@ -52,7 +52,7 @@ init([From, Sess = #session{user = U}]) ->
 
 check_user_sessions(timeout, S = #state{sess = Sess = #session{user = U}}) ->
     case db_host_meta:find(user, U) of
-        {ok, [{Ip, Meta} | _]} ->
+        {ok, [{Ip, _Meta} | _]} ->
             Sess1 = Sess#session{host = Ip, port = 3389},
             lager:debug("existing session found for ~p on ~p", [U, Ip]),
             {next_state, check_host_cookies,
@@ -76,10 +76,18 @@ check_user_cookies(timeout, S = #state{sess = Sess = #session{user = U}}) ->
 list_available(timeout, S = #state{}) ->
     case db_host_meta:find(status, <<"available">>) of
         {ok, Metas} ->
+            % Filter out all non-vlab hosts unless we have exhausted all of
+            % the vlab ones.
+            FilteredMetas = if
+                (S#state.exhausted < 10) ->
+                    [{Ip,M} || {Ip,M} <- Metas,
+                    proplists:get_value(<<"role">>, M) =:= <<"vlab">>];
+                true -> Metas
+            end,
             MetasWithRand = [
                 {Ip, [{random, crypto:rand_uniform(0, 1 bsl 32)} | Pl]} ||
-                {Ip, Pl} <- Metas],
-            SortedMetas = lists:sort(fun({IpA,A}, {IpB,B}) ->
+                {Ip, Pl} <- FilteredMetas],
+            SortedMetas = lists:sort(fun({_IpA,A}, {_IpB,B}) ->
                 RoleA = proplists:get_value(<<"role">>, A),
                 RoleB = proplists:get_value(<<"role">>, B),
                 ImageA = proplists:get_value(<<"image">>, A, <<>>),
@@ -92,11 +100,15 @@ list_available(timeout, S = #state{}) ->
                 SessionsB = proplists:get_value(<<"sessions">>, B, []),
                 IdleStartA = case SessionsA of
                     [] -> 0;
-                    _ -> lists:min([UpdatedA - proplists:get_value(<<"idle">>, S, 0) || S <- SessionsA])
+                    _ -> lists:min([
+                        UpdatedA - proplists:get_value(<<"idle">>, Se, 0) ||
+                        Se <- SessionsA])
                 end,
                 IdleStartB = case SessionsB of
                     [] -> 0;
-                    _ -> lists:min([UpdatedB - proplists:get_value(<<"idle">>, S, 0) || S <- SessionsB])
+                    _ -> lists:min([
+                        UpdatedB - proplists:get_value(<<"idle">>, Se, 0) ||
+                        Se <- SessionsB])
                 end,
                 IsLabA = (binary:longest_common_prefix([ImageA, <<"lab">>]) =/= 0),
                 IsLabB = (binary:longest_common_prefix([ImageB, <<"lab">>]) =/= 0),
@@ -124,7 +136,7 @@ list_available(timeout, S = #state{}) ->
                     % fall back to the randomness to spread things out
                     true -> (RandA =< RandB)
                 end
-            end, Metas),
+            end, MetasWithRand),
             {next_state, pick_new_session, S#state{metas = SortedMetas}, 0};
         Ret ->
             lager:debug("db_host_meta:find returned ~p", [Ret]),
@@ -133,7 +145,7 @@ list_available(timeout, S = #state{}) ->
 
 pick_new_session(timeout, S = #state{metas = Metas, sess = Sess, tried = Tried}) ->
     case Metas of
-        [{Ip, Meta} | Rest] ->
+        [{Ip, _Meta} | Rest] ->
             Sess1 = Sess#session{host = Ip, port = 3389},
             {next_state, check_host_cookies,
                 S#state{tried = [Ip | Tried], metas = Rest, sess = Sess1}, 0};
@@ -147,7 +159,7 @@ check_host_cookies(timeout, S = #state{sess = Sess}) ->
     #session{user = U, host = Ip} = Sess,
     case db_cookie:find(host, Ip) of
         {ok, Cookies} ->
-            NotMine = [S || S = #session{user = User} <- Cookies, not (User =:= U)],
+            NotMine = [Se || Se = #session{user = User} <- Cookies, not (User =:= U)],
             Now = calendar:datetime_to_gregorian_seconds(erlang:localtime()),
             case NotMine of
                 [] ->
