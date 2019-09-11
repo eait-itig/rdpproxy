@@ -186,6 +186,8 @@ probe(timeout, S = #state{sess = Sess}) ->
 
 save_cookie(timeout, S = #state{sess = Sess}) ->
     {ok, Cookie} = db_cookie:new(Sess),
+    lager:debug("allocated session on ~p for user ~p, cookie: ~p",
+        [Sess#session.host, Sess#session.user, Cookie]),
     S#state.from ! {allocated_session, self(), Sess#session{cookie = Cookie}},
     {stop, normal, S}.
 
