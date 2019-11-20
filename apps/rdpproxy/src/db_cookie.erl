@@ -32,6 +32,7 @@
 -include_lib("riakc/include/riakc.hrl").
 
 -export([get/1, new/1, expire/0, find/2, delete/1]).
+-export([encode/1, decode/1]).
 
 -define(POOL, riakc_pool).
 -define(BUCKET, <<"rdp_cookie">>).
@@ -46,9 +47,47 @@ gen_key() -> list_to_binary(gen_key(16)).
 encode(#session{host=H, port=P, user=U, password=Pw, domain=D}) ->
     HLen = byte_size(H), ULen = byte_size(U),
     PwLen = byte_size(Pw), DLen = byte_size(D),
-    <<P:16/big, HLen:16/big, H/binary, ULen:16/big, U/binary, PwLen:16/big, Pw/binary, DLen:16/big, D/binary>>.
+    RiakConfig = application:get_env(rdpproxy, riak, []),
+    case proplists:get_value(keys, RiakConfig) of
+        undefined ->
+            <<P:16/big, HLen:16/big, H/binary, ULen:16/big, U/binary,
+              PwLen:16/big, Pw/binary, DLen:16/big, D/binary>>;
+        KeyList ->
+            {KeyRef, KeyNum} = lists:last(KeyList),
+            Iv = crypto:strong_rand_bytes(16),
+            Key = <<KeyNum:128/big>>,
+            PadLen = 16 - (PwLen rem 16),
+            PwPad = <<Pw/binary, PadLen:PadLen/big-unit:8>>,
+            PwEnc = crypto:block_encrypt(aes_cbc128, Key, Iv, PwPad),
+            PwMac = crypto:hmac(sha256, Key, <<H/binary, U/binary, PwEnc/binary>>),
+            IvLen = byte_size(Iv), PwEncLen = byte_size(PwEnc),
+            PwMacLen = byte_size(PwMac),
+            <<P:16/big,
+              HLen:16/big, H/binary,
+              ULen:16/big, U/binary,
+              KeyRef:16/big,
+              IvLen:16/big, Iv/binary,
+              PwEncLen:16/big, PwEnc/binary,
+              PwMacLen:16/big, PwMac/binary,
+              DLen:16/big, D/binary>>
+    end.
 
-decode(<<P:16/big, HLen:16/big, H:HLen/binary, ULen:16/big, U:ULen/binary, PwLen:16/big, Pw:PwLen/binary, DLen:16/big, D:DLen/binary>>) ->
+decode(<<P:16/big, HLen:16/big, H:HLen/binary, ULen:16/big, U:ULen/binary,
+         KeyRef:16/big, IvLen:16/big, Iv:IvLen/binary,
+         PwEncLen:16/big, PwEnc:PwEncLen/binary,
+         PwMacLen:16/big, PwMac:PwMacLen/binary, DLen:16/big, D:DLen/binary>>) ->
+    RiakConfig = application:get_env(rdpproxy, riak, []),
+    KeyList = proplists:get_value(keys, RiakConfig),
+    KeyNum = proplists:get_value(KeyRef, KeyList),
+    Key = <<KeyNum:128/big>>,
+    OurPwMac = crypto:hmac(sha256, Key, <<H/binary, U/binary, PwEnc/binary>>),
+    OurPwMac = PwMac,
+    PwPad = crypto:block_decrypt(aes_cbc128, Key, Iv, PwEnc),
+    PadLen = binary:last(PwPad), PwLen = byte_size(PwPad) - PadLen,
+    <<Pw:PwLen/binary, PadLen:PadLen/big-unit:8>> = PwPad,
+    #session{host = H, port = P, user = U, password = Pw, domain = D};
+decode(<<P:16/big, HLen:16/big, H:HLen/binary, ULen:16/big, U:ULen/binary,
+         PwLen:16/big, Pw:PwLen/binary, DLen:16/big, D:DLen/binary>>) ->
     #session{host = H, port = P, user = U, password = Pw, domain = D}.
 
 get(K) when is_binary(K) and (byte_size(K) > 0) ->
@@ -97,8 +136,8 @@ find(Type, V) ->
                         {ok, RObj} ->
                             Values = riakc_obj:get_values(RObj),
                             Metadatas = riakc_obj:get_metadatas(RObj),
-                            lists:foldl(fun({V,MD}, Acc2) ->
-                                VRec = decode(V),
+                            lists:foldl(fun({Va,MD}, Acc2) ->
+                                VRec = decode(Va),
                                 VRec2 = case riakc_obj:get_secondary_index(MD, {integer_index, "expiry"}) of
                                     [Expiry] -> VRec#session{cookie = K, expiry = Expiry};
                                     _ -> VRec#session{cookie = K}
