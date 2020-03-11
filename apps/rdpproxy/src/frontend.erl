@@ -55,13 +55,9 @@ init(Peer) ->
     {ok, #state{peer = Peer}}.
 
 handle_connect(Cookie, _Protocols, Srv, S = #state{}) ->
-    case db_cookie:get(Cookie) of
+    case cookie_ra:get(Cookie) of
         {ok, Sess = #session{
                 host = HostBin, port = Port, user = User}} ->
-            ok = db_host_meta:put(HostBin, jsxd:thread([
-                {set, <<"status">>, <<"busy">>},
-                {set, [<<"sessions">>, 0, <<"user">>], User}
-            ], [])),
             lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
                 [S#state.peer, Cookie, User, HostBin]),
             {ok, Backend} = backend:start_link(Srv, binary_to_list(HostBin), Port),

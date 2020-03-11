@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<!-- paulirish.com/2008/conditional-stylesheets-vs-css-hacks-answer-neither/ -->
+<!--[if IE 8]> <html class="no-js lt-ie9" lang="en"> <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en"> <!--<![endif]-->
+
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>{% autoescape on %}{% block title %}fakvd{% endblock %}{% endautoescape %}</title>
+
+	<link rel="stylesheet" href="{{staticbase}}/css/normalize.css" type="text/css" />
+	<link rel="stylesheet" href="{{staticbase}}/css/uq.css" type="text/css" />
+
+	<script type="text/javascript" src="{{staticbase}}/js/uq.modernizr.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/jquery-1.10.0.min.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/jquery-ui-1.10.3.min.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/equalize.min.js"></script>
+	{% block head %}
+	{% endblock %}
+	<script type="text/javascript">
+		{% block script %}
+		{% endblock %}
+	</script>
+</head>
+
+<body>
+	<div id="uq-header">
+		<div class="row equalize">
+			<div class="large-9 columns equalize">
+				<div id="uq-header-logo">
+					<a href="http://www.uq.edu.au/" title="UQ Homepage" class="valign">The University of Queensland</a>
+				</div>
+			</div>
+			<div id="uq-header-search" class="large-3 columns hide-for-small">
+			</div>
+		</div>
+	</div>
+	<div id="uq-top-nav">
+		<nav>
+			<a href="#" id="uq-top-nav-pull">Menu <img src="{{staticbase}}/images/nav-icon.png" height="20" width="20" /></a>
+			<ul>
+				{% block navigation %}
+				<li><a href="#">Navigation</a></li>
+				{% endblock %}
+			</ul>
+		</nav>
+	</div>
+	<div id="uq-full-content" class="row" style="margin-left: auto; margin-right: auto;">
+		{% autoescape on %}{% block content %}{% endblock %}{% endautoescape %}
+	</div>
+	<div id="uq-footer">
+		<div class="row">
+			<div id="footer-address" class="vcard large-3 small-6 columns">
+				<a href="http://www.uq.edu.au/" class="uq-logo">The University of Queensland, Australia</a>
+				<address id="uq-address" class="adr">
+					<span class="street-address">Brisbane</span> <span class="locality">St Lucia</span>, <span class="region">QLD</span> <span class="postal-code">4072</span>
+				</address>
+				<p class="tel"><a href="tel:+61733651111">+61 7 3365 1111</a></p>
+				<p class="campus">Other Campuses: <a href="http://www.uq.edu.au/ipswich/">UQ Ipswich</a>, <br />
+					<a href="http://www.uq.edu.au/gatton/">UQ Gatton</a>, <a href="http://www.uq.edu.au/about/herston-campus">UQ Herston</a></p>
+				<p class="directions"><a href="http://www.uq.edu.au/maps/">Maps and Directions</a></p>
+				<p id="copyright">&copy; 2013 The University of Queensland</p>
+			</div>
+
+			<div id="footer-mandatory" class="large-3 small-6 columns">
+				<h3>A Member of</h3>
+				<p class="member-logos">
+					<a href="http://www.universitas21.com/" class="no-border"><img src="{{staticbase}}/images/logo-universitas.gif" width="25" height="25" alt="Universitas 21" /></a>
+					<a href="http://www.go8.edu.au/" class="no-border"><img src="{{staticbase}}/images/logo-go8.gif" width="123" height="18" alt="Group of 8" /></a>
+				</p>
+				<p>
+					<a rel="external" href="http://www.uq.edu.au/terms-of-use/">Terms of use</a> | <a rel="external" href="http://www.uq.edu.au/feedback">Feedback</a>
+				</p>
+				<p>
+					<abbr title="Australian Business Number">ABN</abbr>: 63 942 912 684<br />
+					CRICOS Provider No: <a class="footerlinks" href="http://www.uq.edu.au/about/cricos-link">00025B</a>
+				</p>
+			</div>
+
+			<div id="footer-links" class="large-3 columns hide-for-small">
+				<h3>Quick Links</h3>
+				<ul>
+					<li><a href="http://www.uq.edu.au/news/">For Media</a></li>
+					<li><a href="http://www.uq.edu.au/contacts/">Emergency Contact</a></li>
+				</ul>
+
+				<h3>Social Media</h3>
+				<ul>
+					<li><a href="http://www.facebook.com/uniofqld">Facebook</a></li>
+					<li><a href="http://twitter.com/uqnewsonline">Twitter</a></li>
+					<li><a href="http://www.uq.edu.au/itunes/">iTunes U</a></li>
+					<li><a href="http://www.youtube.com/universityqueensland">YouTube Channel</a></li>
+				</ul>
+			</div>
+
+			<div id="footer-explore" class="large-3 columns hide-for-small">
+				<h3>Explore</h3>
+				<ul>
+					<li><a href="http://www.alumni.uq.edu.au/giving">Giving to UQ</a></li>
+					<li><a href="http://www.uq.edu.au/departments/">Faculties &amp; Divisions</a></li>
+					<li><a href="http://www.uq.edu.au/uqjobs/">UQ Jobs</a></li>
+					<li><a href="http://www.uq.edu.au/contacts/">Contact UQ</a></li>
+					<li><a href="http://www.uq.edu.au/services/">Services &amp; Facilities</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+
+	<script type="text/javascript" src="{{staticbase}}/js/uq.menu.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/uq.layout.js"></script>
+
+	<script type="text/javascript" src="{{staticbase}}/js/foundation.min.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/foundation.dropdown.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/foundation.alerts.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/foundation.forms.js"></script>
+	<script type="text/javascript" src="{{staticbase}}/js/foundation.section.js"></script>
+	<script type="text/javascript">
+		$(document).foundation();
+	</script>
+</body>
+
+</html>

@@ -60,7 +60,6 @@ config(ConfigKey, Default) ->
 
 %% @doc Starts the rdpproxy application.
 start() ->
-    fuse:install(ldap_fuse, { {standard, 3, 10}, {reset, 30000} }),
     supervisor:start_link(?MODULE, []).
 
 %% @private
@@ -73,36 +72,19 @@ stop(_State) ->
 
 %% @private
 init(_Args) ->
-    RiakSize = rdpproxy:config([riak, connections], 20),
-    RiakHost = rdpproxy:config([riak, host], "localhost"),
-    RiakPort = rdpproxy:config([riak, port], 8087),
     {ok, _Pid} = http_api:start(),
 
-    LdapPools = lists:map(fun({Name,Conf}) ->
-        poolboy:child_spec(Name,
-            [{name, {local, Name}},
-             {worker_module, ldap_pool},
-             {size, 4},
-             {max_overflow, 16}],
-            [Conf])
-    end, rdpproxy:config(ldap, [])),
-
-    {ok, _} = timer:apply_interval(30000, db_cookie, expire, []),
+    {ok, _, _} = cookie_ra:start(),
+    {ok, _} = timer:apply_interval(30000, cookie_ra, expire, []),
 
     {ok, {
-        {one_for_one, 60, 60},
+        #{strategy => one_for_one, intensity => 60, period => 60},
         [
-            {ui_fsm_sup,
-                {ui_fsm_sup, start_link, []},
-                permanent, infinity, supervisor, [ui_fsm, ui_fsm_sup]},
-            {frontend_sup,
-                {rdp_server_sup, start_link, [3389, frontend]},
-                permanent, infinity, supervisor, [frontend, rdp_server, rdp_server_sup, rdp_server_fsm]},
-            poolboy:child_spec(riakcp,
-                [{name, {local, riakc_pool}},
-                 {worker_module, riakc_pool},
-                 {size, RiakSize},
-                 {max_overflow, RiakSize*2}],
-                [RiakHost, RiakPort])
-        ] ++ LdapPools
+            #{id => ui_fsm_sup,
+              start => {ui_fsm_sup, start_link, []},
+              type => supervisor},
+            #{id => frontend_sup,
+              start => {rdp_server_sup, start_link, [3389, frontend]},
+              type => supervisor}
+        ]
     }}.

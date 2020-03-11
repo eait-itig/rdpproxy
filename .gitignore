@@ -8,3 +8,9 @@ deps
 apps/*/priv/*.so
 apps/*/c_src/*.o
 apps/*/.rebar
+config/sys.config
+config/vm.args
+_build/
+log/
+etc/
+nonode@nohost/

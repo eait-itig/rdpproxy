@@ -3,7 +3,7 @@
         {frontend, [
             %% The hostname that clients will connect to (must
             %% match the certificate under ssl_options)
-            {hostname, <<"gs516-4517.eait.uq.edu.au">>},
+            {hostname, <<"gs516-6440.eait.uq.edu.au">>},
 
             %% Domains to use with logins to backend servers
             %% The first item on this list will be the default
@@ -33,63 +33,44 @@
             %% the host that it's reporting about
             {check_agent_dns_matches_host, true}
         ]},
-        {riak, [
-            %% Connection details (protobufs)
-            {host, "localhost"},
-            {port, 8087},
-
-            %% Number of riak connections to have open at once
-            {connections, 20},
-
+        {ra, [
+            %% List of erlang nodes participating in the cluster
+            %{nodes, [
+            %    'rdpproxy@gs516-6440'
+            %]},
             %% AES/HMAC keys for use protecting passwords in cookie storage
             {keys, [
                 % { Key ref #, key (as a bignum) }
                 {1, 16#9ce909408df2e85bf88ae7ce9db60c1a}
             ]}
         ]},
-        {ldap, [
-            {ldap_server_a, [
-                % search with a filter to get a dn, then bind as that dn
-                {type, search_and_bind},
+        {krb5, [
+            %% Kerberos realm to authenticate users against
+            {realm, "KRB5.UQ.EDU.AU"},
 
-                % use the _ldap._tcp DNS records for a domain
-                {ad_domain, "uq.edu.au"},
-                % or, alternatively, specify each AD server one by one:
-                %{hosts, ["ldaps.uq.edu.au"]},
+            %% Optional settings for KRB5 (explicit KDCs, ciphers)
+            %{kdc, ["kdc1.domain"]},
+            %{ciphers, [aes256_hmac_sha1, aes128_hmac_sha1, rc4_hmac]},
 
-                % creds for initial search bind
-                {bind, ["UQ\\foobar", "foobarpw"]},
-
-                {base, "DC=domain,DC=com"},
-                {filter, {'and', [{equalityMatch, ["uid", username]},
-                                {equalityMatch, ["objectClass", "person"]}]} },
-
-                {options, [{ssl, true}]}
-            ]},
-            {ldap_server_b, [
-                % just search and verify existence
-                {type, search},
-
-                % use the _ldap._tcp DNS records for a domain
-                {ad_domain, "uq.edu.au"},
-                % or, alternatively, specify each AD server one by one:
-                %{hosts, ["ldaps.uq.edu.au"]},
-
-                % creds to bind with
-                {bind, ["UQ\\foobar", "foobarpw"]},
-
-                {base, "DC=domain,DC=com"},
-                {filter, {'and', [{equalityMatch, ["uid", username]},
-                                {equalityMatch, ["objectClass", "person"]}]} },
-
-                {options, [{ssl, true}]}
-            ]}
+            %% How long to wait for KRB5 responses
+            {timeout, 3000}
+        ]},
+        {duo, [
+            %% Details for Duo 2FA
+            {integration_key, <<"aaaaaa">>},
+            {secret_key, <<"aaaaaa">>},
+            {api_host, "api-abc123.duosecurity.com"}
+        ]},
+        {nms_api, [
+            {api_host, "nms.eait.uq.edu.au"},
+            {key_id, <<"rdpproxy">>},
+            {privkey_path, "etc/nms_key.pem"}
         ]}
     ]},
 
     {lager, [
         {handlers, [
-            {lager_console_backend, info},
+            {lager_console_backend, [{level, debug}]},
             {lager_file_backend, [{file, "log/console.log"}, {level, info}]},
             {lager_file_backend, [{file, "log/error.log"}, {level, error}]},
             {lager_file_backend, [{file, "log/debug.log"}, {level, debug}, {count, 10}]}

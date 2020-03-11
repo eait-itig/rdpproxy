@@ -2,7 +2,7 @@
 %% rdpproxy
 %% remote desktop proxy
 %%
-%% Copyright 2012-2015 Alex Wilson <alex@uq.edu.au>
+%% Copyright 2020 Alex Wilson <alex@uq.edu.au>
 %% The University of Queensland
 %% All rights reserved.
 %%
@@ -27,8 +27,16 @@
 %% THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 %%
 
--module(riakc_pool).
--export([start_link/1]).
+-module(krb_auth).
 
-start_link(Args) ->
-    apply(riakc_pb_socket, start_link, Args).
+-export([authenticate/1]).
+
+authenticate(#{username := U, password := P}) ->
+	Krb5Config = application:get_env(rdpproxy, krb5, []),
+	Realm = proplists:get_value(realm, Krb5Config),
+	Opts = Krb5Config -- [{realm, Realm}],
+	{ok, KrbClient} = krb_client:open(Realm, Opts),
+	case krb_client:authenticate(KrbClient, U, P) of
+		ok -> true;
+		_ -> false
+	end.
