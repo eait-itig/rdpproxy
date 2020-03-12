@@ -142,4 +142,4 @@ handle_call(check, _From, S = #state{}) ->
     end;
 
 handle_call(stop, _From, S = #state{}) ->
-    {stop, normal, S}.
+    {stop, normal, ok, S}.
