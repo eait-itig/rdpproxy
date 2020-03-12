@@ -74,7 +74,7 @@ stop(_State) ->
 init(_Args) ->
     {ok, _Pid} = http_api:start(),
 
-    {ok, _, _} = cookie_ra:start(),
+    _ = (catch cookie_ra:start()),
     {ok, _} = timer:apply_interval(30000, cookie_ra, expire, []),
 
     {ok, {
