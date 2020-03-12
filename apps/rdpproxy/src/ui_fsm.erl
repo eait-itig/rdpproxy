@@ -381,7 +381,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
                                      mod = ui_vlayout,
-                                     size = {410.0, H}}} },
+                                     size = {460.0, H}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = subbanner,
@@ -419,7 +419,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                 { [{id, loginlyt}],     {add_child,
                                          #widget{id = {devlyt, Id},
                                                  mod = ui_hlayout,
-                                                 size = {400.0, 150.0}}} },
+                                                 size = {440.0, 150.0}}} },
                 { [{id, {devlyt, Id}}],  init },
 
                 { [{id, {devlyt, Id}}], {add_child,
@@ -431,20 +431,20 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                 { [{id, {devlbllyt, Id}}],  {add_child,
                                           #widget{id = {devlbl, Id},
                                                   mod = ui_label,
-                                                  size = {230.0, 17.0}}} },
+                                                  size = {220.0, 17.0}}} },
                 { [{id, {devlbl, Id}}],  {init, left, Name} },
                 { [{id, {devlbl, Id}}],  {set_bgcolor, UQPurple} },
                 { [{id, {devlbllyt, Id}}],  {add_child,
                                           #widget{id = {devtlbl, Id},
                                                   mod = ui_label,
-                                                  size = {230.0, 15.0}}} },
+                                                  size = {220.0, 15.0}}} },
                 { [{id, {devtlbl, Id}}],  {init, left, Type} },
                 { [{id, {devtlbl, Id}}],  {set_bgcolor, UQPurple} },
 
                 { [{id, {devlyt, Id}}],  {add_child,
                                           #widget{id = {devbtnslyt, Id},
                                                   mod = ui_vlayout,
-                                                  size = {170.0, 150.0}}} },
+                                                  size = {180.0, 150.0}}} },
                 { [{id, {devbtnslyt, Id}}], init }
             ]
         end,
@@ -454,7 +454,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                     { [{id, {devbtnslyt, Id}}], {add_child,
                                                  #widget{id = {pushbtn, Id},
                                                          mod = ui_button,
-                                                         size = {150.0, 30.0}}} },
+                                                         size = {140.0, 30.0}}} },
                     { [{id, {pushbtn, Id}}],  {init, <<"Duo Push", 0>>} }
                 ];
             false -> Acc1
@@ -465,7 +465,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                     { [{id, {devbtnslyt, Id}}], {add_child,
                                                  #widget{id = {smsbtn, Id},
                                                          mod = ui_button,
-                                                         size = {150.0, 30.0}}} },
+                                                         size = {140.0, 30.0}}} },
                     { [{id, {smsbtn, Id}}],  {init, <<"SMS code", 0>>} }
                 ];
             false -> Acc2
@@ -476,7 +476,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                     { [{id, {devbtnslyt, Id}}], {add_child,
                                                  #widget{id = {callbtn, Id},
                                                          mod = ui_button,
-                                                         size = {150.0, 30.0}}} },
+                                                         size = {140.0, 30.0}}} },
                     { [{id, {callbtn, Id}}],  {init, <<"Phonecall", 0>>} }
                 ];
             false -> Acc3
@@ -487,17 +487,18 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                     { [{id, {devbtnslyt, Id}}], {add_child,
                                                  #widget{id = {otplyt, Id},
                                                          mod = ui_hlayout,
-                                                         size = {150.0, 30.0}}} },
+                                                         size = {140.0, 30.0}}} },
                     { [{id, {otplyt, Id}}],      init },
+                    { [{id, {otplyt, Id}}],  {set_margin, 0} },
                     { [{id, {otplyt, Id}}], {add_child,
                                                  #widget{id = {otpinp, Id},
                                                          mod = ui_textinput,
-                                                         size = {100.0, 30.0}}} },
+                                                         size = {100.0, 28.0}}} },
                     { [{id, {otpinp, Id}}],  {init, <<"code">>} },
                     { [{id, {otplyt, Id}}], {add_child,
                                                  #widget{id = {otpbtn, Id},
                                                          mod = ui_button,
-                                                         size = {30.0, 30.0}}} },
+                                                         size = {28.0, 28.0}}} },
                     { [{id, {otpbtn, Id}}],  {init, <<"OK", 0>>} }
                 ];
             false -> Acc4
@@ -793,7 +794,7 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                 { [{id, {devlbllyt, Ip}}],  {add_child,
                                           #widget{id = {devlbl, Ip},
                                                   mod = ui_label,
-                                                  size = {250.0, 19.0}}} },
+                                                  size = {240.0, 19.0}}} },
                 { [{id, {devlbl, Ip}}],  {init, left, Hostname} },
                 { [{id, {devlbl, Ip}}],  {set_bgcolor, UQPurple} },
                 { [{id, {devlbllyt, Ip}}],  {add_child,
