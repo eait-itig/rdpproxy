@@ -83,7 +83,7 @@ startup(timeout, S = #state{frontend = F}) ->
         16 -> rgb16_565;
         _ -> error({bad_bpp, Bpp})
     end,
-    Peer = rdp_server:get_peer(F),
+    {PeerIp, PeerPort} = rdp_server:get_peer(F),
 
     Caps = rdp_server:get_caps(F),
     GeneralCap = lists:keyfind(ts_cap_general, 1, Caps),
@@ -92,7 +92,7 @@ startup(timeout, S = #state{frontend = F}) ->
     TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
 
     ClientFp = crypto:hash(sha256, [
-        term_to_binary(Peer),
+        term_to_binary(PeerIp),
         term_to_binary(GeneralCap#ts_cap_general.os),
         term_to_binary(TsudCore#tsud_core.version),
         term_to_binary(TsudCore#tsud_core.client_build),
@@ -100,8 +100,10 @@ startup(timeout, S = #state{frontend = F}) ->
         ]),
     DuoId = base64:encode(ClientFp),
 
+    lager:debug("peer = ~p, duoid = ~p", [PeerIp, DuoId]),
+
     S2 = S#state{w = W, h = H, bpp = Bpp, format = Format,
-                 duoid = DuoId, peer = inet:ntoa(Peer)},
+                 duoid = DuoId, peer = list_to_binary(inet:ntoa(PeerIp))},
     lager:debug("starting session ~px~p @~p bpp (format ~p)", [W, H, Bpp, Format]),
     case rdp_server:get_redir_support(F) of
         false ->
