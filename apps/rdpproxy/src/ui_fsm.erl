@@ -32,6 +32,7 @@
 
 -include_lib("rdp_proto/include/rdpp.hrl").
 -include_lib("rdp_proto/include/kbd.hrl").
+-include_lib("rdp_proto/include/tsud.hrl").
 -include_lib("cairerl/include/cairerl.hrl").
 -include_lib("rdp_ui/include/ui.hrl").
 
@@ -52,7 +53,7 @@ start_link(Frontend) ->
     root, sess,
     allocpid, allocmref,
     duo, nms,
-    duodevs, machines, duotx}).
+    duodevs, duoid, peer, machines, duotx}).
 
 %% @private
 init([Frontend]) ->
@@ -82,7 +83,25 @@ startup(timeout, S = #state{frontend = F}) ->
         16 -> rgb16_565;
         _ -> error({bad_bpp, Bpp})
     end,
-    S2 = S#state{w = W, h = H, bpp = Bpp, format = Format},
+    Peer = rdp_server:get_peer(F),
+
+    Caps = rdp_server:get_caps(F),
+    GeneralCap = lists:keyfind(ts_cap_general, 1, Caps),
+
+    Tsuds = rdp_server:get_tsuds(F),
+    TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
+
+    ClientFp = crypto:hash(sha256, [
+        term_to_binary(Peer),
+        term_to_binary(GeneralCap#ts_cap_general.os),
+        term_to_binary(TsudCore#tsud_core.version),
+        term_to_binary(TsudCore#tsud_core.client_build),
+        term_to_binary(TsudCore#tsud_core.client_name)
+        ]),
+    DuoId = base64:encode(ClientFp),
+
+    S2 = S#state{w = W, h = H, bpp = Bpp, format = Format,
+                 duoid = DuoId, peer = inet:ntoa(Peer)},
     lager:debug("starting session ~px~p @~p bpp (format ~p)", [W, H, Bpp, Format]),
     case rdp_server:get_redir_support(F) of
         false ->
@@ -314,8 +333,14 @@ login(check_creds, S = #state{root = Root, duo = Duo}) ->
             case krb_auth:authenticate(Creds) of
                 true ->
                     lager:debug("auth for ~p succeeded!", [Username]),
+                    #state{duoid = DuoId, peer = Peer} = S,
                     S1 = S#state{sess = #session{user = Username, domain = Domain, password = Password}},
-                    case duo:preauth(Duo, #{<<"username">> => Username}) of
+                    Args = #{
+                        <<"username">> => Username,
+                        <<"ipaddr">> => Peer,
+                        <<"trusted_device_token">> => DuoId
+                    },
+                    case duo:preauth(Duo, Args) of
                         {ok, #{<<"result">> := <<"enroll">>}} ->
                             login(mfa_enroll, S);
                         {ok, #{<<"result">> := <<"allow">>}} ->
@@ -544,9 +569,10 @@ mfa({ui, {clicked, {otpbtn, DevId}}}, S = #state{root = Root}) ->
     [Txt] = ui:select(Root, [{id, {otpinp, DevId}}]),
     V = ui_textinput:get_text(Txt),
     mfa({submit_otp, DevId, V}, S);
-mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
     Args = #{
         <<"username">> => U,
+        <<"ipaddr">> => Peer,
         <<"factor">> => <<"push">>,
         <<"device">> => DevId,
         <<"async">> => <<"true">>
@@ -561,17 +587,19 @@ mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, sess = #session{use
         {ok, #{<<"txid">> := TxId}} ->
             mfa_waiting(setup_ui, S#state{duotx = TxId})
     end;
-mfa({ui, {clicked, {smsbtn, DevId}}}, S = #state{duo = Duo, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {smsbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
     Args = #{
         <<"username">> => U,
+        <<"ipaddr">> => Peer,
         <<"factor">> => <<"sms">>,
         <<"device">> => DevId
     },
     _ = duo:auth(Duo, Args),
     {next_state, mfa, S};
-mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
     Args = #{
         <<"username">> => U,
+        <<"ipaddr">> => Peer,
         <<"factor">> => <<"phone">>,
         <<"device">> => DevId,
         <<"async">> => <<"true">>
@@ -587,9 +615,10 @@ mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, sess = #session{use
             mfa_waiting(setup_ui, S#state{duotx = TxId})
     end;
 
-mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, sess = #session{user = U}}) ->
+mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
     Args = #{
         <<"username">> => U,
+        <<"ipaddr">> => Peer,
         <<"factor">> => <<"passcode">>,
         <<"passcode">> => Code
     },
