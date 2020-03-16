@@ -50,10 +50,11 @@ start_link(Frontend) ->
     frontend,
     mref,
     w, h, bpp, format,
-    root, sess,
+    root, sess, peer, tsudcore,
     allocpid, allocmref,
-    duo, nms,
-    duodevs, duoid, peer, machines, duotx}).
+    nms,
+    duo, duodevs, duoid, duotx,
+    machines}).
 
 %% @private
 init([Frontend]) ->
@@ -102,7 +103,7 @@ startup(timeout, S = #state{frontend = F}) ->
 
     lager:debug("peer = ~p, duoid = ~p", [PeerIp, DuoId]),
 
-    S2 = S#state{w = W, h = H, bpp = Bpp, format = Format,
+    S2 = S#state{w = W, h = H, bpp = Bpp, format = Format, tsudcore = TsudCore,
                  duoid = DuoId, peer = list_to_binary(inet:ntoa(PeerIp))},
     lager:debug("starting session ~px~p @~p bpp (format ~p)", [W, H, Bpp, Format]),
     case rdp_server:get_redir_support(F) of
@@ -343,14 +344,16 @@ login(check_creds, S = #state{root = Root, duo = Duo}) ->
                         <<"trusted_device_token">> => DuoId
                     },
                     case duo:preauth(Duo, Args) of
-                        {ok, #{<<"result">> := <<"enroll">>}} ->
-                            login(mfa_enroll, S);
-                        {ok, #{<<"result">> := <<"allow">>}} ->
+                        {ok, Resp = #{<<"result">> := <<"enroll">>}} ->
+                            lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
                             choose(setup_ui, S1);
-                        {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs}} ->
+                        {ok, #{<<"result">> := <<"allow">>}} ->
+                            lager:debug("duo bypass for ~p", [Username]),
+                            choose(setup_ui, S1);
+                        {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
                             mfa(setup_ui, S1#state{duodevs = Devs});
                         Else ->
-                            lager:debug("duo said: ~p", [Else]),
+                            lager:debug("duo preauth else for ~p: ~p", [Username, Else]),
                             login(invalid_login, S)
                     end;
                 false ->
@@ -571,13 +574,17 @@ mfa({ui, {clicked, {otpbtn, DevId}}}, S = #state{root = Root}) ->
     [Txt] = ui:select(Root, [{id, {otpinp, DevId}}]),
     V = ui_textinput:get_text(Txt),
     mfa({submit_otp, DevId, V}, S);
-mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudcore = TsudCore, sess = #session{user = U}}) ->
+    Name = unicode:characters_to_binary(TsudCore#tsud_core.client_name, {utf16, little}, utf8),
+    Version = iolist_to_binary(io_lib:format("version ~p build ~p", [TsudCore#tsud_core.version, TsudCore#tsud_core.client_build])),
+    PushInfo = uri_string:compose_query([{<<"client_name">>, Name}, {<<"client_version">>, Version}]),
     Args = #{
         <<"username">> => U,
         <<"ipaddr">> => Peer,
         <<"factor">> => <<"push">>,
         <<"device">> => DevId,
-        <<"async">> => <<"true">>
+        <<"async">> => <<"true">>,
+        <<"pushinfo">> => PushInfo
     },
     case duo:auth(Duo, Args) of
         {ok, #{<<"result">> := <<"deny">>}} ->

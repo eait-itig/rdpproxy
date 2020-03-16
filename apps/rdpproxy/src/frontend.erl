@@ -107,7 +107,7 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
                             Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
                             true -> <<Password/binary, 0>> end
                         },
-                    lager:debug("rewriting ts_info: ~p", [TsInfo2#ts_info{extra = snip}]),
+                    lager:debug("rewriting ts_info: ~p", [TsInfo2#ts_info{password = snip, extra = snip}]),
                     {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
                     {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
                     {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),

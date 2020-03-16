@@ -205,14 +205,14 @@ init([From, Sess = #session{user = U}]) ->
 %             {next_state, probe, S, 0}
 %     end.
 
-probe(timeout, S = #state{sess = Sess}) ->
+probe(timeout, S = #state{sess = Sess, exhaused = Ex}) ->
     #session{host = Ip, port = Port} = Sess,
     case backend:probe(binary_to_list(Ip), Port) of
         ok ->
             {next_state, save_cookie, S, 0};
         Err ->
             lager:debug("probe failed on ~p: ~p, will retry", [Ip, Err]),
-            {next_state, probe, S, 1000}
+            {next_state, probe, S#state{exhaused = Ex + 1}, 1000}
     end.
 
 save_cookie(timeout, S = #state{sess = Sess}) ->

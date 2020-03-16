@@ -79,7 +79,7 @@ init([Srv, Address, Port, OrigCr]) ->
     random:seed(os:timestamp()),
     #x224_cr{src = Us} = OrigCr,
     lager:debug("backend for frontend ~p", [Srv]),
-    case gen_tcp:connect(Address, Port, [binary, {active, once}, {packet, raw}, {nodelay, true}], 2000) of
+    case gen_tcp:connect(Address, Port, [binary, {active, once}, {nodelay, true}], 2000) of
         {ok, Sock} ->
             lager:debug("backend connected to ~p", [Address]),
             Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
