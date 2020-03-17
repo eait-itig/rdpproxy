@@ -145,7 +145,7 @@ expire_keys(Now, S0 = #state{lookup = L0, expireq = EQ0}) ->
 init(_Config) ->
     #state{}.
 
-apply(_Meta, {create, Se0 = #session{cookie = Key}}, S0 = #state{lookup = L0, expireq = EQ0}) ->
+apply(#{index := Idx}, {create, Se0 = #session{cookie = Key}}, S0 = #state{lookup = L0, expireq = EQ0}) ->
     case L0 of
         #{Key := _} ->
             {S0, {error, duplicate_key}, []};
@@ -154,7 +154,11 @@ apply(_Meta, {create, Se0 = #session{cookie = Key}}, S0 = #state{lookup = L0, ex
             L1 = L0#{Key => encode(Se1)},
             EQ1 = queue:in(Key, EQ0),
             S1 = S0#state{lookup = L1, expireq = EQ1},
-            {S1, {ok, Key}, []}
+            Effects = case Idx rem 1000 of
+                0 -> [{release_cursor, Idx, S1}];
+                _ -> []
+            end,
+            {S1, {ok, Key}, Effects}
     end;
 
 apply(_Meta, {get, Key}, S0 = #state{lookup = L0}) ->
