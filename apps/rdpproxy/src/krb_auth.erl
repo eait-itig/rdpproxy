@@ -32,11 +32,13 @@
 -export([authenticate/1]).
 
 authenticate(#{username := U, password := P}) ->
-	Krb5Config = application:get_env(rdpproxy, krb5, []),
-	Realm = proplists:get_value(realm, Krb5Config),
-	Opts = Krb5Config -- [{realm, Realm}],
-	{ok, KrbClient} = krb_client:open(Realm, Opts),
-	case krb_client:authenticate(KrbClient, U, P) of
-		ok -> true;
-		_ -> false
-	end.
+    Krb5Config = application:get_env(rdpproxy, krb5, []),
+    Realm = proplists:get_value(realm, Krb5Config),
+    Opts = Krb5Config -- [{realm, Realm}],
+    {ok, KrbClient} = krb_client:open(Realm, Opts),
+    Res = case krb_client:authenticate(KrbClient, U, P) of
+        ok -> true;
+        _ -> false
+    end,
+    krb_client:close(KrbClient),
+    Res.

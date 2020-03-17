@@ -805,6 +805,7 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
         {ok, D} -> D;
         _ -> []
     end,
+    Devs1 = lists:sublist(Devs0, 6),
 
     Events1 = lists:foldl(fun (Dev, Acc) ->
         #{<<"hostname">> := Hostname,
@@ -848,8 +849,8 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                                      size = {120.0, 28.0}}} },
                 { [{id, {choosebtn, Ip, Hostname}}],  {init, <<"Connect", 0>>} }
         ]
-    end, [], Devs0),
-    Events2 = case Devs0 of
+    end, [], Devs1),
+    Events2 = case Devs1 of
         [] ->
             Events1 ++ [
                 { [{id, instru}],       {set_text, <<"\n">>} },
