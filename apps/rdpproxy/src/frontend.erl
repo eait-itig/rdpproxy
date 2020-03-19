@@ -103,37 +103,46 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         {ok, {mcs_pdu, McsCi = #mcs_ci{}}, Rem} ->
             {ok, Tsuds0} = tsud:decode(McsCi#mcs_ci.data),
 
-            % Remove the redirection info while we're here.
-            TsudCluster0 = lists:keyfind(tsud_cluster, 1, Tsuds0),
-            TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
-            lager:debug("rewriting client tsud: ~p", [TsudCluster1]),
-            Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),
-
-            TsudCore0 = lists:keyfind(tsud_core, 1, Tsuds1),
+            TsudCore0 = lists:keyfind(tsud_core, 1, Tsuds0),
             Colors0 = TsudCore0#tsud_core.colors,
-            PrefColor0 = TsudCore0#tsud_core.color,
             Caps0 = TsudCore0#tsud_core.capabilities,
-            TsudCore1 = case lists:member(dynvc_gfx, Caps0) of
-                true ->
-                    Colors1 = ['32bpp' | Colors0],
-                    Color1 = '32bpp',
-                    Caps1 = ['want_32bpp' | Caps0],
-                    TsudCore0#tsud_core{colors = Colors1, color = Color1, capabilities = Caps1};
-                false -> TsudCore0
-            end,
-            lager:debug("rewriting client tsud: ~p", [TsudCore1]),
-            Tsuds2 = lists:keyreplace(tsud_core, 1, Tsuds1, TsudCore1),
 
-            TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
-                {ok, TsudBin} = tsud:encode(Tsud),
-                <<SoFar/binary, TsudBin/binary>>
-            end, <<>>, Tsuds2),
-            {ok, OutCiData} = mcsgcc:encode_ci(McsCi#mcs_ci{data = TsudsBin1}),
-            {ok, OutDtData} = x224:encode(#x224_dt{data = OutCiData}),
-            {ok, OutPkt} = tpkt:encode(OutDtData),
-            gen_fsm:send_event(B, {frontend_data, <<OutPkt/binary, Rem/binary>>}),
-            {ok, S};
+            HasGfx = lists:member(dynvc_gfx, Caps0),
+            Has32Bpp = lists:member('32bpp', Colors0),
 
+            case {HasGfx, Has32Bpp} of
+                {true, false} ->
+                    % Remove the redirection info while we're here.
+                    TsudCluster0 = lists:keyfind(tsud_cluster, 1, Tsuds0),
+                    TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
+                    lager:debug("rewriting client tsud: ~p", [TsudCluster1]),
+                    Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),
+
+                    PrefColor0 = TsudCore0#tsud_core.color,
+                    TsudCore1 = case lists:member(dynvc_gfx, Caps0) of
+                        true ->
+                            Colors1 = ['32bpp' | Colors0],
+                            Color1 = '32bpp',
+                            Caps1 = ['want_32bpp' | Caps0],
+                            TsudCore0#tsud_core{colors = Colors1, color = Color1, capabilities = Caps1};
+                        false -> TsudCore0
+                    end,
+                    lager:debug("rewriting client tsud: ~p", [TsudCore1]),
+                    Tsuds2 = lists:keyreplace(tsud_core, 1, Tsuds1, TsudCore1),
+
+                    TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
+                        {ok, TsudBin} = tsud:encode(Tsud),
+                        <<SoFar/binary, TsudBin/binary>>
+                    end, <<>>, Tsuds2),
+                    {ok, OutCiData} = mcsgcc:encode_ci(McsCi#mcs_ci{data = TsudsBin1}),
+                    {ok, OutDtData} = x224:encode(#x224_dt{data = OutCiData}),
+                    {ok, OutPkt} = tpkt:encode(OutDtData),
+                    gen_fsm:send_event(B, {frontend_data, <<OutPkt/binary, Rem/binary>>}),
+                    {ok, S};
+                _ ->
+                    gen_fsm:send_event(B, {frontend_data, Bin}),
+                    {ok, S}
+            end;
         %
         % The last thing we have to rewrite before we can just be a data shovel
         % is the ts_info PDU. Here we'll forcibly inject the domain, username
