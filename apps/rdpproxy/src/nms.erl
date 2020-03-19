@@ -33,7 +33,7 @@
 -export([start_link/0, stop/1]).
 -export([init/1, terminate/2, handle_call/3, handle_info/2]).
 
--export([get_user_hosts/2, wol/2]).
+-export([get_user_hosts/2, wol/2, bump_count/3]).
 
 start_link() ->
     gen_server:start_link(?MODULE, [], []).
@@ -46,6 +46,9 @@ get_user_hosts(N, Username) ->
 
 wol(N, Hostname) ->
     gen_server:call(N, {wol, Hostname}).
+
+bump_count(N, Username, Ip) ->
+    gen_server:call(N, {bump_count, Username, Ip}).
 
 -record(state, {gun, host, signer}).
 
@@ -121,6 +124,13 @@ handle_call({get_user_hosts, User}, _From, S = #state{}) ->
     Uri = iolist_to_binary([<<"/api/userhost.php/">>, User]),
     case do_signed_req(get, Uri, #{}, S) of
         {ok, 200, Hosts} -> {reply, {ok, Hosts}, S};
+        Else -> {reply, {error, Else}, S}
+    end;
+
+handle_call({bump_count, User, Ip}, _From, S = #state{}) ->
+    Uri = iolist_to_binary([<<"/api/rdpcount.php/">>, User, $/, Ip]),
+    case do_signed_req(post, Uri, #{<<"submit">> => <<"true">>}, S) of
+        {ok, 200, Reply} -> {reply, {ok, Reply}, S};
         Else -> {reply, {error, Else}, S}
     end;
 

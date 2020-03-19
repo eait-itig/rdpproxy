@@ -991,8 +991,13 @@ waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root})
     end;
 
 waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F, allocpid = AllocPid}) ->
-    #session{cookie = Cookie} = Sess,
+    #session{cookie = Cookie, host = Ip, user = U} = Sess,
     erlang:demonitor(S#state.allocmref),
+    #state{nms = Nms} = S,
+    case nms:bump_count(Nms, U, Ip) of
+        {ok, _} -> ok;
+        Else -> lager:debug("nms:bump_count returned ~p", [Else])
+    end,
     rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
     {stop, normal, S};
 
