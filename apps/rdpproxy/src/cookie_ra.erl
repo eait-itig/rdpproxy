@@ -90,7 +90,7 @@ decode(<<P:16/big, E:64/big, HLen:16/big, H:HLen/binary, ULen:16/big, U:ULen/bin
     #session{host = H, expiry = E, port = P, user = U, password = Pw, domain = D}.
 
 create(S = #session{}) ->
-    S1 = S#session{expiry = erlang:system_time(second) + 5},
+    S1 = S#session{expiry = erlang:system_time(second) + ?COOKIE_TTL},
     S2 = S1#session{cookie = gen_key()},
     case ra:process_command(cookie_ra, {create, S2}) of
         {ok, Ret, _Leader} -> Ret;
