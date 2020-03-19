@@ -82,7 +82,7 @@ init([Srv, Address, Port, OrigCr]) ->
     case gen_tcp:connect(Address, Port, [binary, {active, once}, {nodelay, true}], 2000) of
         {ok, Sock} ->
             lager:debug("backend connected to ~p", [Address]),
-            Cr = OrigCr#x224_cr{rdp_protocols = [ssl]},
+            Cr = OrigCr#x224_cr{rdp_protocols = [ssl], rdp_cookie = none},
             {ok, CrData} = x224:encode(Cr),
             {ok, Packet} = tpkt:encode(CrData),
             ok = gen_tcp:send(Sock, Packet),
@@ -129,6 +129,12 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
 
 proxy_intercept({data, Bin}, #data{server = Srv, origcr = OrigCr} = Data) ->
     case rdpp:decode_connseq(Bin) of
+        %
+        % The server sends a copy of what protocols the client requested in the
+        % x224_cr in its svr_core TSUD. Fish this out and rewrite it to what our
+        % real client said to us (probably has credssp as well as ssl). If it
+        % doesn't match, the client will disconnect.
+        %
         {ok, {mcs_pdu, Cr = #mcs_cr{data = TsudsBin0}}, Rem} ->
             {ok, Tsuds0} = tsud:decode(TsudsBin0),
             TsudSvrCore0 = lists:keyfind(tsud_svr_core, 1, Tsuds0),
@@ -222,8 +228,9 @@ debug_print_data(Bin) ->
             lager:info("backend rx mcs: ~s", [mcsgcc:pretty_print(Pdu)]),
             debug_print_data(Rem);
         {ok, Something, Rem} ->
-            lager:info("backend_unknown: ~p, rem = ~p", [Something, Rem]);
-        {error, _Reason} ->
+            lager:info("backend unknown: ~p, rem = ~p", [Something, Rem]);
+        {error, Reason} ->
+            lager:info("backend parse err: ~p", [Reason]),
             ok
     end.
 
@@ -244,6 +251,7 @@ handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Dat
 
 handle_info({ssl, SslSock, Bin}, State, #data{sslsock = SslSock} = Data)
         when (State =:= proxy) orelse (State =:= proxy_intercept) ->
+    %debug_print_data(Bin),
     ?MODULE:State({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
     handle_info({tcp, Sock, Bin}, State, Data);
@@ -254,7 +262,8 @@ handle_info({ssl_closed, SslSock}, _State, #data{sslsock = SslSock} = Data) ->
 handle_info({tcp_closed, Sock}, _State, #data{sock = Sock} = Data) ->
     {stop, normal, Data};
 
-handle_info(_Msg, State, Data) ->
+handle_info(Msg, State, Data) ->
+    lager:info("got ~p", [Msg]),
     {next_state, State, Data}.
 
 %% @private
