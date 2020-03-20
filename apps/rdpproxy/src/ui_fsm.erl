@@ -1028,7 +1028,7 @@ waiting({alloc_persistent_error, AllocPid, down}, S = #state{frontend = F, alloc
         { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
             #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
             } },
-        { [{id, badlbl}],   {init, center, <<"Host appears to be down, trying Wake-on-LAN...">>} },
+        { [{id, badlbl}],   {init, center, <<"Host appears to be off, trying to wake it up...">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, UQPurple} }
     ],
