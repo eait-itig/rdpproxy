@@ -210,9 +210,32 @@ probe(timeout, S = #state{sess = Sess, exhausted = Ex}) ->
     case backend:probe(binary_to_list(Ip), Port) of
         ok ->
             {next_state, save_cookie, S, 0};
+        {error, no_ssl} ->
+            S#state.from ! {alloc_persistent_error, self(), no_ssl},
+            {next_state, probe, S#state{exhausted = Ex + 1}, 5000};
+        {error, econnrefused} ->
+            Timeout = if
+                (Ex > 10) -> 10000;
+                (Ex > 5) ->
+                    S#state.from ! {alloc_persistent_error, self(), refused},
+                    5000;
+                true -> 1000
+            end,
+            {next_state, probe, S#state{exhausted = Ex + 1}, Timeout};
+        {error, Reason} when (Reason =:= timeout) or (Reason =:= ehostunreach) ->
+            Timeout = if
+                (Ex > 50) -> 10000;
+                (Ex > 30) -> 5000;
+                (Ex > 7) -> 2000;
+                (Ex > 5) ->
+                    S#state.from ! {alloc_persistent_error, self(), down},
+                    2000;
+                true -> 1000
+            end,
+            {next_state, probe, S#state{exhausted = Ex + 1}, Timeout};
         Err ->
             lager:debug("probe failed on ~p: ~p, will retry", [Ip, Err]),
-            {next_state, probe, S#state{exhausted = Ex + 1}, 1000}
+            {next_state, probe, S#state{}, 1000}
     end.
 
 save_cookie(timeout, S = #state{sess = Sess}) ->

@@ -198,9 +198,9 @@ no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
 login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
-    TopMod = case (H > W) of
-        true -> ui_vlayout;
-        false -> ui_hlayout
+    {TopMod, LH} = case (H > W) of
+        true -> {ui_vlayout, 250};
+        false -> {ui_hlayout, H}
     end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
@@ -208,6 +208,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                              #widget{id = hlayout,
                                      mod = TopMod}} },
         { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_halign, center} },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
@@ -215,7 +216,7 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
                                      mod = ui_vlayout,
-                                     size = {400.0, H}}} },
+                                     size = {460.0, LH}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = banner,
@@ -393,9 +394,9 @@ login(mfa_enroll, S = #state{}) ->
 mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
-    TopMod = case (H > W) of
-        true -> ui_vlayout;
-        false -> ui_hlayout
+    {TopMod, LH} = case (H > W) of
+        true -> {ui_vlayout, 2 * (H div 3)};
+        false -> {ui_hlayout, H}
     end,
     DuoDevs = S#state.duodevs,
     Events0 = [
@@ -404,6 +405,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                              #widget{id = hlayout,
                                      mod = TopMod}} },
         { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_halign, center} },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
@@ -411,7 +413,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
                                      mod = ui_vlayout,
-                                     size = {460.0, H}}} },
+                                     size = {460.0, LH}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = subbanner,
@@ -657,9 +659,9 @@ mfa(mfa_deny, S = #state{}) ->
 mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
-    TopMod = case (H > W) of
-        true -> ui_vlayout;
-        false -> ui_hlayout
+    {TopMod, LH} = case (H > W) of
+        true -> {ui_vlayout, 200};
+        false -> {ui_hlayout, H}
     end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
@@ -667,6 +669,7 @@ mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
                              #widget{id = hlayout,
                                      mod = TopMod}} },
         { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_halign, center} },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
@@ -674,7 +677,7 @@ mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
                                      mod = ui_vlayout,
-                                     size = {400.0, H}}} },
+                                     size = {460.0, LH}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = banner,
@@ -763,9 +766,9 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
 
-    TopMod = case (H > W) of
-        true -> ui_vlayout;
-        false -> ui_hlayout
+    {TopMod, LH} = case (H > W) of
+        true -> {ui_vlayout, 2 * (H div 3)};
+        false -> {ui_hlayout, H}
     end,
     Events0 = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
@@ -773,6 +776,7 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                              #widget{id = hlayout,
                                      mod = TopMod}} },
         { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_halign, center} },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
@@ -780,7 +784,7 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
                                      mod = ui_vlayout,
-                                     size = {440.0, H}}} },
+                                     size = {440.0, LH}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = subbanner,
@@ -917,9 +921,9 @@ choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #state{nms = Nms, sess = 
 waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
-    TopMod = case (H > W) of
-        true -> ui_vlayout;
-        false -> ui_hlayout
+    {TopMod, LH} = case (H > W) of
+        true -> {ui_vlayout, 200};
+        false -> {ui_hlayout, H}
     end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
@@ -927,6 +931,7 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
                              #widget{id = hlayout,
                                      mod = TopMod}} },
         { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_halign, center} },
         { [{id, hlayout}],  {set_margin, 100} },
         { [{id, hlayout}],  {add_child,
                              #widget{id = logo,
@@ -934,7 +939,7 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
         { [{id, hlayout}],  {add_child,
                              #widget{id = loginlyt,
                                      mod = ui_vlayout,
-                                     size = {400.0, H}}} },
+                                     size = {460.0, LH}}} },
         { [{id, loginlyt}], init },
         { [{id, loginlyt}], {add_child,
                              #widget{id = banner,
@@ -1000,6 +1005,51 @@ waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F, allocpid =
     end,
     rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
     {stop, normal, S};
+
+waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #state{frontend = F, allocpid = AllocPid}) ->
+    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    LightRed = {1.0, 0.8, 0.8},
+    Events = [
+        { [{id, loginlyt}], {remove_child, {id, badlbl}} },
+        { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
+            } },
+        { [{id, badlbl}],   {init, center, <<"Host has RDP TLS disabled, contact helpdesk@eait.uq.edu.au">>} },
+        { [{id, badlbl}],   {set_fgcolor, LightRed} },
+        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+    ],
+    handle_root_events(waiting, S, Events);
+
+waiting({alloc_persistent_error, AllocPid, down}, S = #state{frontend = F, allocpid = AllocPid}) ->
+    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    LightRed = {1.0, 0.8, 0.8},
+    Events = [
+        { [{id, loginlyt}], {remove_child, {id, badlbl}} },
+        { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
+            } },
+        { [{id, badlbl}],   {init, center, <<"Host appears to be down, trying Wake-on-LAN...">>} },
+        { [{id, badlbl}],   {set_fgcolor, LightRed} },
+        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+    ],
+    #state{nms = Nms, sess = #session{host = Ip}} = S,
+    Ret = nms:wol(Nms, Ip),
+    lager:debug("wol for ~p returned ~p", [Ip, Ret]),
+    handle_root_events(waiting, S, Events);
+
+waiting({alloc_persistent_error, AllocPid, refused}, S = #state{frontend = F, allocpid = AllocPid}) ->
+    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    LightRed = {1.0, 0.8, 0.8},
+    Events = [
+        { [{id, loginlyt}], {remove_child, {id, badlbl}} },
+        { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
+            } },
+        { [{id, badlbl}],   {init, center, <<"Host not listening for RDP, contact helpdesk@eait.uq.edu.au">>} },
+        { [{id, badlbl}],   {set_fgcolor, LightRed} },
+        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+    ],
+    handle_root_events(waiting, S, Events);
 
 waiting({'DOWN', MRef, process, _, _}, S = #state{allocmref = MRef}) ->
     {ok, AllocPid} = host_alloc_fsm:start(S#state.sess),
