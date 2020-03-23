@@ -90,9 +90,10 @@ decode(<<P:16/big, E:64/big, HLen:16/big, H:HLen/binary, ULen:16/big, U:ULen/bin
     #session{host = H, expiry = E, port = P, user = U, password = Pw, domain = D}.
 
 create(S = #session{}) ->
+    Cookie = gen_key(),
     S1 = S#session{expiry = erlang:system_time(second) + ?COOKIE_TTL},
-    S2 = S1#session{cookie = gen_key()},
-    case ra:process_command(cookie_ra, {create, S2}) of
+    S2 = S1#session{cookie = Cookie},
+    case ra:process_command(cookie_ra, {create, Cookie, encode(S2)}) of
         {ok, Ret, _Leader} -> Ret;
         Else -> Else
     end.
@@ -161,6 +162,21 @@ apply(#{index := Idx}, {create, Se0 = #session{cookie = Key}}, S0 = #state{looku
             {S1, {ok, Key}, Effects}
     end;
 
+apply(#{index := Idx}, {create, Key, SeBin}, S0 = #state{lookup = L0, expireq = EQ0}) ->
+    case L0 of
+        #{Key := _} ->
+            {S0, {error, duplicate_key}, []};
+        _ ->
+            L1 = L0#{Key => SeBin},
+            EQ1 = queue:in(Key, EQ0),
+            S1 = S0#state{lookup = L1, expireq = EQ1},
+            Effects = case Idx rem 100 of
+                0 -> [{release_cursor, Idx, S1}];
+                _ -> []
+            end,
+            {S1, {ok, Key}, Effects}
+    end;
+
 apply(_Meta, {get, Key}, S0 = #state{lookup = L0}) ->
     case L0 of
         #{Key := SeBin} ->
@@ -172,7 +188,7 @@ apply(_Meta, {get, Key}, S0 = #state{lookup = L0}) ->
 
 apply(#{index := Idx}, {expire, Now}, S0 = #state{lookup = L0, expireq = EQ0}) ->
     S1 = expire_keys(Now, S0),
-    Effects = case Idx rem 1000 of
+    Effects = case Idx rem 100 of
         0 -> [{release_cursor, Idx, S1}];
         _ -> []
     end,
