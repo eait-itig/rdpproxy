@@ -110,24 +110,22 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
             HasGfx = lists:member(dynvc_gfx, Caps0),
             Has32Bpp = lists:member('32bpp', Colors0),
 
+            lager:debug("core tsud: ~s", [tsud:pretty_print(TsudCore0)]),
+
             case {HasGfx, Has32Bpp} of
                 {true, false} ->
                     % Remove the redirection info while we're here.
                     TsudCluster0 = lists:keyfind(tsud_cluster, 1, Tsuds0),
                     TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
-                    lager:debug("rewriting client tsud: ~p", [TsudCluster1]),
+                    lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCluster1)]),
                     Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),
 
                     PrefColor0 = TsudCore0#tsud_core.color,
-                    TsudCore1 = case lists:member(dynvc_gfx, Caps0) of
-                        true ->
-                            Colors1 = ['32bpp' | Colors0],
-                            Color1 = '32bpp',
-                            Caps1 = ['want_32bpp' | Caps0],
-                            TsudCore0#tsud_core{colors = Colors1, color = Color1, capabilities = Caps1};
-                        false -> TsudCore0
-                    end,
-                    lager:debug("rewriting client tsud: ~p", [TsudCore1]),
+                    Colors1 = ['32bpp' | Colors0],
+                    Color1 = '32bpp',
+                    Caps1 = ['want_32bpp' | Caps0],
+                    TsudCore1 = TsudCore0#tsud_core{colors = Colors1, color = Color1, capabilities = Caps1},
+                    lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCore1)]),
                     Tsuds2 = lists:keyreplace(tsud_core, 1, Tsuds1, TsudCore1),
 
                     TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
@@ -165,7 +163,7 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
                             Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
                             true -> <<Password/binary, 0>> end
                         },
-                    lager:debug("rewriting ts_info: ~p", [TsInfo2#ts_info{password = snip, extra = snip}]),
+                    lager:debug("rewriting ts_info: ~s", [rdpp:pretty_print(TsInfo2#ts_info{password = snip, extra = snip})]),
                     {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
                     {ok, McsOutBin} = mcsgcc:encode_dpdu(McsData#mcs_data{data = RdpData1}),
                     {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
