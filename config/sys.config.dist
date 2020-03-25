@@ -1,14 +1,28 @@
 [
     {rdpproxy, [
         {frontend, [
+            %%
             %% The hostname that clients will connect to (must
             %% match the certificate under ssl_options)
+            %%
             {hostname, <<"gs516-6440.eait.uq.edu.au">>},
 
+            %%
             %% Domains to use with logins to backend servers
             %% The first item on this list will be the default
-            {domains, [<<"KRB5.UQ.EDU.AU">>,<<"LABS">>]},
+            %%
+            {domains, [<<"KRB5.UQ.EDU.AU">>]},
 
+            %%
+            %% Allocation mode: nms_choice = look up user in NMS, present
+            %% choose menu. pool = allocate from the pool of known machines.
+            %%
+            {mode, nms_choice},
+            %{mode, pool},
+
+            %%
+            %% Options for TLS from proxy => clients
+            %%
             {ssl_options, [
                 %% Certificate we will use to secure communication with the clients
                 {certfile, "etc/cert.pem"},
@@ -16,52 +30,119 @@
             ]}
         ]},
         {backend, [
+            %%
+            %% Options for TLS from proxy => backends
+            %%
             {ssl_options, [
                 %% Don't verify certs on backend servers
                 {verify, verify_none}
             ]}
         ]},
         {http_api, [
+            %%
             %% Port to listen on for HTTP API requests (to report backend machine
             %% status etc)
+            %%
             {port, 8088},
 
+            %%
             %% DNS suffix of allowed hypervisors which can report status
+            %%
             {agent_dns_suffix, ".hv.labs.eait.uq.edu.au"},
 
+            %%
             %% Check that the first component of the agent's DNS name matches
             %% the host that it's reporting about
+            %%
             {check_agent_dns_matches_host, true}
         ]},
         {ra, [
+            %%
             %% List of erlang nodes participating in the cluster
+            %%
             %{nodes, [
             %    'rdpproxy@gs516-6440'
             %]},
+
+            %%
             %% AES/HMAC keys for use protecting passwords in cookie storage
+            %%
             {keys, [
                 % { Key ref #, key (as a bignum) }
                 {1, 16#9ce909408df2e85bf88ae7ce9db60c1a}
             ]}
         ]},
         {krb5, [
+            %%
             %% Kerberos realm to authenticate users against
+            %%
             {realm, "KRB5.UQ.EDU.AU"},
 
+            %%
             %% Optional settings for KRB5 (explicit KDCs, ciphers)
+            %%
             %{kdc, ["kdc1.domain"]},
             %{ciphers, [aes256_hmac_sha1, aes128_hmac_sha1, rc4_hmac]},
 
+            %%
             %% How long to wait for KRB5 responses
-            {timeout, 3000}
+            %%
+            {timeout, 3000},
+
+            %%
+            %% Cross-realm checking. This is useful if you auth to a KRB5
+            %% domain which then refers you to AD, and you want to check that
+            %% the AD domain has the user as well.
+            %%
+            {cross_realm, [
+                [
+                    %%
+                    %% The cross-realm to refer into. We will request a ticket
+                    %% for krbtgt/THIS_VALUE@MAIN_KRB5_REALM_FROM_ABOVE
+                    %%
+                    {realm, "EAIT.UQ.EDU.AU"},
+
+                    %%
+                    %% Optional settings for KRB5 (explicit KDCs, ciphers)
+                    %%
+                    %{kdc, ["kdc1.domain"]},
+                    %{ciphers, [aes256_hmac_sha1, aes128_hmac_sha1, rc4_hmac]},
+                    %%
+                    %% How long to wait for KRB5 responses
+                    %%
+                    {timeout, 3000},
+
+                    %%
+                    %% This is an AD domain, check that we get a PAC in our
+                    %% service ticket
+                    %%
+                    {require_pac, true},
+
+                    %%
+                    %% Obtain a service ticket and validate it. Required if
+                    %% require_pac is true, otherwise optional.
+                    %%
+                    {service, ["host", "rdp.eait.uq.edu.au"]},
+                    {service_keys, [
+                        {aes256_hmac_sha1, <<16#12345679abcd:256/big>>},
+                        {aes128_hmac_sha1, <<16#12345689abcd:128/big>>}
+                    ]}
+                ]
+            ]}
         ]},
         {duo, [
+            %%
             %% Details for Duo 2FA
+            %%
             {integration_key, <<"aaaaaa">>},
             {secret_key, <<"aaaaaa">>},
             {api_host, "api-abc123.duosecurity.com"}
         ]},
         {nms_api, [
+            %%
+            %% Options for talking to NMS (if using nms_choice mode, ignored
+            %% in pool mode)
+            %%
             {api_host, "nms.eait.uq.edu.au"},
             {key_id, <<"rdpproxy">>},
             {privkey_path, "etc/nms_key.pem"}

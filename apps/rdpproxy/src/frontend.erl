@@ -107,15 +107,25 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
             Colors0 = TsudCore0#tsud_core.colors,
             Caps0 = TsudCore0#tsud_core.capabilities,
 
+            TsudCluster0 = lists:keyfind(tsud_cluster, 1, Tsuds0),
+            #state{session = Sess} = S,
+            SessId = cookie_ra:session_id(Sess),
+            #tsud_cluster{sessionid = TheirSessId} = TsudCluster0,
+
+            MatchesSessId = (SessId == TheirSessId),
             HasGfx = lists:member(dynvc_gfx, Caps0),
             Has32Bpp = lists:member('32bpp', Colors0),
 
             lager:debug("core tsud: ~s", [tsud:pretty_print(TsudCore0)]),
+            lager:debug("cluster tsud: ~s", [tsud:pretty_print(TsudCluster0)]),
 
-            case {HasGfx, Has32Bpp} of
-                {true, false} ->
+            case {MatchesSessId, HasGfx, Has32Bpp} of
+                {false, _, _} ->
+                    lager:warn("closing connection due to sessid mismatch "
+                        "(ours = ~p, they sent = ~p)", [SessId, TheirSessId]),
+                    {stop, bad_session_id, S};
+                {true, true, false} ->
                     % Remove the redirection info while we're here.
-                    TsudCluster0 = lists:keyfind(tsud_cluster, 1, Tsuds0),
                     TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
                     lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCluster1)]),
                     Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),

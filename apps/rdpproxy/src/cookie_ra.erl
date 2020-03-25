@@ -34,6 +34,7 @@
 -export([init/1, apply/3]).
 -export([create/1, get/1, expire/0, list/0]).
 -export([start/0]).
+-export([session_id/1]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,$a,$b,$c,$d,$e,$f,$g,$h,$i,$j,$k,$l,$m,$n,$o,$p,$q,$r,$s,$t,$u,$v,$w,$x,$y,$z,$A,$B,$C,$D,$E,$F,$G,$H,$I,$J,$K,$L,$M,$N,$O,$P,$Q,$R,$S,$T,$U,$V,$W,$X,$Y,$Z}).
 
@@ -42,6 +43,14 @@ gen_key(N) ->
     A = ?ALPHA,
     [element(crypto:rand_uniform(1, size(A)+1), A) | gen_key(N - 1)].
 gen_key() -> list_to_binary(gen_key(16)).
+
+session_id(#session{cookie = Ck, user = U, password = Pw}) ->
+    RiakConfig = application:get_env(rdpproxy, ra, []),
+    KeyList = proplists:get_value(keys, RiakConfig),
+    {KeyRef, KeyNum} = lists:last(KeyList),
+    <<_:1, Id:31/big>> = crypto:hmac(sha256,
+        <<Ck/binary, U/binary, Pw/binary>>, <<KeyNum:128/big>>, 4),
+    Id.
 
 encode(#session{host=H, expiry=E, port=P, user=U, password=Pw, domain=D}) ->
     HLen = byte_size(H), ULen = byte_size(U),

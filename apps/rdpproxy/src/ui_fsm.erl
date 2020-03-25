@@ -339,6 +339,7 @@ login(check_creds, S = #state{root = Root, duo = Duo}) ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #state{duoid = DuoId, peer = Peer} = S,
                     S1 = S#state{sess = #session{user = Username, domain = Domain, password = Password}},
+                    Mode = rdpproxy:config([frontend, mode], pool),
                     Args = #{
                         <<"username">> => Username,
                         <<"ipaddr">> => Peer,
@@ -347,10 +348,16 @@ login(check_creds, S = #state{root = Root, duo = Duo}) ->
                     case duo:preauth(Duo, Args) of
                         {ok, Resp = #{<<"result">> := <<"enroll">>}} ->
                             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
-                            choose(setup_ui, S1);
+                            case Mode of
+                                nms_choice -> choose(setup_ui, S1);
+                                pool -> waiting(setup_ui, S1)
+                            end;
                         {ok, #{<<"result">> := <<"allow">>}} ->
                             lager:debug("duo bypass for ~p", [Username]),
-                            choose(setup_ui, S1);
+                            case Mode of
+                                nms_choice -> choose(setup_ui, S1);
+                                pool -> waiting(setup_ui, S1)
+                            end;
                         {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
                             mfa(setup_ui, S1#state{duodevs = Devs});
                         Else ->
@@ -592,7 +599,11 @@ mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudco
         {ok, #{<<"result">> := <<"deny">>}} ->
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
-            choose(setup_ui, S);
+            Mode = rdpproxy:config([frontend, mode], pool),
+            case Mode of
+                nms_choice -> choose(setup_ui, S);
+                pool -> waiting(setup_ui, S)
+            end;
         {error, _} ->
             mfa(mfa_deny, S);
         {ok, #{<<"txid">> := TxId}} ->
@@ -619,7 +630,11 @@ mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess =
         {ok, #{<<"result">> := <<"deny">>}} ->
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
-            choose(setup_ui, S);
+            Mode = rdpproxy:config([frontend, mode], pool),
+            case Mode of
+                nms_choice -> choose(setup_ui, S);
+                pool -> waiting(setup_ui, S)
+            end;
         {error, _} ->
             mfa(mfa_deny, S);
         {ok, #{<<"txid">> := TxId}} ->
@@ -639,7 +654,11 @@ mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, peer = Peer, sess = #sessio
         {error, _} ->
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
-            choose(setup_ui, S)
+            Mode = rdpproxy:config([frontend, mode], pool),
+            case Mode of
+                nms_choice -> choose(setup_ui, S);
+                pool -> waiting(setup_ui, S)
+            end
     end;
 
 mfa(mfa_deny, S = #state{}) ->
@@ -739,7 +758,11 @@ mfa_waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Ro
 mfa_waiting({auth_finished, Result}, S = #state{}) ->
     case Result of
         #{<<"result">> := <<"allow">>} ->
-            choose(setup_ui, S);
+            Mode = rdpproxy:config([frontend, mode], pool),
+            case Mode of
+                nms_choice -> choose(setup_ui, S);
+                pool -> waiting(setup_ui, S)
+            end;
         _ ->
             mfa(setup_ui, S)
     end;
@@ -925,6 +948,13 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
         true -> {ui_vlayout, 200};
         false -> {ui_hlayout, H}
     end,
+    Mode = rdpproxy:config([frontend, mode], pool),
+    Text = case Mode of
+        pool ->       <<"Looking for an available computer to\n"
+                        "log you in...\n">>;
+        nms_choice -> <<"Checking to see if computer is available\n",
+                        "and ready to log you in...\n">>
+    end,
     Events = [
         { [{id, root}],     {set_bgcolor, UQPurple} },
         { [{id, root}],     {add_child,
@@ -957,8 +987,7 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
         { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
         { [{id, banner}],       {init, left, <<"Please wait...">>} },
         { [{id, banner}],       {set_bgcolor, UQPurple} },
-        { [{id, explain}],      {init, left, <<"Checking to see if machine is available\n",
-                                               "and ready to log you in...\n">>} },
+        { [{id, explain}],      {init, left, Text} },
         { [{id, explain}],      {set_bgcolor, UQPurple} },
         { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
     ],
@@ -997,13 +1026,15 @@ waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root})
 
 waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F, allocpid = AllocPid}) ->
     #session{cookie = Cookie, host = Ip, user = U} = Sess,
+    SessId = cookie_ra:session_id(Sess),
     erlang:demonitor(S#state.allocmref),
     #state{nms = Nms} = S,
     case nms:bump_count(Nms, U, Ip) of
         {ok, _} -> ok;
         Else -> lager:debug("nms:bump_count returned ~p", [Else])
     end,
-    rdp_server:send_redirect(F, Cookie, rdpproxy:config([frontend, hostname], <<"localhost">>)),
+    rdp_server:send_redirect(F, Cookie, SessId,
+        rdpproxy:config([frontend, hostname], <<"localhost">>)),
     {stop, normal, S};
 
 waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #state{frontend = F, allocpid = AllocPid}) ->
