@@ -121,7 +121,7 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
 
             case {MatchesSessId, HasGfx, Has32Bpp} of
                 {false, _, _} ->
-                    lager:warn("closing connection due to sessid mismatch "
+                    lager:warning("closing connection due to sessid mismatch "
                         "(ours = ~p, they sent = ~p)", [SessId, TheirSessId]),
                     {stop, bad_session_id, S};
                 {true, true, false} ->
