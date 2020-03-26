@@ -122,13 +122,13 @@ host_list([]) ->
 
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
-    Fmt = "~12.. s  ~20.. s  ~14.. s  ~10.. s  ~12.. s  ~8.. s  ~10.. s  "
+    Fmt = "~12.. s  ~20.. s  ~14.. s  ~10.. s  ~12.. s  ~8.. s  ~14.. s  "
         "~10.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PEER", "STARTED", "USER", "BACKEND", "PROTVER",
         "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
-        Peer = io_lib:format("~s : ~B", [inet:ntoa(Ip), Port]),
+        Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         case Conn of
             #{tsuds := Tsuds} ->
                 TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
@@ -176,7 +176,7 @@ conn_user(["-v", User]) ->
         "~10.. s  ~9.. s\n",
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
-        Peer = io_lib:format("~s : ~B", [inet:ntoa(Ip), Port]),
+        Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         case Conn of
             #{tsuds := Tsuds} ->
                 TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
@@ -236,14 +236,14 @@ conn_user(["-v", User]) ->
 conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
-    Fmt = "~12.. s  ~12.. s  ~20.. s  ~14.. s  ~14.. s  ~10.. s  ~12.. s  "
-        "~8.. s  ~10.. s  ~10.. s  ~9.. s\n",
+    Fmt = "~12.. s  ~14.. s  ~20.. s  ~14.. s  ~14.. s  ~10.. s  ~12.. s  "
+        "~8.. s  ~14.. s  ~10.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PID", "PEER", "STARTED", "DURATION", "USER",
         "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, frontend_pid := Pid, started := Started,
           peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
-        Peer = io_lib:format("~s : ~B", [inet:ntoa(Ip), Port]),
+        Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         case Conn of
             #{tsuds := Tsuds} ->
                 TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
@@ -320,7 +320,7 @@ format_deltatime(SDelta, Flavour) ->
         true -> []
     end,
     if
-        (Secs > 0) and (Hrs == 0) and (Days == 0) -> [integer_to_list(Secs), "s "];
+        (Secs > 0) and (Hrs == 0) and (Days == 0) -> [integer_to_list(Secs), "s"];
         true -> []
     end,
     if
