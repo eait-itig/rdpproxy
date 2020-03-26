@@ -122,7 +122,7 @@ host_list([]) ->
 
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
-    Fmt = "~12.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~12.. s  ~8.. s  ~14.. s  "
+    Fmt = "~12.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~15.. s  ~8.. s  ~14.. s  "
         "~10.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "BACKEND", "PROTVER",
         "REMHOST", "RES", "RECONN"]),
@@ -176,7 +176,7 @@ conn_list([]) ->
 conn_user(["-v", User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
-    Fmt = "~12.. s  ~25.. s  ~14.. s  ~14.. s  ~12.. s  ~8.. s  ~10.. s  "
+    Fmt = "~12.. s  ~25.. s  ~14.. s  ~14.. s  ~15.. s  ~8.. s  ~10.. s  "
         "~10.. s  ~9.. s\n",
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
@@ -240,7 +240,7 @@ conn_user(["-v", User]) ->
 conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
-    Fmt = "~12.. s  ~15.. s  ~14.. s  ~24.. s  ~14.. s  ~14.. s  ~10.. s  ~12.. s  "
+    Fmt = "~12.. s  ~15.. s  ~14.. s  ~24.. s  ~14.. s  ~14.. s  ~10.. s  ~15.. s  "
         "~8.. s  ~14.. s  ~10.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
         "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
