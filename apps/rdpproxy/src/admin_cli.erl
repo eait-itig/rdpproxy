@@ -326,7 +326,7 @@ format_deltatime(SDelta, Flavour) ->
         true -> []
     end,
     if
-        (Secs > 0) and (Hrs == 0) and (Days == 0) -> [integer_to_list(Secs), "s"];
+        (Hrs == 0) and (Days == 0) -> [integer_to_list(Secs), "s"];
         true -> []
     end,
     if
