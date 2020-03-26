@@ -103,6 +103,7 @@ create(S = #session{}) ->
     S1 = S#session{expiry = erlang:system_time(second) + ?COOKIE_TTL},
     S2 = S1#session{cookie = Cookie},
     case ra:process_command(cookie_ra, {create, Cookie, encode(S2)}) of
+        {ok, {error, duplicate_key}, _Leader} -> create(S);
         {ok, Ret, _Leader} -> Ret;
         Else -> Else
     end.

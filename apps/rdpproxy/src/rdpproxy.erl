@@ -75,7 +75,11 @@ init(_Args) ->
     {ok, _Pid} = http_api:start(),
 
     _ = (catch cookie_ra:start()),
-    {ok, _} = timer:apply_interval(30000, cookie_ra, expire, []),
+    _ = (catch pool_ra:start()),
+    _ = (catch conn_ra:start()),
+    {ok, _} = timer:apply_interval(120000, cookie_ra, expire, []),
+    {ok, _} = timer:apply_interval(120000, pool_ra, expire, []),
+    {ok, _} = timer:apply_interval(5000, conn_ra, tick, []),
 
     {ok, {
         #{strategy => one_for_one, intensity => 60, period => 60},

@@ -1,0 +1,16 @@
+#!/bin/sh
+dir=`dirname "$0"`
+cmd="$1"
+if [ -z "$cmd" ]; then
+	cmd="help"
+else
+	shift
+	subcmd="$1"
+	if [ -z "$subcmd" ]; then
+		subcmd="help"
+	else
+		shift
+	fi
+	cmd="${cmd}_${subcmd}"
+fi
+exec $dir/rdpproxy rpc admin_cli "${cmd}" "$@"

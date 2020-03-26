@@ -89,13 +89,19 @@ init([Srv, Address, Port, OrigCr]) ->
             {ok, initiation, #data{addr = Address, port = Port, server = Srv, sock = Sock, usref = Us, origcr = OrigCr}};
 
         {error, Reason} ->
-            %db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
+            case Srv of
+                P when is_pid(P) -> ok;
+                {P, _} when is_pid(P) -> pool_ra:host_error(Address, Reason)
+            end,
             {stop, Reason}
     end.
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed}},
-        #data{addr = Address, usref = UsRef} = Data) ->
-    %db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
+        #data{addr = Address, usref = UsRef, server = Srv} = Data) ->
+    case Srv of
+        P when is_pid(P) -> ok;
+        {P, _} when is_pid(P) -> pool_ra:host_error(Address, no_ssl)
+    end,
     {stop, no_ssl, Data};
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, server = Srv, addr = Address} = Data) ->
@@ -123,7 +129,10 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
     true ->
         lager:debug("upstream server rejected SSL, dying"),
         gen_tcp:close(Sock),
-        %db_host_meta:put(Address, [{<<"status">>,<<"dead">>}, {<<"sessions">>, []}]),
+        case Srv of
+            P when is_pid(P) -> ok;
+            {P, _} when is_pid(P) -> pool_ra:host_error(Address, no_ssl)
+        end,
         {stop, no_ssl, Data}
     end.
 

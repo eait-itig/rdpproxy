@@ -49,7 +49,8 @@
     subs = [] :: [pid()],
     backend :: pid(),
     intercept = true :: boolean(),
-    matched_sessid = false :: boolean()
+    matched_sessid = false :: boolean(),
+    connid :: binary()
     }).
 
 init(Peer) ->
@@ -61,20 +62,25 @@ handle_connect(Cookie, _Protocols, Srv, S = #state{}) ->
                 host = HostBin, port = Port, user = User}} ->
             lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
                 [S#state.peer, Cookie, User, HostBin]),
+            {ok, ConnId} = conn_ra:register_conn(S#state.peer, Sess),
             {ok, Backend} = backend:start_link(Srv, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),
-            {accept_raw, S#state{session = Sess, backend = Backend}};
+            {accept_raw, S#state{session = Sess, backend = Backend, connid = ConnId}};
 
         _ ->
+            {ok, ConnId} = conn_ra:register_conn(S#state.peer,
+                #session{user = <<"_">>}),
             SslOpts = rdpproxy:config([frontend, ssl_options], [
                 {certfile, "etc/cert.pem"},
                 {keyfile, "etc/key.pem"}]),
-            {accept, SslOpts, S}
+            {accept, SslOpts, S#state{connid = ConnId}}
     end.
 
-init_ui(Srv, S = #state{subs = []}) ->
+init_ui(Srv, S = #state{subs = [], connid = ConnId}) ->
     {ok, Ui} = ui_fsm_sup:start_ui(Srv),
     lager:debug("frontend spawned ui_fsm ~p", [Ui]),
+    Tsuds = rdp_server:get_tsuds(Srv),
+    conn_ra:annotate(ConnId, #{tsuds => Tsuds, ui_fsm => Ui}),
     {ok, S}.
 
 handle_event({subscribe, Pid}, _Srv, S = #state{subs = Subs}) ->
@@ -103,6 +109,8 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         %
         {ok, {mcs_pdu, McsCi = #mcs_ci{}}, Rem} ->
             {ok, Tsuds0} = tsud:decode(McsCi#mcs_ci.data),
+
+            conn_ra:annotate(S#state.connid, #{tsuds => Tsuds0}),
 
             TsudCore0 = lists:keyfind(tsud_core, 1, Tsuds0),
             Colors0 = TsudCore0#tsud_core.colors,
@@ -166,6 +174,10 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         {ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
             case rdpp:decode_basic(RdpData0) of
                 {ok, TsInfo0 = #ts_info{secflags = []}} ->
+                    conn_ra:annotate(S#state.connid, #{
+                        ts_info => TsInfo0#ts_info{password = snip}
+                    }),
+
                     #state{matched_sessid = MatchedSessId} = S,
                     #state{session = #session{user = User,
                         password = Password, domain = Domain}} = S,

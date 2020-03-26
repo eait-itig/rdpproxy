@@ -29,6 +29,29 @@
                 {keyfile, "etc/key.pem"}
             ]}
         ]},
+        {pool, [
+            %%
+            %% Are hosts in the pool for the use of a single user at a time, or
+            %% can they host multiple?
+            %%
+            {mode, single_user},
+            %{mode, multi_user},
+
+            %%
+            %% Minimum reservation time (single_user). Never hand out a
+            %% backend to a different user until this long as elapsed since
+            %% it was last handed out to someone else. (seconds)
+            %%
+            {min_rsvd_time, 900},
+
+            %%
+            %% Reservation expiry time (single_user). Try not to allocate a
+            %% different user to a machine if someone has reserved it in the
+            %% last (this many) sec. Also try to take the user back to the same
+            %% machine only if their session has been seen this recently.
+            %%
+            {rsv_expire_time, 28800}
+        ]},
         {backend, [
             %%
             %% Options for TLS from proxy => backends

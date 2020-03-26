@@ -309,7 +309,7 @@ login({ui, {submitted, passinp}}, S = #state{}) ->
 login({ui, {clicked, loginbtn}}, S = #state{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #state{root = Root, duo = Duo}) ->
+login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
@@ -338,7 +338,9 @@ login(check_creds, S = #state{root = Root, duo = Duo}) ->
                 true ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #state{duoid = DuoId, peer = Peer} = S,
-                    S1 = S#state{sess = #session{user = Username, domain = Domain, password = Password}},
+                    Sess0 = #session{user = Username, domain = Domain, password = Password},
+                    conn_ra:annotate(FPid, #{session => Sess0#session{password = snip}}),
+                    S1 = S#state{sess = Sess0},
                     Mode = rdpproxy:config([frontend, mode], pool),
                     Args = #{
                         <<"username">> => Username,
