@@ -48,7 +48,8 @@
     session :: #session{} | undefined,
     subs = [] :: [pid()],
     backend :: pid(),
-    intercept = true :: boolean()
+    intercept = true :: boolean(),
+    matched_sessid = false :: boolean()
     }).
 
 init(Peer) ->
@@ -113,18 +114,24 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
             #tsud_cluster{sessionid = TheirSessId} = TsudCluster0,
 
             MatchesSessId = (SessId == TheirSessId),
+            S1 = case MatchesSessId of
+                false ->
+                    lager:warning("sessid mismatch (ours = ~p, they sent = ~p), "
+                        "will not rewrite ts_info (no auto-login)",
+                        [SessId, TheirSessId]),
+                    S#state{matched_sessid = false};
+                true ->
+                    S#state{matched_sessid = true}
+            end,
+
             HasGfx = lists:member(dynvc_gfx, Caps0),
             Has32Bpp = lists:member('32bpp', Colors0),
 
             lager:debug("core tsud: ~s", [tsud:pretty_print(TsudCore0)]),
             lager:debug("cluster tsud: ~s", [tsud:pretty_print(TsudCluster0)]),
 
-            case {MatchesSessId, HasGfx, Has32Bpp} of
-                {false, _, _} ->
-                    lager:warning("closing connection due to sessid mismatch "
-                        "(ours = ~p, they sent = ~p)", [SessId, TheirSessId]),
-                    {stop, bad_session_id, S};
-                {true, true, false} ->
+            case {HasGfx, Has32Bpp} of
+                {true, false} ->
                     % Remove the redirection info while we're here.
                     TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
                     lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCluster1)]),
@@ -146,10 +153,10 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
                     {ok, OutDtData} = x224:encode(#x224_dt{data = OutCiData}),
                     {ok, OutPkt} = tpkt:encode(OutDtData),
                     gen_fsm:send_event(B, {frontend_data, <<OutPkt/binary, Rem/binary>>}),
-                    {ok, S};
+                    {ok, S1};
                 _ ->
                     gen_fsm:send_event(B, {frontend_data, Bin}),
-                    {ok, S}
+                    {ok, S1}
             end;
         %
         % The last thing we have to rewrite before we can just be a data shovel
@@ -159,19 +166,42 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         {ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
             case rdpp:decode_basic(RdpData0) of
                 {ok, TsInfo0 = #ts_info{secflags = []}} ->
-                    #state{session = #session{user = User, password = Password, domain = Domain}} = S,
-                    TsInfo1 = TsInfo0#ts_info{flags = [autologon, unicode | TsInfo0#ts_info.flags]},
+                    #state{matched_sessid = MatchedSessId} = S,
+                    #state{session = #session{user = User,
+                        password = Password, domain = Domain}} = S,
+                    TsInfo1 = TsInfo0#ts_info{
+                        flags = [autologon, unicode | TsInfo0#ts_info.flags]},
                     Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
                     TsInfo2 = TsInfo1#ts_info{
                         domain = if
-                            Unicode -> unicode:characters_to_binary(<<Domain/binary,0>>, latin1, {utf16, little});
-                            true -> <<Domain/binary, 0>> end,
+                            Unicode ->
+                                unicode:characters_to_binary(
+                                    <<Domain/binary,0>>, latin1, {utf16, little});
+                            true ->
+                                <<Domain/binary, 0>>
+                            end,
                         username = if
-                            Unicode -> unicode:characters_to_binary(<<User/binary,0>>, latin1, {utf16, little});
-                            true -> <<User/binary, 0>> end,
+                            Unicode and MatchedSessId ->
+                                unicode:characters_to_binary(
+                                    <<User/binary,0>>, utf8, {utf16, little});
+                            MatchedSessId ->
+                                <<User/binary, 0>>;
+                            Unicode ->
+                                <<0, 0>>;
+                            true ->
+                                <<0>>
+                            end,
                         password = if
-                            Unicode -> unicode:characters_to_binary(<<Password/binary,0>>, latin1, {utf16, little});
-                            true -> <<Password/binary, 0>> end
+                            Unicode and MatchedSessId ->
+                                unicode:characters_to_binary(
+                                    <<Password/binary,0>>, utf8, {utf16, little});
+                            MatchedSessId ->
+                                <<Password/binary, 0>>;
+                            Unicode ->
+                                <<0, 0>>;
+                            true ->
+                                <<0>>
+                            end
                         },
                     lager:debug("rewriting ts_info: ~s", [rdpp:pretty_print(TsInfo2#ts_info{password = snip, extra = snip})]),
                     {ok, RdpData1} = rdpp:encode_basic(TsInfo2),
@@ -180,7 +210,6 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
                     {ok, OutBin} = tpkt:encode(X224OutBin),
                     gen_fsm:send_event(B, {frontend_data, <<OutBin/binary, Rem/binary>>}),
                     {ok, S#state{intercept = false}};
-
                 _ ->
                     gen_fsm:send_event(B, {frontend_data, Bin}),
                     {ok, S}
