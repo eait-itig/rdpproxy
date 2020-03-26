@@ -35,17 +35,44 @@
 
 -export([
     help/1,
+    alloc_user/1,
     host_create/1,
     host_get/1,
     host_list/1,
     host_enable/1,
     host_disable/1,
+    host_help/1,
+    conn_help/1,
     conn_list/1,
     conn_user/1
     ]).
 
 help([]) ->
-    io:format("usage: rdpproxy-admin <cmd>\n").
+    io:format("usage: rdpproxy-admin <cmd> <subcmd> [args]\n"
+              "\n"
+              "HOST POOL COMMANDS\n"
+              "       rdpproxy-admin host list\n"
+              "                      host get <ip>\n"
+              "                      host create <ip> <hostname> <port>\n"
+              "                      host enable <ip>\n"
+              "                      host disable <ip>\n"
+              "                      alloc user <user>\n"
+              "\n"
+              "CONNECTION COMMANDS\n"
+              "       rdpproxy-admin conn list\n"
+              "                      conn user [-v] <_|user>\n"
+              "\n").
+
+host_help(_) -> help([]).
+
+conn_help(_) -> help([]).
+
+alloc_user([User]) ->
+    UserBin = unicode:characters_to_binary(User, utf8),
+    {ok, Prefs} = pool_ra:get_prefs(UserBin),
+    lists:foreach(fun (Ip) ->
+        io:format("~s\n", [Ip])
+    end, Prefs).
 
 host_create([Ip, Hostname, Port]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
