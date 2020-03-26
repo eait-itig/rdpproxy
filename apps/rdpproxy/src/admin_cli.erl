@@ -122,13 +122,15 @@ host_list([]) ->
 
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
-    Fmt = "~12.. s  ~24.. s  ~14.. s  ~10.. s  ~12.. s  ~8.. s  ~14.. s  "
+    Fmt = "~12.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~12.. s  ~8.. s  ~14.. s  "
         "~10.. s  ~9.. s\n",
-    io:format(Fmt, ["ID", "PEER", "STARTED", "USER", "BACKEND", "PROTVER",
+    io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "BACKEND", "PROTVER",
         "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
-        #{id := Id, started := Started, peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
+        #{id := Id, started := Started, peer := {Ip, Port}, frontend_pid := Pid,
+          session := #session{user = U, host = Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
+        [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
             #{tsuds := Tsuds} ->
                 TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
@@ -158,6 +160,7 @@ conn_list([]) ->
         Fields = [
             Id,
             Peer,
+            Node,
             format_reltime(Started),
             U,
             if (Backend =:= undefined) -> ""; true -> Backend end,
@@ -167,7 +170,8 @@ conn_list([]) ->
             Reconn
         ],
         io:format(Fmt, Fields)
-    end, Conns).
+    end, Conns),
+    io:format("count: ~B\n", [length(Conns)]).
 
 conn_user(["-v", User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
@@ -236,14 +240,15 @@ conn_user(["-v", User]) ->
 conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
-    Fmt = "~12.. s  ~14.. s  ~24.. s  ~14.. s  ~14.. s  ~10.. s  ~12.. s  "
+    Fmt = "~12.. s  ~15.. s  ~14.. s  ~24.. s  ~14.. s  ~14.. s  ~10.. s  ~12.. s  "
         "~8.. s  ~14.. s  ~10.. s  ~9.. s\n",
-    io:format(Fmt, ["ID", "PID", "PEER", "STARTED", "DURATION", "USER",
+    io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
         "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, frontend_pid := Pid, started := Started,
           peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
+        [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
             #{tsuds := Tsuds} ->
                 TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
@@ -277,6 +282,7 @@ conn_user([User]) ->
         Fields = [
             Id,
             io_lib:format("~w", [Pid]),
+            Node,
             Peer,
             format_reltime(Started),
             Duration,
