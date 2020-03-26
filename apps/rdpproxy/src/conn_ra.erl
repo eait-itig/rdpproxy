@@ -81,7 +81,7 @@ annotate(SessIdOrPid, Data) ->
         Else -> Else
     end.
 
--define(PAST_CONN_LIMIT, 8).
+-define(PAST_CONN_LIMIT, 16).
 
 -type username() :: binary().
 -type conn_id() :: binary().
@@ -123,10 +123,12 @@ apply(_Meta, {get_user, User}, S0 = #state{conns = C0, users = U0}) ->
 
 apply(_Meta, get_all_open, S0 = #state{conns = C0, watches = W0}) ->
     WL0 = maps:values(W0),
-    WL1 = lists:map(fun(Id) ->
-        #{Id := Conn} = C0,
-        Conn
-    end, WL0),
+    WL1 = lists:foldl(fun(Id, Acc) ->
+        case C0 of
+            #{Id := Conn} -> [Conn | Acc];
+            _ -> Acc
+        end
+    end, [], WL0),
     {S0, {ok, WL1}, []};
 
 apply(_Meta, {register, Id, Pid, T, Peer, Session},
@@ -194,9 +196,12 @@ apply(_Meta, {down, Pid, noconnection}, S0 = #state{}) ->
 apply(_Meta, {down, Pid, _Reason},
         S0 = #state{watches = W0, conns = C0, last_time = T}) ->
     #{Pid := Id} = W0,
-    #{Id := Conn0} = C0,
-    Conn1 = Conn0#{stopped => T},
-    C1 = C0#{Id => Conn1},
+    C1 = case C0 of
+        #{Id := Conn0} ->
+            Conn1 = Conn0#{stopped => T},
+            C0#{Id => Conn1};
+        _ -> C0
+    end,
     W1 = maps:remove(Pid, W0),
     S1 = S0#state{watches = W1, conns = C1},
     {S1, ok, []};
