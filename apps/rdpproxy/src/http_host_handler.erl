@@ -152,7 +152,11 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
         _ -> []
     end,
     lists:foreach(fun (InpSess) ->
-        #{'session-id' := IdI, start := StartI, user := UserI, type := TypeI} = InpSess,
+        #{'session-id' := IdI, start := StartI, user := UserI} = InpSess,
+        TypeI = case InpSess of
+            #{type := T} -> T;
+            _ -> <<"other">>
+        end,
         Sess = #{
             time => StartI,
             user => UserI,
