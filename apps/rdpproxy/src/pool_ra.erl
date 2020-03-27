@@ -655,28 +655,19 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
             % prefer lab images
             IsLabA and (not IsLabB) -> true;
             (not IsLabA) and IsLabB -> false;
-            % prefer recent images
-            (ImageA > ImageB) -> true;
-            (ImageA < ImageB) -> false;
             % prefer machines without a current reservation
-            ReservedA and (not ReservedB) -> true;
-            (not ReservedA) and ReservedB -> false;
+            ReservedA and (not ReservedB) -> false;
+            (not ReservedA) and ReservedB -> true;
             % prefer machines whose last status report was not busy
             (RepStateA =:= available) and (RepStateB =:= busy) -> true;
             (RepStateA =:= busy) and (RepStateB =:= available) -> false;
-            % prefer machines where the status report changed furthest in the
-            % past (to precision of 2 hrs)
-            (LastRepA =/= none) and (LastRepB =/= none) and
-                (RepStateChangedA div 7200) < (RepStateChangedB div 7200) -> true;
-            (LastRepA =/= none) and (LastRepB =/= none) and
-                (RepStateChangedA div 7200) > (RepStateChangedB div 7200) -> false;
+            % prefer recent images
+            (ImageA > ImageB) -> true;
+            (ImageA < ImageB) -> false;
             % prefer machines where the last alloc or session start was further
-            % in the past (to a precision of 2 hrs, so if in the same 2hour
-            % we use idle, then if idle is the same, we come back to this)
-            (SALatestA =/= 0) and (SALatestB =/= 0) and
-                (SALatestA div 7200) < (SALatestB div 7200) -> true;
-            (SALatestA =/= 0) and (SALatestB =/= 0) and
-                (SALatestA div 7200) > (SALatestB div 7200) -> false;
+            % in the past (to a precision of 30min)
+            (SALatestA div 1800) < (SALatestB div 1800) -> true;
+            (SALatestA div 1800) > (SALatestB div 1800) -> false;
             % prefer machines that have been idle longest (to a precision of
             % 5 mins)
             (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
