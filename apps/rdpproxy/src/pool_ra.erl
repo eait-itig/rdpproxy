@@ -36,7 +36,7 @@
 -export([start/0]).
 -export([expire/0, create/3, enable/1, disable/1, update/2]).
 -export([get_host/1, get_prefs/1, get_all_hosts/0]).
--export([reserve/1, allocate/1, alloc_error/2]).
+-export([reserve/1, allocate/1, alloc_error/2, add_session/2, status_report/2]).
 -export([host_error/2]).
 
 start() ->
@@ -132,6 +132,20 @@ get_all_hosts() ->
         Else -> Else
     end.
 
+add_session(Ip, SessMap) ->
+    Now = erlang:system_time(second),
+    case ra:process_command(pool_ra, {add_session, Now, Ip, SessMap}) of
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
+status_report(Ip, State) ->
+    Now = erlang:system_time(second),
+    case ra:process_command(pool_ra, {status_report, Now, Ip, State}) of
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
 -define(HISTORY_LIMIT, 16).
 
 -record(state, {
@@ -159,6 +173,8 @@ get_all_hosts() ->
 %     session_history => queue:new(),
         % last N sessions from status reports, look like
         % #{time => Seconds, user => <<"user">>, type => <<"rdp">> | <<"console">>}
+%     report_state => {busy | available, FromSeconds},
+%     last_report => Seconds,
 %     idle_from => Seconds, % timestamp of last idle status report
 %
 %     image => <<"lab20191201">>, % might be from status reports
@@ -181,7 +197,7 @@ apply(#{index := Idx}, {expire, T}, S0 = #state{}) ->
 apply(_Meta, get_all_hosts, S0 = #state{meta = M0}) ->
     {S0, {ok, maps:values(M0)}, []};
 
-apply(_Meta, {create, _T, Ip, Hostname, Port}, S0 = #state{meta = M0})
+apply(_Meta, {create, T, Ip, Hostname, Port}, S0 = #state{meta = M0})
         when is_binary(Hostname) and is_integer(Port) ->
     case M0 of
         #{Ip := _} ->
@@ -198,9 +214,12 @@ apply(_Meta, {create, _T, Ip, Hostname, Port}, S0 = #state{meta = M0})
                 session_history => queue:new(),
                 idle_from => none,
                 last_update => none,
+                report_state => {available, T},
+                last_report => none,
 
                 image => none,
-                role => none
+                role => none,
+                hypervisor => unknown
             }},
             S1 = S0#state{meta = M1},
             {S1, ok, []}
@@ -242,6 +261,7 @@ apply(_Meta, {update, T, Ip, CM}, S0 = #state{meta = M0}) when is_map(CM) ->
                     {idle_from, #{K := V1}} when is_integer(V1) -> V1;
                     {image, #{K := V1}} when is_binary(V1) -> V1;
                     {role, #{K := V1}} when is_binary(V1) -> V1;
+                    {hypervisor, #{K := V1}} when is_binary(V1) -> V1;
                     _ -> V0
                 end
             end, HM0),
@@ -358,6 +378,40 @@ apply(_Meta, {host_error, T, Ip, Err}, S0 = #state{meta = M0}) ->
                 _ -> EHist1
             end,
             HM1 = HM0#{error_history => EHist2},
+            M1 = M0#{Ip => HM1},
+            S1 = regen_prefs(S0#state{meta = M1}),
+            {S1, ok, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
+apply(_Meta, {add_session, T, Ip, SessMap}, S0 = #state{meta = M0}) ->
+    case M0 of
+        #{Ip := HM0 = #{session_history := SHist0}} ->
+            SHist1 = queue:in(SessMap, SHist0),
+            SHist2 = case queue:len(SHist1) of
+                N when (N > ?HISTORY_LIMIT) ->
+                    {{value, _}, Q} = queue:out(SHist1),
+                    Q;
+                _ -> SHist1
+            end,
+            HM1 = HM0#{session_history => SHist2},
+            M1 = M0#{Ip => HM1},
+            S1 = regen_prefs(S0#state{meta = M1}),
+            {S1, ok, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
+apply(_Meta, {status_report, T, Ip, State}, S0 = #state{meta = M0}) ->
+    case M0 of
+        #{Ip := HM0 = #{report_state := {State, _}}} ->
+            HM1 = HM0#{last_report => T},
+            M1 = M0#{Ip => HM1},
+            S1 = regen_prefs(S0#state{meta = M1}),
+            {S1, ok, []};
+        #{Ip := HM0} ->
+            HM1 = HM0#{report_state => {State, T}, last_report => T},
             M1 = M0#{Ip => HM1},
             S1 = regen_prefs(S0#state{meta = M1}),
             {S1, ok, []};
@@ -482,6 +536,11 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
         InErrorA = (ELatestA > ALatestA),
         InErrorB = (ELatestB > ALatestB),
 
+        #{report_state := {RepStateA, RepStateChangedA}} = A,
+        #{report_state := {RepStateB, RepStateChangedB}} = B,
+        #{last_report := LastRepA} = A,
+        #{last_report := LastRepB} = B,
+
         IsLabA = if
             is_binary(ImageA) ->
                 (binary:longest_common_prefix([ImageA, <<"lab">>]) =/= 0);
@@ -533,6 +592,15 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
             % prefer machines without a current reservation
             ReservedA and (not ReservedB) -> true;
             (not ReservedA) and ReservedB -> false;
+            % prefer machines whose last status report was not busy
+            (RepStateA =:= available) and (RepStateB =:= busy) -> true;
+            (RepStateA =:= busy) and (RepStateB =:= available) -> false;
+            % prefer machines where the status report changed furthest in the
+            % past (to precision of 2 hrs)
+            (LastRepA =/= none) and (LastRepB =/= none) and
+                (RepStateChangedA div 7200) < (RepStateChangedB div 7200) -> true;
+            (LastRepA =/= none) and (LastRepB =/= none) and
+                (RepStateChangedA div 7200) > (RepStateChangedB div 7200) -> false;
             % prefer machines where the last alloc or session start was further
             % in the past (to a precision of 2 hrs, so if in the same 2hour
             % we use idle, then if idle is the same, we come back to this)

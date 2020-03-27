@@ -28,7 +28,7 @@
 %%
 
 -module(http_api).
--export([start/0, peer_allowed/2]).
+-export([start/0, peer_allowed/2, rev_lookup/1]).
 
 -include_lib("kernel/include/inet.hrl").
 
@@ -76,28 +76,32 @@ same_slash16({A,B,_C,_D}, {A1,B1,_C1,_D1}) ->
 peer_allowed(TargetIpStr, AgentIp) ->
     TargetIp = list_to_tuple([list_to_integer(X) || X <-
         string:tokens(binary_to_list(TargetIpStr), ".")]),
-    case rev_lookup(AgentIp) of
-        {ok, AgentName} ->
-            Suffix = rdpproxy:config([http_api, agent_dns_suffix]),
-            case lists:suffix(Suffix, AgentName) of
-                true ->
-                    DoDnsMatch = rdpproxy:config([http_api,
-                        check_agent_dns_matches_host], false),
-                    case DoDnsMatch of
+    case AgentIp of
+        {127,0,0,_} -> true;
+        _ ->
+            case rev_lookup(AgentIp) of
+                {ok, AgentName} ->
+                    Suffix = rdpproxy:config([http_api, agent_dns_suffix]),
+                    case lists:suffix(Suffix, AgentName) of
                         true ->
-                            [Prefix | _] = string:tokens(AgentName, "."),
-                            case rev_lookup(TargetIp) of
-                                {ok, TargetName} ->
-                                    lists:prefix(Prefix, TargetName) andalso
-                                        is_rfc1918(AgentIp) andalso
-                                        same_slash16(TargetIp, AgentIp);
-                                _ -> false
+                            DoDnsMatch = rdpproxy:config([http_api,
+                                check_agent_dns_matches_host], false),
+                            case DoDnsMatch of
+                                true ->
+                                    [Prefix | _] = string:tokens(AgentName, "."),
+                                    case rev_lookup(TargetIp) of
+                                        {ok, TargetName} ->
+                                            lists:prefix(Prefix, TargetName) andalso
+                                                is_rfc1918(AgentIp) andalso
+                                                same_slash16(TargetIp, AgentIp);
+                                        _ -> false
+                                    end;
+                                false ->
+                                    is_rfc1918(AgentIp) andalso
+                                        same_slash16(TargetIp, AgentIp)
                             end;
-                        false ->
-                            is_rfc1918(AgentIp) andalso
-                                same_slash16(TargetIp, AgentIp)
+                        false -> false
                     end;
-                false -> false
-            end;
-        _ -> false
+                _ -> false
+            end
     end.

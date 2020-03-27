@@ -95,13 +95,31 @@ host_get([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
     case pool_ra:get_host(IpBin) of
         {ok, Host} ->
-            #{hostname := Hostname, enabled := Ena, image := Img, role := Role} = Host,
-            #{error_history := EHist, alloc_history := AHist} = Host,
+            #{hostname := Hostname, enabled := Ena, image := Img,
+              role := Role, last_report := LastRep,
+              report_state := {RepState, RepChanged}} = Host,
+            #{error_history := EHist, alloc_history := AHist,
+              session_history := SHist} = Host,
+            LastRepTxt = case LastRep of
+                none -> "-";
+                _ ->
+                    case Host of
+                        #{hypervisor := HV} ->
+                            io_lib:format("~s (from ~s)", [
+                                format_reltime(LastRep), HV]);
+                        _ ->
+                            format_reltime(LastRep)
+                    end
+            end,
+            RepStateTxt = io_lib:format("~w (~s)",
+                [RepState, format_reltime(RepChanged)]),
             io:format("IP            ~s\n", [Ip]),
             io:format("HOSTNAME      ~s\n", [Hostname]),
             io:format("ENABLED       ~p\n", [Ena]),
             io:format("IMAGE         ~s\n", [Img]),
             io:format("ROLE          ~s\n", [Role]),
+            io:format("LAST REPORT   ~s\n", [LastRepTxt]),
+            io:format("REPORT STATE  ~s\n", [RepStateTxt]),
             io:format("\nRECENT USERS\n"),
             lists:foreach(fun (#{time := AT, user := U}) ->
                 io:format(" * ~s (~s)\n", [U, format_reltime(AT)])
@@ -110,31 +128,45 @@ host_get([Ip]) ->
             lists:foreach(fun (#{time := ET, error := Err}) ->
                 io:format(" * ~s:\n", [format_reltime(ET)]),
                 io:format("    ~p\n", [Err])
-            end, queue:to_list(EHist));
+            end, queue:to_list(EHist)),
+            io:format("\nREPORTED SESSIONS\n"),
+            lists:foreach(fun (#{time := ST, user := U, type := T}) ->
+                io:format(" * ~s: ~s (~s)\n", [format_reltime(ST), U, T])
+            end, queue:to_list(SHist));
         Err ->
             io:format("~p\n", [Err])
     end.
 
 host_list([]) ->
     {ok, Hosts} = pool_ra:get_all_hosts(),
-    Fmt = "~16.. s  ~12.. s  ~8.. s  ~25.. s  ~25.. s  ~12.. s  ~8.. s\n",
-    io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER", "IMAGE", "ROLE"]),
+    Fmt = "~16.. s  ~12.. s  ~8.. s  ~26.. s  ~26.. s  ~12.. s  ~8.. s  "
+        "~18.. s  ~15.. s\n",
+    io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER", "IMAGE",
+        "ROLE", "REPSTATE", "REPORT"]),
     lists:foreach(fun (Host) ->
-        #{ip := Ip, hostname := Hostname, enabled := Ena, image := Img, role := Role} = Host,
+        #{ip := Ip, hostname := Hostname, enabled := Ena, image := Img,
+          role := Role, last_report := LastRep,
+          report_state := {RepState, RepChanged}} = Host,
         #{error_history := EHist, alloc_history := AHist} = Host,
         LastErr = case queue:out_r(EHist) of
             {{value, #{time := ET, error := Err}}, _} ->
                 iolist_to_binary([
                     io_lib:format("~10w", [Err]),
                     " (", format_reltime(ET), ")"]);
-            _ -> ""
+            _ -> "-"
         end,
         LastUser = case queue:out_r(AHist) of
             {{value, #{time := AT, user := U}}, _} ->
                 iolist_to_binary([
                     U, " (", format_reltime(AT), ")"]);
-            _ -> ""
+            _ -> "-"
         end,
+        LastRepTxt = case LastRep of
+            none -> "-";
+            _ -> format_reltime(LastRep)
+        end,
+        RepStateTxt = io_lib:format("~w (~s)",
+            [RepState, format_reltime(RepChanged)]),
         Fields = [
             Ip,
             Hostname,
@@ -142,7 +174,9 @@ host_list([]) ->
             LastErr,
             LastUser,
             Img,
-            Role
+            Role,
+            RepStateTxt,
+            LastRepTxt
         ],
         io:format(Fmt, Fields)
     end, Hosts).
