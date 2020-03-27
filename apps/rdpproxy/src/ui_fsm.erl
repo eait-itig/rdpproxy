@@ -125,8 +125,14 @@ startup(timeout, S = #state{frontend = F}) ->
             no_redir(setup_ui, S2);
         true ->
             {ok, Duo} = duo:start_link(),
-            {ok, Nms} = nms:start_link(),
-            login(setup_ui, S2#state{duo = Duo, nms = Nms})
+            Mode = rdpproxy:config([frontend, mode], pool),
+            case Mode of
+                nms_choice ->
+                    {ok, Nms} = nms:start_link(),
+                    login(setup_ui, S2#state{duo = Duo, nms = Nms});
+                _ ->
+                    login(setup_ui, S2#state{duo = Duo})
+            end
     end.
 
 no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
@@ -1047,9 +1053,13 @@ waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F = {FPid, _}
     SessId = cookie_ra:session_id(Sess),
     erlang:demonitor(S#state.allocmref),
     #state{nms = Nms} = S,
-    case nms:bump_count(Nms, U, Ip) of
-        {ok, _} -> ok;
-        Else -> lager:debug("nms:bump_count returned ~p", [Else])
+    case Nms of
+        undefined -> ok;
+        _ ->
+            case nms:bump_count(Nms, U, Ip) of
+                {ok, _} -> ok;
+                Else -> lager:debug("nms:bump_count returned ~p", [Else])
+            end
     end,
     conn_ra:annotate(FPid, #{session => Sess#session{password = snip}}),
     rdp_server:send_redirect(F, Cookie, SessId,
@@ -1117,7 +1127,10 @@ terminate(_Reason, _State, #state{duo = undefined, nms = undefined}) ->
     ok;
 terminate(_Reason, _State, #state{duo = Duo, nms = Nms}) ->
     duo:stop(Duo),
-    nms:stop(Nms),
+    case Nms of
+        undefined -> ok;
+        _ -> nms:stop(Nms)
+    end,
     ok.
 
 %% @private
