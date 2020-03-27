@@ -70,8 +70,55 @@ conn_help(_) -> help([]).
 alloc_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Prefs} = pool_ra:get_prefs(UserBin),
+    Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~26.. s  ~12.. s  ~8.. s  "
+        "~22.. s  ~15.. s\n",
+    io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER",
+        "LASTREP", "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
     lists:foreach(fun (Ip) ->
-        io:format("~s\n", [Ip])
+        {ok, Host} = pool_ra:get_host(Ip),
+        #{hostname := Hostname, enabled := Ena, image := Img,
+          role := Role, last_report := LastRep,
+          report_state := {RepState, RepChanged}} = Host,
+        #{error_history := EHist, alloc_history := AHist,
+          session_history := SHist} = Host,
+        LastErr = case queue:out_r(EHist) of
+            {{value, #{time := ET, error := Err}}, _} ->
+                iolist_to_binary([
+                    io_lib:format("~10w", [Err]),
+                    " (", format_reltime(ET), ")"]);
+            _ -> "-"
+        end,
+        LastUser = case queue:out_r(AHist) of
+            {{value, #{time := AT, user := U}}, _} ->
+                iolist_to_binary([
+                    U, " (", format_reltime(AT), ")"]);
+            _ -> "-"
+        end,
+        LastSess = case queue:out_r(SHist) of
+            {{value, #{time := ST, user := SU}}, _} ->
+                iolist_to_binary([
+                    SU, " (", format_reltime(ST), ")"]);
+            _ -> "-"
+        end,
+        LastRepTxt = case LastRep of
+            none -> "-";
+            _ -> format_reltime(LastRep)
+        end,
+        RepStateTxt = io_lib:format("~w (~s)",
+            [RepState, format_reltime(RepChanged)]),
+        Fields = [
+            Ip,
+            Hostname,
+            if Ena -> "true"; not Ena -> "false" end,
+            LastErr,
+            LastUser,
+            LastSess,
+            Img,
+            Role,
+            RepStateTxt,
+            LastRepTxt
+        ],
+        io:format(Fmt, Fields)
     end, Prefs).
 
 host_create([Ip, Hostname, Port]) ->
