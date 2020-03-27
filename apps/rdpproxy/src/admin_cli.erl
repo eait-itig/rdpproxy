@@ -153,6 +153,16 @@ conn_list([]) ->
         "~11.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "BACKEND", "PROTVER",
         "REMHOST", "RES", "RECONN"]),
+    ConnsSorted = lists:sort(fun (CA, CB) ->
+        #{started := StartedA, id := IdA} = CA,
+        #{started := StartedB, id := IdB} = CB,
+        if
+            (StartedA < StartedB) -> true;
+            (StartedA > StartedB) -> false;
+            (IdA < IdB) -> true;
+            (IdA > IdB) -> false
+        end
+    end, Conns),
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port}, frontend_pid := Pid,
           session := #session{user = U, host = Backend}} = Conn,
@@ -207,7 +217,7 @@ conn_list([]) ->
             Reconn
         ],
         io:format(Fmt, Fields)
-    end, Conns),
+    end, ConnsSorted),
     io:format("count: ~B\n", [length(Conns)]).
 
 conn_user(["-v", User]) ->
