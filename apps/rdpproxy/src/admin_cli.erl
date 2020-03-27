@@ -150,7 +150,7 @@ host_list([]) ->
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
     Fmt = "~12.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~15.. s  ~8.. s  ~14.. s  "
-        "~10.. s  ~9.. s\n",
+        "~11.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "BACKEND", "PROTVER",
         "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
@@ -170,7 +170,12 @@ conn_list([]) ->
                 [Client|_] = binary:split(unicode:characters_to_binary(
                     TsudCore#tsud_core.client_name, {utf16, little}, utf8), [<<0>>]),
                 #tsud_core{width = W, height = H} = TsudCore,
-                Res = io_lib:format("~Bx~B", [W, H]),
+                Res = case lists:keyfind(tsud_monitor, 1, Tsuds) of
+                    #tsud_monitor{monitors = Ms} ->
+                        io_lib:format("~Bx~B+~B", [W, H, length(Ms)]);
+                    _ ->
+                        io_lib:format("~Bx~B", [W, H])
+                end,
                 TsudCluster = lists:keyfind(tsud_cluster, 1, Tsuds),
                 TsInfo = maps:get(ts_info, Conn, #ts_info{}),
                 case TsInfo#ts_info.reconnect_cookie of
@@ -273,7 +278,7 @@ conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
     Fmt = "~12.. s  ~15.. s  ~14.. s  ~24.. s  ~14.. s  ~14.. s  ~10.. s  ~15.. s  "
-        "~8.. s  ~14.. s  ~10.. s  ~9.. s\n",
+        "~8.. s  ~14.. s  ~11.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
         "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
@@ -293,7 +298,12 @@ conn_user([User]) ->
                 [RemHost|_] = binary:split(unicode:characters_to_binary(
                     TsudCore#tsud_core.client_name, {utf16, little}, utf8), [<<0>>]),
                 #tsud_core{width = W, height = H} = TsudCore,
-                Res = io_lib:format("~Bx~B", [W, H]),
+                Res = case lists:keyfind(tsud_monitor, 1, Tsuds) of
+                    #tsud_monitor{monitors = Ms} ->
+                        io_lib:format("~Bx~B+~B", [W, H, length(Ms)]);
+                    _ ->
+                        io_lib:format("~Bx~B", [W, H])
+                end,
                 TsudCluster = lists:keyfind(tsud_cluster, 1, Tsuds),
                 TsInfo = maps:get(ts_info, Conn, #ts_info{}),
                 case TsInfo#ts_info.reconnect_cookie of

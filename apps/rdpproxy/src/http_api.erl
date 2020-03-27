@@ -36,7 +36,6 @@ start() ->
     Port = rdpproxy:config([http_api, port], 8080),
     Dispatch = cowboy_router:compile([
         {'_', [
-            % legacy endpoints
             {"/api/host/:ip", http_host_handler, []},
             {"/api/host_count", http_host_handler, []},
 
