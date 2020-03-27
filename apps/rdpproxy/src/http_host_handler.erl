@@ -176,7 +176,7 @@ new_sessions(Inputs, PoolRecords) ->
 
 match_session(Input, PoolRecord) ->
     #{'session-id' := IdI, start := StartI, user := UserI} = Input,
-    TypeI = case InpSess of
+    TypeI = case Input of
         #{type := T} -> T;
         _ -> <<"other">>
     end,
