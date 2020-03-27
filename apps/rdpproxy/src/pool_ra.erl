@@ -525,7 +525,7 @@ user_existing_hosts(User, S0 = #state{meta = M0, users = U0, hdls = H0}) ->
     end, LastHMs, M0),
     % Finally, check all of the hosts we found above for being enabled and not
     % carrying any other reservations.
-    maps:fold(fun
+    ToGive = maps:fold(fun
         (Ip, {none, HD = #{state := done}}, Acc) ->
             case M0 of
                 #{Ip := HM0 = #{enabled := true, reservation := Hdl}} ->
@@ -545,7 +545,42 @@ user_existing_hosts(User, S0 = #state{meta = M0, users = U0, hdls = H0}) ->
                 _ -> Acc
             end;
         (_Ip, _, Acc) -> Acc
-    end, [], WithSess).
+    end, [], WithSess),
+    lists:sort(fun (IpA, IpB) ->
+        #{IpA := A, IpB := B} = M0,
+        #{alloc_history := AHistA,
+          session_history := SHistA} = A,
+        ALatestA = case queue:out_r(AHistA) of
+            {{value, #{time := ALAT}}, _} -> ALAT;
+            _ -> 0
+        end,
+        SLatestA = case queue:out_r(SHistA) of
+            {{value, #{time := SLAT}}, _} -> SLAT;
+            _ -> 0
+        end,
+        SALatestA = lists:max([ALatestA, SLatestA]),
+
+        #{alloc_history := AHistB,
+          session_history := SHistB} = B,
+        ALatestB = case queue:out_r(AHistB) of
+            {{value, #{time := ALBT}}, _} -> ALBT;
+            _ -> 0
+        end,
+        SLatestB = case queue:out_r(SHistB) of
+            {{value, #{time := SLBT}}, _} -> SLBT;
+            _ -> 0
+        end,
+        SALatestB = lists:max([ALatestB, SLatestB]),
+
+        if
+            % prefer the machine they used most recently
+            (SALatestA > SALatestB) -> true;
+            (SALatestA < SALatestB) -> false;
+            % failing everything else, sort by IP
+            (IpA < IpB) -> true;
+            (IpA > IpB) -> false
+        end
+    end, ToGive).
 
 filter_reserved_hosts(T, User, ExpMin, S0 = #state{meta = M0, hdls = H0, prefs = Prefs}) ->
     lists:filter(fun (Ip) ->
