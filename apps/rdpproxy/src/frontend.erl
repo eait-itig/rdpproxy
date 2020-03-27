@@ -173,7 +173,7 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         %
         {ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
             case rdpp:decode_basic(RdpData0) of
-                {ok, TsInfo0 = #ts_info{secflags = []}} ->
+                {ok, TsInfo0 = #ts_info{}} ->
                     conn_ra:annotate(S#state.connid, #{
                         ts_info => TsInfo0#ts_info{password = snip}
                     }),
