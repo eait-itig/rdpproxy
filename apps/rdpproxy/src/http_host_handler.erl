@@ -175,7 +175,11 @@ new_sessions(Inputs, PoolRecords) ->
     end, Inputs).
 
 match_session(Input, PoolRecord) ->
-    #{'session-id' := IdI, start := StartI, user := UserI, type := TypeI} = Input,
+    #{'session-id' := IdI, start := StartI, user := UserI} = Input,
+    TypeI = case InpSess of
+        #{type := T} -> T;
+        _ -> <<"other">>
+    end,
     #{time := StartP, user := UserP, type := TypeP, id := IdP} = PoolRecord,
     if
         not (IdI =:= IdP) -> false;
