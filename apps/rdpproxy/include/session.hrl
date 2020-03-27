@@ -7,4 +7,4 @@
 %%
 
 -record(session, {cookie=auto, expiry, host, port, user, password, domain}).
--define(COOKIE_TTL, 8*3600).
+-define(COOKIE_TTL, 16*3600).

@@ -50,7 +50,7 @@
             %% last (this many) sec. Also try to take the user back to the same
             %% machine only if their session has been seen this recently.
             %%
-            {rsv_expire_time, 28800}
+            {rsv_expire_time, 57600}
         ]},
         {backend, [
             %%
