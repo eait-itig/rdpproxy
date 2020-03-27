@@ -168,11 +168,21 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
     {true, Req2, S}.
 
 new_sessions(Inputs, PoolRecords) ->
-    lists:filter(fun (Inp) ->
+    lists:sort(fun (InpA, InpB) ->
+        #{start := StartA, user := UserA} = InpA,
+        #{start := StartB, user := UserB} = InpB,
+        if
+            (StartA < StartB) -> true;
+            (StartA > StartB) -> false;
+            (UserA < UserB) -> true;
+            (UserA > UserB) -> false;
+            true -> false
+        end
+    end, lists:filter(fun (Inp) ->
         not lists:any(fun (PoolRec) ->
             match_session(Inp, PoolRec)
         end, PoolRecords)
-    end, Inputs).
+    end, Inputs)).
 
 match_session(Input, PoolRecord) ->
     #{'session-id' := IdI, start := StartI, user := UserI} = Input,

@@ -492,26 +492,60 @@ begin_hdl(Hdl, User, Ip, {T, TM, TE}, S0 = #state{meta = M0, users = U0, hdls = 
     S0#state{meta = M1, users = U1, hdls = H1, hdlexp = HQ1}.
 
 user_existing_hosts(User, S0 = #state{meta = M0, users = U0, hdls = H0}) ->
-    case U0 of
+    % First, look at all recent reservations which belong to this user.
+    % If we have any, keep track of the last handle we had each host (so
+    % we can see if it was an error or a good alloc)
+    LastHMs = case U0 of
         #{User := UH0} ->
-            LastHMs = lists:foldl(fun (Hdl, Acc) ->
+            lists:foldl(fun (Hdl, Acc) ->
                 case H0 of
                     #{Hdl := HD = #{ip := Ip}} ->
                         Acc#{Ip => {Hdl, HD}};
                     _ -> Acc
                 end
-            end, #{}, queue:to_list(UH0)),
-            maps:fold(fun
-                (Ip, {Hdl, HD = #{state := done}}, Acc) ->
-                    case M0 of
-                        #{Ip := HM0 = #{enabled := true, reservation := Hdl}} ->
-                            [Ip | Acc];
-                        _ -> Acc
+            end, #{}, queue:to_list(UH0));
+        _ ->
+            #{}
+    end,
+    % Then look through all hosts which have their latest reported session
+    % set to this user. If the session started after the last handl we have
+    % override it.
+    WithSess = maps:fold(fun (Ip, HM0, Acc) ->
+        #{session_history := SHist0} = HM0,
+        case queue:out_r(SHist0) of
+            {{value, #{user := User, time := T0}}, _} ->
+                case Acc of
+                    #{Ip := {_Hdl, #{time := TH}}} when (TH >= T0) ->
+                        Acc;
+                    _ ->
+                        Acc#{Ip => {none, #{time => T0, state => done}}}
+                end;
+            _ -> Acc
+        end
+    end, LastHMs, M0),
+    % Finally, check all of the hosts we found above for being enabled and not
+    % carrying any other reservations.
+    maps:fold(fun
+        (Ip, {none, HD = #{state := done}}, Acc) ->
+            case M0 of
+                #{Ip := HM0 = #{enabled := true, reservation := Hdl}} ->
+                    case H0 of
+                        #{Hdl := #{user := User}} -> [Ip | Acc];
+                        #{Hdl := #{}} -> Acc;
+                        _ -> [Ip | Acc]
                     end;
-                (_Ip, _, Acc) -> Acc
-            end, [], LastHMs);
-        _ -> []
-    end.
+                #{Ip := HM0 = #{enabled := true}} ->
+                    [Ip | Acc];
+                _ -> Acc
+            end;
+        (Ip, {Hdl, HD = #{state := done}}, Acc) ->
+            case M0 of
+                #{Ip := HM0 = #{enabled := true, reservation := Hdl}} ->
+                    [Ip | Acc];
+                _ -> Acc
+            end;
+        (_Ip, _, Acc) -> Acc
+    end, [], WithSess).
 
 filter_reserved_hosts(T, User, ExpMin, S0 = #state{meta = M0, hdls = H0, prefs = Prefs}) ->
     lists:filter(fun (Ip) ->
