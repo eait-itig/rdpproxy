@@ -81,7 +81,8 @@ annotate(SessIdOrPid, Data) ->
         Else -> Else
     end.
 
--define(PAST_CONN_LIMIT, 16).
+-define(PAST_CONN_LIMIT, 32).
+-define(USER_PAST_CONN_LIMIT, 16).
 
 -type username() :: binary().
 -type conn_id() :: binary().
@@ -154,8 +155,12 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
                 _ -> queue:new()
             end,
             UQ1 = queue:in(Id, UQ0),
+            Limit = case User of
+                <<"_">> -> ?PAST_CONN_LIMIT;
+                _ -> ?USER_PAST_CONN_LIMIT
+            end,
             {UQ2, C2} = case queue:len(UQ1) of
-                N when (N > ?PAST_CONN_LIMIT) ->
+                N when (N > Limit) ->
                     {{value, OldId}, QQ} = queue:out(UQ1),
                     {QQ, maps:remove(OldId, C1)};
                 _ -> {UQ1, C1}
