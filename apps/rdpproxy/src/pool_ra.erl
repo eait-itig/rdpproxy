@@ -684,10 +684,8 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
             (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
                 (IdleFromA div 300) > (IdleFromB div 300) -> false;
             % last alloc or session start further in the past, cont.
-            (SALatestA =/= 0) and (SALatestB =/= 0) and
-                (SALatestA < SALatestB) -> true;
-            (SALatestA =/= 0) and (SALatestB =/= 0) and
-                (SALatestA > SALatestB) -> false;
+            (SALatestA < SALatestB) -> true;
+            (SALatestA > SALatestB) -> false;
             % last error further in the past
             (ELatestA < ELatestB) -> true;
             (ELatestA > ELatestB) -> false;
