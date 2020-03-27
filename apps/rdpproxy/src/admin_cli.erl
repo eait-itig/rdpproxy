@@ -156,6 +156,11 @@ conn_list([]) ->
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port}, frontend_pid := Pid,
           session := #session{user = U, host = Backend}} = Conn,
+        BackendText = case Conn of
+            #{ui_fsm := _} when (Backend =/= undefined) -> [Backend, "*"];
+            _ when (Backend =:= undefined) -> "";
+            _ -> Backend
+        end,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
@@ -190,7 +195,7 @@ conn_list([]) ->
             Node,
             format_reltime(Started),
             U,
-            if (Backend =:= undefined) -> ""; true -> Backend end,
+            BackendText,
             ProtVer,
             Client,
             Res,
@@ -275,6 +280,11 @@ conn_user([User]) ->
         #{id := Id, frontend_pid := Pid, started := Started,
           peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
+        BackendText = case Conn of
+            #{ui_fsm := _} when (Backend =/= undefined) -> [Backend, "*"];
+            _ when (Backend =:= undefined) -> "";
+            _ -> Backend
+        end,
         [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
             #{tsuds := Tsuds} ->
@@ -314,7 +324,7 @@ conn_user([User]) ->
             format_reltime(Started),
             Duration,
             U,
-            if (Backend =:= undefined) -> ""; true -> Backend end,
+            BackendText,
             ProtVer,
             RemHost,
             Res,
