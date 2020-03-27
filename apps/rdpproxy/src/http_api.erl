@@ -70,38 +70,69 @@ is_rfc1918({A,B,_C,_D}) ->
         ((A =:= 192) andalso (B =:= 168)) orelse
         ((A =:= 172) andalso (B >= 16) andalso (B =< 31)).
 
-same_slash16({A,B,_C,_D}, {A1,B1,_C1,_D1}) ->
-    (A =:= A1) andalso (B =:= B1).
+mask_ip({A,B,C,D}, Bits) ->
+    <<N0:32/big>> = <<A,B,C,D>>,
+    N1 = N0 band (bnot ((1 bsl (32 - Bits)) - 1)),
+    <<A2,B2,C2,D2>> = <<N1:32/big>>,
+    {A2, B2, C2, D2}.
+
+match_rule(_TargetIp, AgentIp, {_, net, Ip, Mask}) ->
+    Good = mask_ip(Ip, Mask),
+    case mask_ip(AgentIp, Mask) of
+        Good -> match;
+        _ -> no_match
+    end;
+match_rule(_TargetIp, AgentIp, {_, dns_suffix, Suffix}) ->
+    case rev_lookup(AgentIp) of
+        {ok, AgentName} ->
+            case lists:suffix(Suffix, AgentName) of
+                true -> match;
+                _ -> no_match
+            end;
+        _ -> no_match
+    end;
+match_rule(_TargetIp, AgentIp, {_, rfc1918, Want}) ->
+    case {is_rfc1918(AgentIp), Want} of
+        {true, true} -> match;
+        {true, false} -> no_match;
+        {false, true} -> no_match;
+        {false, false} -> match
+    end;
+match_rule(TargetIp, AgentIp, {_, same_net, Mask}) ->
+    Good = mask_ip(TargetIp, Mask),
+    case mask_ip(AgentIp, Mask) of
+        Good -> match;
+        _ -> no_match
+    end;
+match_rule(TargetIp, AgentIp, {_, same_dns_prefix, CTN, CAN}) ->
+    TRev = rev_lookup(TargetIp),
+    ARev = rev_lookup(AgentIp),
+    case {TRev, ARev} of
+        {{ok, TargetName}, {ok, AgentName}} ->
+            CT = lists:nth(CTN, string:tokens(TargetName, ".")),
+            CA = lists:nth(CAN, string:tokens(AgentName, ".")),
+            case lists:prefix(CA, CT) of
+                true -> match;
+                _ -> no_match
+            end;
+        _ -> no_match
+    end.
+
+process_rules(_TargetIp, _AgentIp, []) -> allow;
+process_rules(TargetIp, AgentIp, [Rule | Rest]) ->
+    Match = match_rule(TargetIp, AgentIp, Rule),
+    case {Match, element(1, Rule)} of
+        {match, allow} -> allow;
+        {match, deny} -> deny;
+        {no_match, require} -> deny;
+        _ -> process_rules(TargetIp, AgentIp, Rest)
+    end.
 
 peer_allowed(TargetIpStr, AgentIp) ->
-    TargetIp = list_to_tuple([list_to_integer(X) || X <-
-        string:tokens(binary_to_list(TargetIpStr), ".")]),
-    case AgentIp of
-        {127,0,0,_} -> true;
-        _ ->
-            case rev_lookup(AgentIp) of
-                {ok, AgentName} ->
-                    Suffix = rdpproxy:config([http_api, agent_dns_suffix]),
-                    case lists:suffix(Suffix, AgentName) of
-                        true ->
-                            DoDnsMatch = rdpproxy:config([http_api,
-                                check_agent_dns_matches_host], false),
-                            case DoDnsMatch of
-                                true ->
-                                    [Prefix | _] = string:tokens(AgentName, "."),
-                                    case rev_lookup(TargetIp) of
-                                        {ok, TargetName} ->
-                                            lists:prefix(Prefix, TargetName) andalso
-                                                is_rfc1918(AgentIp) andalso
-                                                same_slash16(TargetIp, AgentIp);
-                                        _ -> false
-                                    end;
-                                false ->
-                                    is_rfc1918(AgentIp) andalso
-                                        same_slash16(TargetIp, AgentIp)
-                            end;
-                        false -> false
-                    end;
-                _ -> false
-            end
+    Rules = rdpproxy:config([http_api, access_policy],
+        [{allow, net, {127,0,0,0}, 16}]),
+    {ok, TargetIp} = inet:parse_address(binary_to_list(TargetIpStr)),
+    case process_rules(TargetIp, AgentIp, Rules) of
+        allow -> true;
+        deny -> false
     end.

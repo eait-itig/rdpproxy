@@ -120,15 +120,33 @@
             {port, 8088},
 
             %%
-            %% DNS suffix of allowed hypervisors which can report status
+            %% Who should be allowed to send status reports via the hypervisor
+            %% API?
             %%
-            {agent_dns_suffix, ".hv.labs.eait.uq.edu.au"},
-
-            %%
-            %% Check that the first component of the agent's DNS name matches
-            %% the host that it's reporting about
-            %%
-            {check_agent_dns_matches_host, true}
+            {access_policy, [
+                %%
+                %% Allow localhost always
+                %%
+                {allow, net, {127, 0, 0, 0}, 16},
+                %%
+                %% Do reverse DNS lookup, require a particular suffix
+                %%
+                {require, dns_suffix, ".hv.labs.eait.uq.edu.au"},
+                %%
+                %% Only allow hosts on private IPs
+                %%
+                {require, rfc1918, true},
+                %%
+                %% Reporter must be in the same /16 as the subject it's
+                %% reporting about
+                %%
+                {require, same_net, 16},
+                %%
+                %% Reporter's first DNS name component must be a prefix of the
+                %% first DNS name component of the subject.
+                %%
+                {require, same_dns_prefix, 1, 1}
+            ]}
         ]},
         {ra, [
             %%

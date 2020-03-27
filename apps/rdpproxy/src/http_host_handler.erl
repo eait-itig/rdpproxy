@@ -122,9 +122,11 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
     UpdateChanges2 = UpdateChanges1#{
         hypervisor => PeerBin
     },
-    UpdateChanges3 = case http_api:rev_lookup(Ip) of
-        {ok, Hostname} ->
-            UpdateChanges2#{hostname => iolist_to_binary([Hostname])};
+    {ok, IpInet} = inet:parse_address(binary_to_list(Ip)),
+    UpdateChanges3 = case http_api:rev_lookup(IpInet) of
+        {ok, HostnameStr} ->
+            Hostname = iolist_to_binary([HostnameStr]),
+            UpdateChanges2#{hostname => Hostname};
         _ ->
             Hostname = Ip,
             UpdateChanges2

@@ -38,6 +38,7 @@
 -export([get_host/1, get_prefs/1, get_all_hosts/0]).
 -export([reserve/1, allocate/1, alloc_error/2, add_session/2, status_report/2]).
 -export([host_error/2]).
+-export([get_reservation/1, get_reservations_for/1]).
 
 start() ->
     Config = application:get_env(rdpproxy, ra, []),
@@ -89,6 +90,18 @@ get_host(Ip) ->
 get_prefs(User) ->
     Now = erlang:system_time(second),
     case ra:process_command(pool_ra, {get_prefs, Now, User}) of
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
+get_reservation(Hdl) ->
+    case ra:process_command(pool_ra, {get_reservation, Hdl}) of
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
+get_reservations_for(User) ->
+    case ra:process_command(pool_ra, {get_reservations, User}) of
         {ok, Ret, _Leader} -> Ret;
         Else -> Else
     end.
@@ -196,6 +209,28 @@ apply(#{index := Idx}, {expire, T}, S0 = #state{}) ->
 
 apply(_Meta, get_all_hosts, S0 = #state{meta = M0}) ->
     {S0, {ok, maps:values(M0)}, []};
+
+apply(_Meta, {get_reservation, Hdl}, S0 = #state{hdls = H0}) ->
+    case H0 of
+        #{Hdl := HD} ->
+            {S0, {ok, HD}, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
+apply(_Meta, {get_reservations, User}, S0 = #state{users = U0, hdls = H0}) ->
+    case U0 of
+        #{User := HdlQ} ->
+            Hdls = lists:map(fun (Hdl) ->
+                case H0 of
+                    #{Hdl := HD} -> HD#{handle => Hdl};
+                    _ -> #{handle => Hdl}
+                end
+            end, queue:to_list(HdlQ)),
+            {S0, {ok, Hdls}, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
 
 apply(_Meta, {create, T, Ip, Hostname, Port}, S0 = #state{meta = M0})
         when is_binary(Hostname) and is_integer(Port) ->
@@ -426,7 +461,7 @@ expire_hdls(T, S0 = #state{hdls = H0, hdlexp = HQ0}) ->
     case queue:out(HQ0) of
         {{value, Hdl}, HQ1} ->
             case H0 of
-                #{Hdl := #{expiry := TE}} when (TE > T) ->
+                #{Hdl := #{expiry := TE}} when (T > TE) ->
                     H1 = maps:remove(Hdl, H0),
                     S1 = S0#state{hdls = H1, hdlexp = HQ1},
                     expire_hdls(T, S1);

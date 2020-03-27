@@ -139,8 +139,8 @@ host_get([Ip]) ->
 
 host_list([]) ->
     {ok, Hosts} = pool_ra:get_all_hosts(),
-    Fmt = "~16.. s  ~12.. s  ~8.. s  ~26.. s  ~26.. s  ~12.. s  ~8.. s  "
-        "~18.. s  ~15.. s\n",
+    Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~12.. s  ~8.. s  "
+        "~22.. s  ~15.. s\n",
     io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER", "IMAGE",
         "ROLE", "REPSTATE", "REPORT"]),
     lists:foreach(fun (Host) ->
