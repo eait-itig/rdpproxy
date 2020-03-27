@@ -591,7 +591,7 @@ filter_reserved_hosts(T, User, ExpMin, S0 = #state{meta = M0, hdls = H0, prefs =
                 case H0 of
                     #{Hdl := #{user := User}} -> true;
                     #{Hdl := #{state := error}} -> true;
-                    #{Hdl := #{ExpMin := TE}} when (T > TE) -> true;
+                    #{Hdl := #{ExpMin := TE}} when (TE > T) -> true;
                     #{Hdl := _} -> false;
                     _ -> true
                 end;
