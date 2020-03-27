@@ -77,6 +77,14 @@ handle_root_events(State, S = #state{root = Root}, Events) ->
     send_orders(S, Orders),
     {next_state, State, S#state{root = Root2}}.
 
+bgcolour() ->
+    {R, G, B} = rdpproxy:config([ui, bg_colour], {16#49, 16#07, 16#5e}),
+    {R / 256, G / 256, B / 256}.
+
+logopath() ->
+    lists:flatten([code:priv_dir(rdpproxy), $/,
+        rdpproxy:config([ui, logo], "uq-logo.png")]).
+
 startup(timeout, S = #state{frontend = F}) ->
     {W, H, Bpp} = rdp_server:get_canvas(F),
     Format = case Bpp of
@@ -91,13 +99,18 @@ startup(timeout, S = #state{frontend = F}) ->
 
     Tsuds = rdp_server:get_tsuds(F),
     TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
+    #tsud_net{channels = Chans} = lists:keyfind(tsud_net, 1, Tsuds),
+    ChanNames = [Name || #tsud_net_channel{name = Name} <- Chans],
 
     ClientFp = crypto:hash(sha256, [
         term_to_binary(PeerIp),
         term_to_binary(GeneralCap#ts_cap_general.os),
         term_to_binary(TsudCore#tsud_core.version),
         term_to_binary(TsudCore#tsud_core.client_build),
-        term_to_binary(TsudCore#tsud_core.client_name)
+        term_to_binary(TsudCore#tsud_core.client_name),
+        term_to_binary(TsudCore#tsud_core.capabilities),
+        term_to_binary(TsudCore#tsud_core.prodid),
+        term_to_binary(ChanNames)
         ]),
     DuoId = base64:encode(ClientFp),
 
@@ -117,14 +130,16 @@ startup(timeout, S = #state{frontend = F}) ->
     end.
 
 no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     TopMod = case (H > W) of
         true -> ui_vlayout;
         false -> ui_hlayout
     end,
+    Msg = rdpproxy:config([ui, msg_noredir]),
+    MsgLines = length(binary:matches(Msg, [<<"\n">>])) + 1,
     Events = [
-        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
                                      mod = TopMod}} },
@@ -149,21 +164,19 @@ no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
         { [{id, loginlyt}], {add_child,
                              #widget{id = explain,
                                      mod = ui_label,
-                                     size = {400.0, 18.0*3}}} },
+                                     size = {400.0, 18.0*MsgLines}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = closebtn,
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
-        { [{id, banner}],       {init, left, <<"Sorry">>} },
-        { [{id, banner}],       {set_bgcolor, UQPurple} },
-        { [{id, subtitle}],       {init, left, <<"Redirection not supported">>} },
-        { [{id, subtitle}],       {set_bgcolor, UQPurple} },
-        { [{id, explain}],      {init, left, <<"It seems that your remote desktop client\n",
-                                               "does not support redirection, so it cannot\n",
-                                               "be used with EAIT remote lab access.">>} },
-        { [{id, explain}],      {set_bgcolor, UQPurple} },
+        { [{id, logo}],         {init, logopath()} },
+        { [{id, banner}],       {init, left, rdpproxy:config([ui, title_noredir])} },
+        { [{id, banner}],       {set_bgcolor, BgColour} },
+        { [{id, subtitle}],       {init, left, rdpproxy:config([ui, subtitle_noredir])} },
+        { [{id, subtitle}],       {set_bgcolor, BgColour} },
+        { [{id, explain}],      {init, left, Msg} },
+        { [{id, explain}],      {set_bgcolor, BgColour} },
         { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
@@ -196,14 +209,14 @@ no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
     {stop, normal, S}.
 
 login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 250};
         false -> {ui_hlayout, H}
     end,
     Events = [
-        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
                                      mod = TopMod}} },
@@ -243,13 +256,13 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
-        { [{id, banner}],       {init, left, <<"UQ Faculty of EAIT">>} },
-        { [{id, banner}],       {set_bgcolor, UQPurple} },
-        { [{id, subbanner}],    {init, left, <<"Staff Remote Access">>} },
-        { [{id, subbanner}],    {set_bgcolor, UQPurple} },
-        { [{id, instru}],       {init, left, <<"Please enter your UQ username and password.">>} },
-        { [{id, instru}],       {set_bgcolor, UQPurple} },
+        { [{id, logo}],         {init, logopath()} },
+        { [{id, banner}],       {init, left, rdpproxy:config([ui, title_login])} },
+        { [{id, banner}],       {set_bgcolor, BgColour} },
+        { [{id, subbanner}],    {init, left, rdpproxy:config([ui, subtitle_login])} },
+        { [{id, subbanner}],    {set_bgcolor, BgColour} },
+        { [{id, instru}],       {init, left, rdpproxy:config([ui, instruction_login])} },
+        { [{id, instru}],       {set_bgcolor, BgColour} },
         { [{id, userinp}],      {init, <<"Username">>} },
         { [{id, passinp}],      {init, <<"Password">>, <<"•"/utf8>>} },
         { [{id, loginbtn}],     {init, <<"Login", 0>>} },
@@ -347,13 +360,16 @@ login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
                         <<"ipaddr">> => Peer,
                         <<"trusted_device_token">> => DuoId
                     },
+                    EnrollIsAllow = rdpproxy:config([duo, enroll_is_allow], false),
                     case duo:preauth(Duo, Args) of
-                        {ok, Resp = #{<<"result">> := <<"enroll">>}} ->
+                        {ok, Resp = #{<<"result">> := <<"enroll">>}} when EnrollIsAllow ->
                             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
                             case Mode of
                                 nms_choice -> choose(setup_ui, S1);
                                 pool -> waiting(setup_ui, S1)
                             end;
+                        {ok, Resp = #{<<"result">> := <<"enroll">>}} ->
+                            login(mfa_enroll, S1);
                         {ok, #{<<"result">> := <<"allow">>}} ->
                             lager:debug("duo bypass for ~p", [Username]),
                             case Mode of
@@ -373,7 +389,7 @@ login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
     end;
 
 login(invalid_login, S = #state{}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -382,12 +398,12 @@ login(invalid_login, S = #state{}) ->
             } },
         { [{id, badlbl}],   {init, center, <<"Invalid username or password">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
-        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+        { [{id, badlbl}],   {set_bgcolor, BgColour} }
     ],
     handle_root_events(login, S, Events);
 
 login(mfa_enroll, S = #state{}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -396,12 +412,12 @@ login(mfa_enroll, S = #state{}) ->
             } },
         { [{id, badlbl}],   {init, center, <<"MFA required but not enrolled">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
-        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+        { [{id, badlbl}],   {set_bgcolor, BgColour} }
     ],
     handle_root_events(login, S, Events).
 
 mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 2 * (H div 3)};
@@ -409,7 +425,7 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     end,
     DuoDevs = S#state.duodevs,
     Events0 = [
-        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
                                      mod = TopMod}} },
@@ -433,11 +449,11 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                      mod = ui_label,
                                      size = {400.0, 30.0}}} },
 
-        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
-        { [{id, subbanner}],    {init, left, <<"Multi-factor Authentication">>} },
-        { [{id, subbanner}],    {set_bgcolor, UQPurple} },
-        { [{id, instru}],       {init, left, <<"Additional authentication with a device is required.\nPlease choose a device.">>} },
-        { [{id, instru}],       {set_bgcolor, UQPurple} }
+        { [{id, logo}],         {init, logopath()} },
+        { [{id, subbanner}],    {init, left, rdpproxy:config([ui, title_mfa])} },
+        { [{id, subbanner}],    {set_bgcolor, BgColour} },
+        { [{id, instru}],       {init, left, rdpproxy:config([ui, instruction_mfa])} },
+        { [{id, instru}],       {set_bgcolor, BgColour} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events0),
     send_orders(S, Orders),
@@ -474,13 +490,13 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                                   mod = ui_label,
                                                   size = {220.0, 17.0}}} },
                 { [{id, {devlbl, Id}}],  {init, left, Name} },
-                { [{id, {devlbl, Id}}],  {set_bgcolor, UQPurple} },
+                { [{id, {devlbl, Id}}],  {set_bgcolor, BgColour} },
                 { [{id, {devlbllyt, Id}}],  {add_child,
                                           #widget{id = {devtlbl, Id},
                                                   mod = ui_label,
                                                   size = {220.0, 15.0}}} },
                 { [{id, {devtlbl, Id}}],  {init, left, Type} },
-                { [{id, {devtlbl, Id}}],  {set_bgcolor, UQPurple} },
+                { [{id, {devtlbl, Id}}],  {set_bgcolor, BgColour} },
 
                 { [{id, {devlyt, Id}}],  {add_child,
                                           #widget{id = {devbtnslyt, Id},
@@ -664,7 +680,6 @@ mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, peer = Peer, sess = #sessio
     end;
 
 mfa(mfa_deny, S = #state{}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -673,19 +688,21 @@ mfa(mfa_deny, S = #state{}) ->
             } },
         { [{id, badlbl}],   {init, center, <<"Authentication failed">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
-        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+        { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
     handle_root_events(mfa, S, Events).
 
 mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 200};
         false -> {ui_hlayout, H}
     end,
+    Msg = rdpproxy:config([ui, instruction_mfa_waiting]),
+    MsgLines = length(binary:matches(Msg, [<<"\n">>])) + 1,
     Events = [
-        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
                                      mod = TopMod}} },
@@ -707,18 +724,17 @@ mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
         { [{id, loginlyt}], {add_child,
                              #widget{id = explain,
                                      mod = ui_label,
-                                     size = {400.0, 18.0*3}}} },
+                                     size = {400.0, 18.0*MsgLines}}} },
         { [{id, loginlyt}], {add_child,
                              #widget{id = closebtn,
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
-        { [{id, banner}],       {init, left, <<"Waiting for Duo">>} },
-        { [{id, banner}],       {set_bgcolor, UQPurple} },
-        { [{id, explain}],      {init, left, <<"Please check your phone or device\n",
-                                               "for a Duo Push prompt or call...\n">>} },
-        { [{id, explain}],      {set_bgcolor, UQPurple} },
+        { [{id, logo}],         {init, logopath()} },
+        { [{id, banner}],       {init, left, rdpproxy:config([ui, title_mfa_waiting])} },
+        { [{id, banner}],       {set_bgcolor, BgColour} },
+        { [{id, explain}],      {init, left, Msg} },
+        { [{id, explain}],      {set_bgcolor, BgColour} },
         { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
@@ -788,15 +804,15 @@ mfa_waiter(Fsm, Duo, TxId) ->
     end.
 
 choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
-
+    Helpdesk = rdpproxy:config([ui, helpdesk]),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 2 * (H div 3)};
         false -> {ui_hlayout, H}
     end,
     Events0 = [
-        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
                                      mod = TopMod}} },
@@ -820,11 +836,11 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                      mod = ui_label,
                                      size = {400.0, 15.0}}} },
 
-        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
-        { [{id, subbanner}],    {init, left, <<"Which computer?">>} },
-        { [{id, subbanner}],    {set_bgcolor, UQPurple} },
-        { [{id, instru}],       {init, left, <<"Please choose which computer to connect to:">>} },
-        { [{id, instru}],       {set_bgcolor, UQPurple} }
+        { [{id, logo}],         {init, logopath()} },
+        { [{id, subbanner}],    {init, left, rdpproxy:config([ui, title_choose])} },
+        { [{id, subbanner}],    {set_bgcolor, BgColour} },
+        { [{id, instru}],       {init, left, rdpproxy:config([ui, instruction_choose])} },
+        { [{id, instru}],       {set_bgcolor, BgColour} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events0),
     send_orders(S, Orders),
@@ -864,13 +880,13 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                                   mod = ui_label,
                                                   size = {220.0, 19.0}}} },
                 { [{id, {devlbl, Ip}}],  {init, left, Hostname} },
-                { [{id, {devlbl, Ip}}],  {set_bgcolor, UQPurple} },
+                { [{id, {devlbl, Ip}}],  {set_bgcolor, BgColour} },
                 { [{id, {devlbllyt, Ip}}],  {add_child,
                                           #widget{id = {devtlbl, Ip},
                                                   mod = ui_label,
                                                   size = {220.0, 30.0}}} },
                 { [{id, {devtlbl, Ip}}],  {init, left, DescText} },
-                { [{id, {devtlbl, Ip}}],  {set_bgcolor, UQPurple} },
+                { [{id, {devtlbl, Ip}}],  {set_bgcolor, BgColour} },
 
                 { [{id, {devlyt, Ip}}], {add_child,
                                              #widget{id = {choosebtn, Ip, Hostname},
@@ -890,8 +906,8 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                 { [{id, nohostslbl}],   {init, left,
                                           <<"Sorry, we have no computers recorded as belonging to your\n"
                                             "user (", U/binary, ").\n\n"
-                                            "If you think this is incorrect, please email helpdesk@eait.uq.edu.au.">>} },
-                { [{id, nohostslbl}],   {set_bgcolor, UQPurple} },
+                                            "If you think this is incorrect, please email ", Helpdesk/binary, ".">>} },
+                { [{id, nohostslbl}],   {set_bgcolor, BgColour} },
 
                 { [{id, loginlyt}],     {add_child,
                                          #widget{id = closebtn,
@@ -944,7 +960,7 @@ choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #state{nms = Nms, sess = 
     waiting(setup_ui, S#state{sess = Sess1}).
 
 waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
+    BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 200};
@@ -958,7 +974,7 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
                         "and ready to log you in...\n">>
     end,
     Events = [
-        { [{id, root}],     {set_bgcolor, UQPurple} },
+        { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
                                      mod = TopMod}} },
@@ -986,11 +1002,11 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
                                      mod = ui_button,
                                      size = {120.0, 40.0}}} },
 
-        { [{id, logo}],         {init, code:priv_dir(rdpproxy) ++ "/uq-logo.png"} },
+        { [{id, logo}],         {init, logopath()} },
         { [{id, banner}],       {init, left, <<"Please wait...">>} },
-        { [{id, banner}],       {set_bgcolor, UQPurple} },
+        { [{id, banner}],       {set_bgcolor, BgColour} },
         { [{id, explain}],      {init, left, Text} },
-        { [{id, explain}],      {set_bgcolor, UQPurple} },
+        { [{id, explain}],      {set_bgcolor, BgColour} },
         { [{id, closebtn}],     {init, <<"Disconnect", 0>>} }
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
@@ -1041,7 +1057,6 @@ waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F = {FPid, _}
     {stop, normal, S};
 
 waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #state{frontend = F, allocpid = AllocPid}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -1050,12 +1065,11 @@ waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #state{frontend = F, all
             } },
         { [{id, badlbl}],   {init, center, <<"Host has RDP TLS disabled, contact helpdesk@eait.uq.edu.au">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
-        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+        { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
     handle_root_events(waiting, S, Events);
 
 waiting({alloc_persistent_error, AllocPid, down}, S = #state{frontend = F, allocpid = AllocPid}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -1064,7 +1078,7 @@ waiting({alloc_persistent_error, AllocPid, down}, S = #state{frontend = F, alloc
             } },
         { [{id, badlbl}],   {init, center, <<"Host appears to be off, trying to wake it up...">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
-        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+        { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
     #state{nms = Nms, sess = #session{host = Ip}} = S,
     Ret = nms:wol(Nms, Ip),
@@ -1072,7 +1086,6 @@ waiting({alloc_persistent_error, AllocPid, down}, S = #state{frontend = F, alloc
     handle_root_events(waiting, S, Events);
 
 waiting({alloc_persistent_error, AllocPid, refused}, S = #state{frontend = F, allocpid = AllocPid}) ->
-    UQPurple = {16#49 / 256, 16#07 / 256, 16#5e / 256},
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -1081,7 +1094,7 @@ waiting({alloc_persistent_error, AllocPid, refused}, S = #state{frontend = F, al
             } },
         { [{id, badlbl}],   {init, center, <<"Host not listening for RDP, contact helpdesk@eait.uq.edu.au">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
-        { [{id, badlbl}],   {set_bgcolor, UQPurple} }
+        { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
     handle_root_events(waiting, S, Events);
 

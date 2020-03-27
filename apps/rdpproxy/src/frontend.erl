@@ -80,7 +80,8 @@ init_ui(Srv, S = #state{subs = [], connid = ConnId}) ->
     {ok, Ui} = ui_fsm_sup:start_ui(Srv),
     lager:debug("frontend spawned ui_fsm ~p", [Ui]),
     Tsuds = rdp_server:get_tsuds(Srv),
-    conn_ra:annotate(ConnId, #{tsuds => Tsuds, ui_fsm => Ui}),
+    Caps = rdp_server:get_caps(Srv),
+    conn_ra:annotate(ConnId, #{tsuds => Tsuds, ts_caps => Caps, ui_fsm => Ui}),
     {ok, S}.
 
 handle_event({subscribe, Pid}, _Srv, S = #state{subs = Subs}) ->

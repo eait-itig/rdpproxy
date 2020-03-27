@@ -307,13 +307,21 @@ conn_user(["-v", User]) ->
         io:format(Fmt, ["ID", "PEER", "STARTED", "DURATION", "BACKEND",
             "PROTVER", "REMHOST", "RES", "RECONN"]),
         io:format(Fmt, Fields),
-        io:format("  TSUDS: \n"),
+        io:format("  TSUDS:\n"),
         lists:foreach(fun (Tsud) ->
             io:format("    * ~s\n", [tsud:pretty_print(Tsud)])
         end, Tsuds),
         case Conn of
             #{ts_info := TsInfoV} ->
                 io:format("  TS_INFO: ~s\n", [rdpp:pretty_print(TsInfoV)]);
+            _ -> ok
+        end,
+        case Conn of
+            #{ts_caps := TsCaps} ->
+                io:format("  TS_CAPS:\n"),
+                lists:foreach(fun (TsCap) ->
+                    io:format("    * ~s\n", [rdpp:pretty_print(TsCap)])
+                end, TsCaps);
             _ -> ok
         end
     end, Conns);

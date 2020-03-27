@@ -29,6 +29,57 @@
                 {keyfile, "etc/key.pem"}
             ]}
         ]},
+        {ui, [
+            %%
+            %% Background colour for login screens
+            %%
+            {bg_colour, {16#49, 16#07, 16#5e}},
+
+            %%
+            %% Logo graphic (path relative to priv dir)
+            %%
+            {logo, "uq-logo.png"},
+
+            %%
+            %% Text for the "redirection not supported" error screen
+            %%
+            {title_noredir, <<"Sorry">>},
+            {subtitle_noredir, <<"Redirection not supported">>},
+            {msg_noredir, <<"It seems that your remote desktop client\n",
+                           "does not support redirection, so it cannot\n",
+                           "be used with EAIT remote access.">>},
+
+            %%
+            %% Text for the main login screen
+            %%
+            {title_login, <<"UQ Faculty of EAIT">>},
+            {subtitle_login, <<"Staff Remote Access">>},
+            {instruction_login, <<"Please enter your UQ username and password.">>},
+
+            %%
+            %% Text for the MFA prompt screen where users select a Duo device
+            %%
+            {title_mfa, <<"Multi-factor Authentication">>},
+            {instruction_mfa, <<"Additional authentication with a device is required.\nPlease choose a device.">>},
+
+            %%
+            %% Text while waiting for Duo push / call
+            %%
+            {title_mfa_waiting, <<"Waiting for Duo">>},
+            {instruction_mfa_waiting, <<"Please check your phone or device\n",
+                                        "for a Duo Push prompt or call...\n">>},
+
+            %%
+            %% Text for the NMS chooser screen
+            %%
+            {title_choose, <<"Which computer?">>},
+            {instruction_choose, <<"Please choose which computer to connect to:">>},
+
+            %%
+            %% Helpdesk email, used in some error messages
+            %%
+            {helpdesk, <<"helpdesk@eait.uq.edu.au">>}
+        ]},
         {pool, [
             %%
             %% Are hosts in the pool for the use of a single user at a time, or
@@ -110,7 +161,7 @@
             %%
             %% How long to wait for KRB5 responses
             %%
-            {timeout, 3000},
+            {timeout, 2000},
 
             %%
             %% Cross-realm checking. This is useful if you auth to a KRB5
@@ -133,7 +184,7 @@
                     %%
                     %% How long to wait for KRB5 responses
                     %%
-                    {timeout, 3000},
+                    {timeout, 2000},
 
                     %%
                     %% This is an AD domain, check that we get a PAC in our
@@ -159,7 +210,11 @@
             %%
             {integration_key, <<"aaaaaa">>},
             {secret_key, <<"aaaaaa">>},
-            {api_host, "api-abc123.duosecurity.com"}
+            {api_host, "api-abc123.duosecurity.com"},
+            %%
+            %% Interpret "enroll" responses from Duo as bypass
+            %%
+            {enroll_is_allow, true}
         ]},
         {nms_api, [
             %%
