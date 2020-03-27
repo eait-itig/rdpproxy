@@ -84,7 +84,14 @@ content_types_accepted(Req, S = #state{}) ->
     {Types, Req, S}.
 
 to_json(Req, S = #state{ip = undefined, meta = Metas}) ->
+    ReportTimes = [T || #{last_report := T} <- Metas],
+    Now = erlang:system_time(second),
+    LastReport = case ReportTimes of
+        [] -> 0;
+        _ -> lists:max(ReportTimes)
+    end,
     Json = [
+        {last_update, Now - LastReport},
         {count, length(Metas)}
     ],
     {jsx:encode(Json), Req, S};
