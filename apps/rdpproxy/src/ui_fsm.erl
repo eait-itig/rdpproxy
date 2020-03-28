@@ -607,10 +607,21 @@ mfa({ui, {clicked, {otpbtn, DevId}}}, S = #state{root = Root}) ->
     [Txt] = ui:select(Root, [{id, {otpinp, DevId}}]),
     V = ui_textinput:get_text(Txt),
     mfa({submit_otp, DevId, V}, S);
-mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudcore = TsudCore, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudcore = TsudCore, sess = #session{user = U}, frontend = F}) ->
     Name = unicode:characters_to_binary(TsudCore#tsud_core.client_name, {utf16, little}, utf8),
-    Version = iolist_to_binary(io_lib:format("version ~p build ~p", [TsudCore#tsud_core.version, TsudCore#tsud_core.client_build])),
-    PushInfo = uri_string:compose_query([{<<"client_name">>, Name}, {<<"client_version">>, Version}]),
+    [Maj,Min] = TsudCore#tsud_core.version,
+    Version = iolist_to_binary(
+        io_lib:format("version ~B.~B build ~w",
+            [Maj, Min, TsudCore#tsud_core.client_build])),
+    Caps = rdp_server:get_caps(F),
+    GeneralCap = lists:keyfind(ts_cap_general, 1, Caps),
+    [OsMaj, OsMin] = GeneralCap#ts_cap_general.os,
+    OS = iolist_to_binary(
+        io_lib:format("~w/~w", [OsMaj, OsMin])),
+    PushInfo = uri_string:compose_query([
+        {<<"client_name">>, Name},
+        {<<"client_version">>, Version},
+        {<<"client_os">>, OS}]),
     Args = #{
         <<"username">> => U,
         <<"ipaddr">> => Peer,
