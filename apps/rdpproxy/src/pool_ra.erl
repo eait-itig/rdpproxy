@@ -535,8 +535,11 @@ user_existing_hosts(User, S0 = #state{meta = M0, users = U0, hdls = H0}) ->
             #{}
     end,
     % Then look through all hosts which have their latest reported session
-    % set to this user. If the session started after the last handl we have
+    % set to this user. If the session started after the last handle we have
     % override it.
+    %
+    % Also if the machine reports a session for another user which started
+    % >15min after the handle, don't use that machine.
     WithSess = maps:fold(fun (Ip, HM0, Acc) ->
         #{session_history := SHist0} = HM0,
         case queue:out_r(SHist0) of
@@ -546,6 +549,14 @@ user_existing_hosts(User, S0 = #state{meta = M0, users = U0, hdls = H0}) ->
                         Acc;
                     _ ->
                         Acc#{Ip => {none, #{time => T0, state => done}}}
+                end;
+            {{value, #{time := T0}}, _} ->
+                case Acc of
+                    #{Ip := {_Hdl, #{time := TH, state := done}}}
+                            when ((TH + 900) < T0) ->
+                        maps:remove(Ip, Acc);
+                    _ ->
+                        Acc
                 end;
             _ -> Acc
         end
