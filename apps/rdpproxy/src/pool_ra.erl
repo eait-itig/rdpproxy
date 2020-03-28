@@ -36,7 +36,8 @@
 -export([start/0]).
 -export([expire/0, create/3, enable/1, disable/1, update/2]).
 -export([get_host/1, get_prefs/1, get_all_hosts/0]).
--export([reserve/1, allocate/1, alloc_error/2, add_session/2, status_report/2]).
+-export([reserve/1, reserve/2, reserve/3]).
+-export([allocate/1, alloc_error/2, add_session/2, status_report/2]).
 -export([host_error/2]).
 -export([get_reservation/1, get_reservations_for/1]).
 
@@ -114,6 +115,32 @@ reserve(User) ->
     Hdl = cookie_ra:gen_key(),
     case ra:process_command(pool_ra, {reserve, {T, TM, TE}, Hdl, User}) of
         {ok, {error, duplicate_handle}, _Leader} -> reserve(User);
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
+reserve(User, Ip) ->
+    PoolPrefs = maps:from_list(application:get_env(rdpproxy, pool, [])),
+    T = erlang:system_time(second),
+    TM = T + maps:get(min_rsvd_time, PoolPrefs, 900),
+    TE = T + maps:get(rsv_expire_time, PoolPrefs, ?COOKIE_TTL),
+    Hdl = cookie_ra:gen_key(),
+    case ra:process_command(pool_ra, {reserve, {T, TM, TE}, Hdl, User, Ip}) of
+        {ok, {error, duplicate_handle}, _Leader} -> reserve(User, Ip);
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
+reserve(User, Ip, Config) ->
+    PoolPrefs = maps:from_list(application:get_env(rdpproxy, pool, [])),
+    T = erlang:system_time(second),
+    TM = T + maps:get(min_rsvd_time, Config,
+        maps:get(min_rsvd_time, PoolPrefs, 900)),
+    TE = T + maps:get(rsv_expire_time, Config,
+        maps:get(rsv_expire_time, PoolPrefs, ?COOKIE_TTL)),
+    Hdl = cookie_ra:gen_key(),
+    case ra:process_command(pool_ra, {reserve, {T, TM, TE}, Hdl, User, Ip}) of
+        {ok, {error, duplicate_handle}, _Leader} -> reserve(User, Ip);
         {ok, Ret, _Leader} -> Ret;
         Else -> Else
     end.
@@ -340,6 +367,21 @@ apply(_Meta, {reserve, {T, TM, TE}, Hdl, User}, S0 = #state{meta = M0, users = U
                         [] ->
                             {S0, {error, no_hosts}, []}
                     end
+            end
+    end;
+
+apply(_Meta, {reserve, {T, TM, TE}, Hdl, User, Ip}, S0 = #state{meta = M0, hdls = H0}) ->
+    case H0 of
+        #{Hdl := _} ->
+            {S0, {error, duplicate_handle}, []};
+        _ ->
+            case M0 of
+                #{Ip := _} ->
+                    S1 = begin_hdl(Hdl, User, Ip, {T, TM, TE}, S0),
+                    #{Ip := #{port := Port}} = M0,
+                    {S1, {ok, Hdl, Ip, Port}, []};
+                _ ->
+                    {S0, {error, host_not_found}, []}
             end
     end;
 

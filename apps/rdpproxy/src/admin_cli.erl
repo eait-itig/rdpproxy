@@ -39,6 +39,7 @@
     host_create/1,
     host_get/1,
     host_list/1,
+    host_test/1,
     host_enable/1,
     host_disable/1,
     host_help/1,
@@ -56,6 +57,7 @@ help([]) ->
               "                      host create <ip> <hostname> <port>\n"
               "                      host enable <ip>\n"
               "                      host disable <ip>\n"
+              "                      host test <ip>\n"
               "                      alloc user <user>\n"
               "\n"
               "CONNECTION COMMANDS\n"
@@ -182,6 +184,23 @@ host_get([Ip]) ->
             end, queue:to_list(SHist));
         Err ->
             io:format("~p\n", [Err])
+    end.
+
+host_test([Ip]) ->
+    IpBin = unicode:characters_to_binary(Ip, latin1),
+    {ok, Hdl, IpBin, Port} = pool_ra:reserve(
+        <<"_admin_cli">>, IpBin,
+        #{min_rsvd_time => 0, rsv_expire_time => 300}),
+    case backend:probe(binary_to_list(IpBin), Port) of
+        ok ->
+            ok = pool_ra:allocate(Hdl),
+            io:format("probe returned ok, refreshing preferences\n");
+        {error, Reason} ->
+            io:format("error: ~p\n", [Reason]),
+            pool_ra:alloc_error(Hdl, Reason);
+        Other ->
+            io:format("error: ~p\n", [Other]),
+            pool_ra:alloc_error(Hdl, Other)
     end.
 
 host_list([]) ->
