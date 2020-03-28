@@ -311,15 +311,7 @@ apply(_Meta, {update, T, Ip, CM}, S0 = #state{meta = M0}) when is_map(CM) ->
 apply(_Meta, {get_prefs, T, User}, S0 = #state{}) ->
     Prefs = case user_existing_hosts(User, S0) of
         P = [_Ip | _] -> P;
-        _ ->
-            case filter_reserved_hosts(T, User, min, S0) of
-                P = [_Ip | _] -> P;
-                [] ->
-                    case filter_reserved_hosts(T, User, expiry, S0) of
-                        P = [_Ip | _] -> P;
-                        [] -> []
-                    end
-            end
+        _ -> filter_reserved_hosts(T, User, S0)
     end,
     {S0, {ok, Prefs}, []};
 
@@ -340,20 +332,13 @@ apply(_Meta, {reserve, {T, TM, TE}, Hdl, User}, S0 = #state{meta = M0, users = U
                     #{Ip := #{port := Port}} = M0,
                     {S1, {ok, Hdl, Ip, Port}, []};
                 _ ->
-                    case filter_reserved_hosts(T, User, min, S0) of
+                    case filter_reserved_hosts(T, User, S0) of
                         [Ip | _] ->
                             S1 = begin_hdl(Hdl, User, Ip, {T, TM, TE}, S0),
                             #{Ip := #{port := Port}} = M0,
                             {S1, {ok, Hdl, Ip, Port}, []};
                         [] ->
-                            case filter_reserved_hosts(T, User, expiry, S0) of
-                                [Ip | _] ->
-                                    S1 = begin_hdl(Hdl, User, Ip, {T, TM, TE}, S0),
-                                    #{Ip := #{port := Port}} = M0,
-                                    {S1, {ok, Hdl, Ip, Port}, []};
-                                [] ->
-                                    {S0, {error, no_hosts}, []}
-                            end
+                            {S0, {error, no_hosts}, []}
                     end
             end
     end;
@@ -582,7 +567,7 @@ user_existing_hosts(User, S0 = #state{meta = M0, users = U0, hdls = H0}) ->
         end
     end, ToGive).
 
-filter_reserved_hosts(T, User, ExpMin, S0 = #state{meta = M0, hdls = H0, prefs = Prefs}) ->
+filter_reserved_hosts(T, User, S0 = #state{meta = M0, hdls = H0, prefs = Prefs}) ->
     lists:filter(fun (Ip) ->
         #{Ip := HM} = M0,
         case HM of
@@ -591,7 +576,7 @@ filter_reserved_hosts(T, User, ExpMin, S0 = #state{meta = M0, hdls = H0, prefs =
                 case H0 of
                     #{Hdl := #{user := User}} -> true;
                     #{Hdl := #{state := error}} -> true;
-                    #{Hdl := #{ExpMin := TE}} when (TE > T) -> true;
+                    #{Hdl := #{min := TE}} when (T > TE) -> true;
                     #{Hdl := _} -> false;
                     _ -> true
                 end;
@@ -684,32 +669,36 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
             % prefer machines where the latest event wasn't an error
             (not InErrorA) and InErrorB -> true;
             InErrorA and (not InErrorB) -> false;
+            % prefer machines without a current reservation
+            ReservedA and (not ReservedB) -> false;
+            (not ReservedA) and ReservedB -> true;
             % prefer machines with role == vlab
             (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) -> true;
             (not (RoleA =:= <<"vlab">>)) and (RoleB =:= <<"vlab">>) -> false;
             % prefer lab images
             IsLabA and (not IsLabB) -> true;
             (not IsLabA) and IsLabB -> false;
-            % prefer machines without a current reservation
-            ReservedA and (not ReservedB) -> false;
-            (not ReservedA) and ReservedB -> true;
-            % prefer machines whose last status report was not busy
+            % prefer machines whose last status report was available
             (RepStateA =:= available) and (RepStateB =:= busy) -> true;
             (RepStateA =:= busy) and (RepStateB =:= available) -> false;
             % prefer recent images
             (ImageA > ImageB) -> true;
             (ImageA < ImageB) -> false;
+            % for machines which are reserved, pick longest idle first
+            ReservedA and ReservedB and
+                (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
+                (IdleFromA < IdleFromB) -> true;
+            ReservedA and ReservedB and
+                (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
+                (IdleFromA > IdleFromB) -> false;
+            % if we don't have an idle time (it might not be reported) use
+            % the time we transitioned to available
+            ReservedA and ReservedB and
+                (RepStateChangedA < RepStateChangedB) -> true;
+            ReservedA and ReservedB and
+                (RepStateChangedA > RepStateChangedB) -> false;
             % prefer machines where the last alloc or session start was further
-            % in the past (to a precision of 30min)
-            (SALatestA div 1800) < (SALatestB div 1800) -> true;
-            (SALatestA div 1800) > (SALatestB div 1800) -> false;
-            % prefer machines that have been idle longest (to a precision of
-            % 5 mins)
-            (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
-                (IdleFromA div 300) < (IdleFromB div 300) -> true;
-            (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
-                (IdleFromA div 300) > (IdleFromB div 300) -> false;
-            % last alloc or session start further in the past, cont.
+            % in the past
             (SALatestA < SALatestB) -> true;
             (SALatestA > SALatestB) -> false;
             % last error further in the past
