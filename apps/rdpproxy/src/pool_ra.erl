@@ -694,23 +694,23 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
             true -> false
         end,
 
-        ReservedA = case A of
-            #{reservation := HdlA} ->
+        {ReservedA, ResvdTimeA} = case A of
+            #{reservation := HdlA, time := TRA} ->
                 case H of
-                    #{HdlA := #{state := error}} -> false;
-                    #{HdlA := _} -> true;
-                    _ -> false
+                    #{HdlA := #{state := error}} -> {false, 0};
+                    #{HdlA := _} -> {true, TRA};
+                    _ -> {false, 0}
                 end;
-            _ -> false
+            _ -> {false, 0}
         end,
-        ReservedB = case B of
-            #{reservation := HdlB} ->
+        {ReservedB, ResvdTimeB} = case B of
+            #{reservation := HdlB, time := TRB} ->
                 case H of
-                    #{HdlB := #{state := error}} -> false;
-                    #{HdlB := _} -> true;
-                    _ -> false
+                    #{HdlB := #{state := error}} -> {false, 0};
+                    #{HdlB := _} -> {true, TRB};
+                    _ -> {false, 0}
                 end;
-            _ -> false
+            _ -> {false, 0}
         end,
 
         % A <= B  => true
@@ -722,21 +722,24 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
             % prefer machines where the latest event wasn't an error
             (not InErrorA) and InErrorB -> true;
             InErrorA and (not InErrorB) -> false;
-            % prefer machines without a current reservation
-            ReservedA and (not ReservedB) -> false;
-            (not ReservedA) and ReservedB -> true;
+            % prefer machines whose last status report was available, if
+            % the report was after the last session/allocation
+            (RepStateChangedA > SALatestA) and (RepStateA =:= available) and
+                (RepStateB =:= busy) -> true;
+            (RepStateA =:= busy) and (RepStateChangedB > SALatestB) and
+                (RepStateB =:= available) -> false;
             % prefer machines with role == vlab
             (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) -> true;
             (not (RoleA =:= <<"vlab">>)) and (RoleB =:= <<"vlab">>) -> false;
             % prefer lab images
             IsLabA and (not IsLabB) -> true;
             (not IsLabA) and IsLabB -> false;
-            % prefer machines whose last status report was available
-            (RepStateA =:= available) and (RepStateB =:= busy) -> true;
-            (RepStateA =:= busy) and (RepStateB =:= available) -> false;
             % prefer recent images
             (ImageA > ImageB) -> true;
             (ImageA < ImageB) -> false;
+            % prefer machines without a current reservation
+            ReservedA and (not ReservedB) -> false;
+            (not ReservedA) and ReservedB -> true;
             % for machines which are reserved, pick longest idle first
             ReservedA and ReservedB and
                 (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
@@ -745,11 +748,9 @@ regen_prefs(S0 = #state{meta = M, hdls = H}) ->
                 (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
                 (IdleFromA > IdleFromB) -> false;
             % if we don't have an idle time (it might not be reported) use
-            % the time we transitioned to available
-            ReservedA and ReservedB and
-                (RepStateChangedA < RepStateChangedB) -> true;
-            ReservedA and ReservedB and
-                (RepStateChangedA > RepStateChangedB) -> false;
+            % the time we reserved it
+            ReservedA and ReservedB and (ResvdTimeA < ResvdTimeB) -> true;
+            ReservedA and ReservedB and (ResvdTimeA > ResvdTimeB) -> false;
             % prefer machines where the last alloc or session start was further
             % in the past
             (SALatestA < SALatestB) -> true;
