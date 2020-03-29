@@ -147,16 +147,24 @@ reserve(User, Ip, Config) ->
 
 allocate(Hdl) ->
     Now = erlang:system_time(second),
-    case ra:process_command(pool_ra, {allocate, Now, Hdl}) of
-        {ok, Ret, _Leader} -> Ret;
-        Else -> Else
+    case get_reservation(Hdl) of
+        {ok, #{ip := Ip}} ->
+            case ra:process_command(pool_ra, {allocate, Now, Hdl, Ip}) of
+                {ok, Ret, _Leader} -> Ret;
+                Else -> Else
+            end;
+        Err -> Err
     end.
 
 alloc_error(Hdl, Err) ->
     Now = erlang:system_time(second),
-    case ra:process_command(pool_ra, {alloc_error, Now, Hdl, Err}) of
-        {ok, Ret, _Leader} -> Ret;
-        Else -> Else
+    case get_reservation(Hdl) of
+        {ok, #{ip := Ip}} ->
+            case ra:process_command(pool_ra, {alloc_error, Now, Hdl, Ip, Err}) of
+                {ok, Ret, _Leader} -> Ret;
+                Else -> Else
+            end;
+        Err -> Err
     end.
 
 host_error(Ip, Err) ->
@@ -407,9 +415,67 @@ apply(_Meta, {allocate, T, Hdl}, S0 = #state{meta = M0, hdls = H0}) ->
             {S0, {error, not_found}, []}
     end;
 
+apply(_Meta, {allocate, T, Hdl, Ip}, S0 = #state{meta = M0, hdls = H0}) ->
+    case H0 of
+        #{Hdl := HD0 = #{ip := HdlIp, user := User}} ->
+            case HdlIp of
+                Ip -> ok;
+                _ ->
+                    lager:warning("replaying allocation for handle which has "
+                        "changed ip: was ~s, now ~s (sort order probably "
+                        "changed)", [Ip, HdlIp])
+            end,
+            #{Ip := HM0} = M0,
+            #{alloc_history := AHist0} = HM0,
+            AHist1 = queue:in(#{time => T, user => User, hdl => Hdl}, AHist0),
+            AHist2 = case queue:len(AHist1) of
+                N when (N > ?HISTORY_LIMIT) ->
+                    {{value, _}, Q} = queue:out(AHist1),
+                    Q;
+                _ -> AHist1
+            end,
+            HM1 = HM0#{alloc_history => AHist2},
+            M1 = M0#{Ip => HM1},
+            HD1 = HD0#{state => done},
+            H1 = H0#{Hdl => HD1},
+            S1 = regen_prefs(S0#state{meta = M1, hdls = H1}),
+            {S1, ok, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
 apply(_Meta, {alloc_error, T, Hdl, Err}, S0 = #state{meta = M0, hdls = H0}) ->
     case H0 of
         #{Hdl := HD0 = #{ip := Ip, user := User}} ->
+            #{Ip := HM0} = M0,
+            #{error_history := EHist0} = HM0,
+            EHist1 = queue:in(#{time => T, error => Err}, EHist0),
+            EHist2 = case queue:len(EHist1) of
+                N when (N > ?HISTORY_LIMIT) ->
+                    {{value, _}, Q} = queue:out(EHist1),
+                    Q;
+                _ -> EHist1
+            end,
+            HM1 = HM0#{error_history => EHist2},
+            M1 = M0#{Ip => HM1},
+            HD1 = HD0#{state => error},
+            H1 = H0#{Hdl => HD1},
+            S1 = regen_prefs(S0#state{meta = M1, hdls = H1}),
+            {S1, ok, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
+apply(_Meta, {alloc_error, T, Hdl, Ip, Err}, S0 = #state{meta = M0, hdls = H0}) ->
+    case H0 of
+        #{Hdl := HD0 = #{ip := HdlIp, user := User}} ->
+            case HdlIp of
+                Ip -> ok;
+                _ ->
+                    lager:warning("replaying alloc_error for handle which has "
+                        "changed ip: was ~s, now ~s (sort order probably "
+                        "changed)", [Ip, HdlIp])
+            end,
             #{Ip := HM0} = M0,
             #{error_history := EHist0} = HM0,
             EHist1 = queue:in(#{time => T, error => Err}, EHist0),
