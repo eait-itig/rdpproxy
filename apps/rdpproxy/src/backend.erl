@@ -38,7 +38,7 @@
 
 -spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()}.
 start_link(Frontend, Address, Port) ->
-    gen_fsm:start_link(?MODULE, [Frontend, Address, Port], []).
+    gen_fsm:start_link(?MODULE, [Frontend, Address, Port], [{timeout, 10000}]).
 
 probe(Address, Port) ->
     case (catch gen_fsm:start(?MODULE, [self(), Address, Port], [{timeout, 5000}])) of
