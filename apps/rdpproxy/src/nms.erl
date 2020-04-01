@@ -50,7 +50,7 @@ wol(N, Hostname) ->
 bump_count(N, Username, Ip) ->
     gen_server:call(N, {bump_count, Username, Ip}).
 
--record(state, {gun, host, signer}).
+-record(?MODULE, {gun, host, signer}).
 
 init(_) ->
     NmsConfig = application:get_env(rdpproxy, nms_api, []),
@@ -68,19 +68,19 @@ init(_) ->
 
     {ok, Gun} = gun:open(Host, 443),
 
-    {ok, #state{gun = Gun, host = Host, signer = Signer}}.
+    {ok, #?MODULE{gun = Gun, host = Host, signer = Signer}}.
 
-terminate(_Reason, _S = #state{gun = Gun}) ->
+terminate(_Reason, _S = #?MODULE{gun = Gun}) ->
     gun:close(Gun),
     ok.
 
-handle_info(Info, S = #state{}) ->
+handle_info(Info, S = #?MODULE{}) ->
     {noreply, S}.
 
 to_hex(Bin) ->
     << <<Y>> ||<<X:4>> <= Bin, Y <- integer_to_list(X,16)>>.
 
-do_signed_req(Method, Uri, Params, #state{gun = Gun, host = Host, signer = Signer}) ->
+do_signed_req(Method, Uri, Params, #?MODULE{gun = Gun, host = Host, signer = Signer}) ->
     Hdrs0 = #{<<"host">> => Host},
     Hdrs1 = case Method of
         get -> Hdrs0;
@@ -111,7 +111,7 @@ do_signed_req(Method, Uri, Params, #state{gun = Gun, host = Host, signer = Signe
         Else -> Else
     end.
 
-handle_call({wol, Hostname}, _From, S = #state{}) ->
+handle_call({wol, Hostname}, _From, S = #?MODULE{}) ->
     Uri = <<"/api/wol.php">>,
     case do_signed_req(post, Uri, #{<<"hosts">> => Hostname}, S) of
         {ok, 200, Data} ->
@@ -120,19 +120,19 @@ handle_call({wol, Hostname}, _From, S = #state{}) ->
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call({get_user_hosts, User}, _From, S = #state{}) ->
+handle_call({get_user_hosts, User}, _From, S = #?MODULE{}) ->
     Uri = iolist_to_binary([<<"/api/userhost.php/">>, User]),
     case do_signed_req(get, Uri, #{}, S) of
         {ok, 200, Hosts} -> {reply, {ok, Hosts}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call({bump_count, User, Ip}, _From, S = #state{}) ->
+handle_call({bump_count, User, Ip}, _From, S = #?MODULE{}) ->
     Uri = iolist_to_binary([<<"/api/rdpcount.php/">>, User, $/, Ip]),
     case do_signed_req(post, Uri, #{<<"submit">> => <<"true">>}, S) of
         {ok, 200, Reply} -> {reply, {ok, Reply}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call(stop, _From, S = #state{}) ->
+handle_call(stop, _From, S = #?MODULE{}) ->
     {stop, normal, ok, S}.

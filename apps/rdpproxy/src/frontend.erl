@@ -32,8 +32,6 @@
 
 -include_lib("rdp_proto/include/rdp_server.hrl").
 
--include("session.hrl").
-
 -export([
     init/1,
     handle_connect/4,
@@ -43,9 +41,9 @@
     terminate/2
     ]).
 
--record(state, {
+-record(?MODULE, {
     peer :: term(),
-    session :: #session{} | undefined,
+    session :: session_ra:handle_state() | undefined,
     subs = [] :: [pid()],
     backend :: pid(),
     intercept = true :: boolean(),
@@ -54,7 +52,7 @@
     }).
 
 init(Peer) ->
-    {ok, #state{peer = Peer}}.
+    {ok, #?MODULE{peer = Peer}}.
 
 retry_start_backend(0, _, _, _, LastErr) -> LastErr;
 retry_start_backend(N, Srv, HostBin, Port, _) ->
@@ -68,27 +66,26 @@ retry_start_backend(N, Srv, HostBin, Port, _) ->
 retry_start_backend(Srv, HostBin, Port) ->
     retry_start_backend(2, Srv, HostBin, Port, none).
 
-handle_connect(Cookie, _Protocols, Srv, S = #state{}) ->
-    case cookie_ra:get(Cookie) of
-        {ok, Sess = #session{
-                host = HostBin, port = Port, user = User}} ->
+handle_connect(Cookie, _Protocols, Srv, S = #?MODULE{}) ->
+    case session_ra:claim_handle(Cookie) of
+        {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
             lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
-                [S#state.peer, Cookie, User, HostBin]),
-            {ok, ConnId} = conn_ra:register_conn(S#state.peer, Sess),
+                [S#?MODULE.peer, Cookie, User, HostBin]),
+            {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer, Sess),
             {ok, Backend} = retry_start_backend(Srv, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),
-            {accept_raw, S#state{session = Sess, backend = Backend, connid = ConnId}};
+            {accept_raw, S#?MODULE{session = Sess, backend = Backend, connid = ConnId}};
 
         _ ->
-            {ok, ConnId} = conn_ra:register_conn(S#state.peer,
-                #session{user = <<"_">>}),
+            {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer,
+                #{ip => undefined, user => <<"_">>}),
             SslOpts = rdpproxy:config([frontend, ssl_options], [
                 {certfile, "etc/cert.pem"},
                 {keyfile, "etc/key.pem"}]),
-            {accept, SslOpts, S#state{connid = ConnId}}
+            {accept, SslOpts, S#?MODULE{connid = ConnId}}
     end.
 
-init_ui(Srv, S = #state{subs = [], connid = ConnId}) ->
+init_ui(Srv, S = #?MODULE{subs = [], connid = ConnId}) ->
     {ok, Ui} = ui_fsm_sup:start_ui(Srv),
     lager:debug("frontend spawned ui_fsm ~p", [Ui]),
     Tsuds = rdp_server:get_tsuds(Srv),
@@ -96,19 +93,19 @@ init_ui(Srv, S = #state{subs = [], connid = ConnId}) ->
     conn_ra:annotate(ConnId, #{tsuds => Tsuds, ts_caps => Caps, ui_fsm => Ui}),
     {ok, S}.
 
-handle_event({subscribe, Pid}, _Srv, S = #state{subs = Subs}) ->
-    {ok, S#state{subs = [Pid | Subs]}};
+handle_event({subscribe, Pid}, _Srv, S = #?MODULE{subs = Subs}) ->
+    {ok, S#?MODULE{subs = [Pid | Subs]}};
 
-handle_event(Event, Srv, S = #state{subs = Subs}) ->
+handle_event(Event, Srv, S = #?MODULE{subs = Subs}) ->
     lists:foreach(fun(Sub) ->
         gen_fsm:send_event(Sub, {input, Srv, Event})
     end, Subs),
     {ok, S}.
 
-handle_raw_data(Data, _Srv, S = #state{intercept = false, backend = B}) ->
+handle_raw_data(Data, _Srv, S = #?MODULE{intercept = false, backend = B}) ->
     gen_fsm:send_event(B, {frontend_data, Data}),
     {ok, S};
-handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
+handle_raw_data(Bin, _Srv, S = #?MODULE{intercept = true, backend = B}) ->
     %debug_print_data(Bin),
     case rdpp:decode_server(Bin) of
         %
@@ -123,15 +120,14 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         {ok, {mcs_pdu, McsCi = #mcs_ci{}}, Rem} ->
             {ok, Tsuds0} = tsud:decode(McsCi#mcs_ci.data),
 
-            conn_ra:annotate(S#state.connid, #{tsuds => Tsuds0}),
+            conn_ra:annotate(S#?MODULE.connid, #{tsuds => Tsuds0}),
 
             TsudCore0 = lists:keyfind(tsud_core, 1, Tsuds0),
             Colors0 = TsudCore0#tsud_core.colors,
             Caps0 = TsudCore0#tsud_core.capabilities,
 
             TsudCluster0 = lists:keyfind(tsud_cluster, 1, Tsuds0),
-            #state{session = Sess} = S,
-            SessId = cookie_ra:session_id(Sess),
+            #?MODULE{session = #{sessid := SessId}} = S,
             #tsud_cluster{sessionid = TheirSessId} = TsudCluster0,
 
             MatchesSessId = (SessId == TheirSessId),
@@ -140,9 +136,9 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
                     lager:warning("sessid mismatch (ours = ~p, they sent = ~p), "
                         "will not rewrite ts_info (no auto-login)",
                         [SessId, TheirSessId]),
-                    S#state{matched_sessid = false};
+                    S#?MODULE{matched_sessid = false};
                 true ->
-                    S#state{matched_sessid = true}
+                    S#?MODULE{matched_sessid = true}
             end,
 
             HasGfx = lists:member(dynvc_gfx, Caps0),
@@ -187,13 +183,13 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
         {ok, {mcs_pdu, McsData = #mcs_data{data = RdpData0}}, Rem} ->
             case rdpp:decode_basic(RdpData0) of
                 {ok, TsInfo0 = #ts_info{}} ->
-                    conn_ra:annotate(S#state.connid, #{
+                    conn_ra:annotate(S#?MODULE.connid, #{
                         ts_info => TsInfo0#ts_info{password = snip}
                     }),
 
-                    #state{matched_sessid = MatchedSessId} = S,
-                    #state{session = #session{user = User,
-                        password = Password, domain = Domain}} = S,
+                    #?MODULE{matched_sessid = MatchedSessId} = S,
+                    #?MODULE{session = #{user := User,
+                        password := Password, domain := Domain}} = S,
                     TsInfo1 = TsInfo0#ts_info{
                         flags = [autologon, unicode | TsInfo0#ts_info.flags]},
                     Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
@@ -234,7 +230,7 @@ handle_raw_data(Bin, _Srv, S = #state{intercept = true, backend = B}) ->
                     {ok, X224OutBin} = x224:encode(#x224_dt{data = McsOutBin}),
                     {ok, OutBin} = tpkt:encode(X224OutBin),
                     gen_fsm:send_event(B, {frontend_data, <<OutBin/binary, Rem/binary>>}),
-                    {ok, S#state{intercept = false}};
+                    {ok, S#?MODULE{intercept = false}};
                 _ ->
                     gen_fsm:send_event(B, {frontend_data, Bin}),
                     {ok, S}
@@ -302,5 +298,5 @@ debug_print_data(Bin) ->
             ok
     end.
 
-terminate(_Reason, #state{}) ->
+terminate(_Reason, #?MODULE{}) ->
     ok.

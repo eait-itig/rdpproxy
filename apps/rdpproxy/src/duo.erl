@@ -50,7 +50,7 @@ auth(D, Args = #{}) ->
 auth_status(D, TxId) ->
     gen_server:call(D, {auth_status, TxId}).
 
--record(state, {gun, host, ikey, skey}).
+-record(?MODULE, {gun, host, ikey, skey}).
 
 init(_) ->
     DuoConfig = application:get_env(rdpproxy, duo, []),
@@ -58,19 +58,19 @@ init(_) ->
     SKey = proplists:get_value(secret_key, DuoConfig),
     ApiHost = proplists:get_value(api_host, DuoConfig),
     {ok, Gun} = gun:open(ApiHost, 443),
-    {ok, #state{gun = Gun, host = ApiHost, ikey = IKey, skey = SKey}}.
+    {ok, #?MODULE{gun = Gun, host = ApiHost, ikey = IKey, skey = SKey}}.
 
-terminate(_Reason, _S = #state{gun = Gun}) ->
+terminate(_Reason, _S = #?MODULE{gun = Gun}) ->
     gun:close(Gun),
     ok.
 
-handle_info(Info, S = #state{}) ->
+handle_info(Info, S = #?MODULE{}) ->
     {noreply, S}.
 
 to_hex(Bin) ->
     << <<Y>> ||<<X:4>> <= Bin, Y <- integer_to_list(X,16)>>.
 
-do_signed_req(Method, Path, Params, #state{gun = Gun, host = ApiHost, ikey = IKey, skey = SKey}) ->
+do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = IKey, skey = SKey}) ->
     Date = http_signature_date:rfc7231(),
     MethodBin = string:uppercase(atom_to_binary(Method, utf8)),
     Qs = uri_string:compose_query(maps:to_list(Params)),
@@ -115,31 +115,31 @@ do_signed_req(Method, Path, Params, #state{gun = Gun, host = ApiHost, ikey = IKe
         Else -> Else
     end.
 
-handle_call({preauth, Args}, _From, S = #state{}) ->
+handle_call({preauth, Args}, _From, S = #?MODULE{}) ->
     case do_signed_req(post, <<"/auth/v2/preauth">>, Args, S) of
         {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call({auth, Args}, _From, S = #state{}) ->
+handle_call({auth, Args}, _From, S = #?MODULE{}) ->
     case do_signed_req(post, <<"/auth/v2/auth">>, Args, S) of
         {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call({auth_status, TxId}, _From, S = #state{}) ->
+handle_call({auth_status, TxId}, _From, S = #?MODULE{}) ->
     Args = #{<<"txid">> => TxId},
     case do_signed_req(get, <<"/auth/v2/auth_status">>, Args, S) of
         {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call(check, _From, S = #state{}) ->
+handle_call(check, _From, S = #?MODULE{}) ->
     case do_signed_req(get, <<"/auth/v2/check">>, #{}, S) of
         {ok, 200, #{<<"stat">> := <<"OK">>}} -> {reply, ok, S};
         {ok, Code, Info} -> {reply, {error, Info}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
-handle_call(stop, _From, S = #state{}) ->
+handle_call(stop, _From, S = #?MODULE{}) ->
     {stop, normal, ok, S}.

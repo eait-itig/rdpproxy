@@ -32,6 +32,7 @@
 -export([authenticate/1]).
 
 -include_lib("kerlberos/include/KRB5.hrl").
+-include_lib("kerlberos/include/pac.hrl").
 
 config_to_krb_client_opts(Config, CC) ->
     maps:filter(fun
@@ -41,6 +42,31 @@ config_to_krb_client_opts(Config, CC) ->
         (cc, _) -> true;
         (_, _) -> false
     end, Config#{cc => CC}).
+
+check_pac(asn1_NOVALUE) -> {false, #{groups => []}};
+check_pac([]) -> {false, #{groups => []}};
+check_pac([#'AuthorizationData_SEQOF'{'ad-type' = 1, 'ad-data' = D0} | Rest]) ->
+    {ok, InnerAD, <<>>} = 'KRB5':decode('AuthorizationData', D0),
+    case InnerAD of
+        [#'AuthorizationData_SEQOF'{'ad-type' = 128, 'ad-data' = PacBin}] ->
+            case (catch pac:decode(PacBin)) of
+                #pac{buffers = Bufs} ->
+                    LogonInfo = lists:keyfind(pac_logon_info, 1, Bufs),
+                    #pac_logon_info{domain_sid = DSid, groups = GMs} = LogonInfo,
+                    #sid{sub_auths = SubAuths} = DSid,
+                    GroupSids = [
+                        DSid#sid{sub_auths = SubAuths ++ [RId]}
+                        || #group_membership{rid = RId} <- GMs
+                    ],
+                    {true, #{groups => GroupSids}};
+                Err ->
+                    lager:debug("PAC failed to decode: ~p", [Err]),
+                    {false, #{groups => []}}
+            end;
+        _ -> check_pac(Rest)
+    end;
+check_pac([_ | Rest]) ->
+    check_pac(Rest).
 
 check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
     case krb_client:obtain_ticket(C, SPN) of
@@ -57,21 +83,14 @@ check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
                     UserString = unicode:characters_to_list(UserBin, latin1),
                     #'PrincipalName'{'name-string' = [UserString]} = CName,
                     ADs = Inner#'EncTicketPart'.'authorization-data',
-                    Pacs = case ADs of
-                        asn1_NOVALUE -> [];
-                        [_ | _] ->
-                            lists:filter(fun
-                                (#'AuthorizationData_SEQOF'{'ad-type' = 1}) -> true;
-                                (_) -> false
-                            end, ADs)
-                    end,
-                    HasPac = (length(Pacs) > 0),
+                    {HasPac, UInfo} = check_pac(ADs),
                     case {NeedPac, HasPac} of
                         {true, false} ->
                             lager:debug("no PAC found in ticket for ~p (~p@~p)",
                                 [User, SPN, Realm]),
                             false;
-                        _ -> true
+                        _ ->
+                            {true, UInfo}
                     end;
                 _ ->
                     lager:debug("no key available for ~p@~p etype ~p",
@@ -82,6 +101,16 @@ check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
             lager:debug("failed to obtain service ticket for ~p as ~p in ~p: ~p",
                 [SPN, User, Realm, Other]),
             false
+    end.
+
+merge([]) -> {true, #{groups => []}};
+merge([false | _]) -> false;
+merge([{false, _} | _]) -> false;
+merge([{true, #{groups := G0}} | Rest]) ->
+    case merge(Rest) of
+        {true, #{groups := G1}} ->
+            {true, #{groups => G0 ++ G1}};
+        V -> V
     end.
 
 authenticate(#{username := U, password := P}) ->
@@ -100,11 +129,12 @@ authenticate(#{username := U, password := P}) ->
                     KeyMap = maps:from_list(KeyList),
                     NeedPac = maps:get(require_pac, Krb5Config, false),
                     check_service(C0, AuthRealm, U, SPN, KeyMap, NeedPac);
-                _ -> true
+                _ ->
+                    {true, #{groups => []}}
             end,
             Res3 = case Krb5Config of
                 #{cross_realm := XRealmConfLists} ->
-                    lists:all(fun (XRealmConfList) ->
+                    merge(lists:map(fun (XRealmConfList) ->
                         XRealmConf = maps:from_list(XRealmConfList),
                         #{realm := XRealm} = XRealmConf,
                         {ok, _, _} = krb_client:obtain_ticket(C0, ["krbtgt", XRealm]),
@@ -115,16 +145,22 @@ authenticate(#{username := U, password := P}) ->
                                 XKeyMap = maps:from_list(XKeyList),
                                 XNeedPac = maps:get(require_pac, XRealmConf, false),
                                 check_service(CX, XRealm, U, XSPN, XKeyMap, XNeedPac);
-                            _ -> true
+                            _ ->
+                                {true, #{groups => []}}
                         end,
                         krb_client:close(CX),
                         XRes
-                    end, XRealmConfLists);
-                _ -> true
+                    end, XRealmConfLists));
+                _ -> {true, #{groups => []}}
             end,
-            Res2 and Res3;
+            merge([Res2, Res3]);
         _ -> false
     end,
     krb_client:close(C0),
     krbcc:stop(CC),
-    Res.
+    case Res of
+        {true, Info0} ->
+            {true, Info0#{user => U}};
+        _ ->
+            Res
+    end.

@@ -29,13 +29,18 @@
 
 -module(admin_cli).
 
--include("session.hrl").
 -include_lib("rdp_proto/include/rdpp.hrl").
 -include_lib("rdp_proto/include/tsud.hrl").
 
 -export([
     help/1,
-    alloc_user/1,
+    alloc_host/1,
+    alloc_pool/1,
+    pool_list/1,
+    pool_get/1,
+    pool_create/1,
+    pool_update/1,
+    pool_help/1,
     host_create/1,
     host_get/1,
     host_list/1,
@@ -45,41 +50,168 @@
     host_help/1,
     conn_help/1,
     conn_list/1,
-    conn_user/1
+    conn_user/1,
+    handle_get/1,
+    handle_list/1,
+    handle_help/1
     ]).
 
 help([]) ->
     io:format("usage: rdpproxy-admin <cmd> <subcmd> [args]\n"
               "\n"
-              "HOST POOL COMMANDS\n"
+              "POOL COMMANDS\n"
+              "       rdpproxy-admin pool list\n"
+              "                      pool get <name>\n"
+              "                      pool create <name>\n"
+              "                      pool update <name> <map>\n"
+              "                      alloc pool <user>\n"
+              "\n"
+              "HOST COMMANDS\n"
               "       rdpproxy-admin host list\n"
               "                      host get <ip>\n"
-              "                      host create <ip> <hostname> <port>\n"
+              "                      host create <pool> <ip> <hostname> <port>\n"
+              "                      host create <pool> <ip>\n"
+              "                      host update <ip> <map>\n"
               "                      host enable <ip>\n"
               "                      host disable <ip>\n"
               "                      host test <ip>\n"
-              "                      alloc user <user>\n"
+              "                      alloc host <pool> <user>\n"
               "\n"
               "CONNECTION COMMANDS\n"
               "       rdpproxy-admin conn list\n"
               "                      conn user [-v] <_|user>\n"
+              "\n"
+              "SESSION HANDLE COMMANDS\n"
+              "       rdpproxy-admin handle list\n"
+              "                      handle get <hdl>\n"
               "\n").
 
 host_help(_) -> help([]).
 
 conn_help(_) -> help([]).
 
-alloc_user([User]) ->
+pool_help(_) -> help([]).
+
+handle_help(_) -> help([]).
+
+handle_get([Hdl]) ->
+    Res = session_ra:get_handle(list_to_binary(Hdl)),
+    io:format("~p\n", [Res]).
+
+handle_list([]) ->
+    Fmt = "~17.. s  ~16.. s  ~16.. s  ~10.. s  ~20.. s  ~20.. s  ~20.. s  ~20.. s\n",
+    io:format(Fmt, ["HANDLE", "USER", "IP", "STATE", "START", "MIN", "EXPIRY", "PID"]),
+    {ok, Hdls} = session_ra:get_all_handles(),
+    HdlsSorted = lists:sort(fun (A, B) ->
+        #{handle := HdlA, pid := PidA, start := StartA} = A,
+        #{handle := HdlB, pid := PidB, start := StartB} = B,
+        HasPidA = not (PidA =:= none),
+        HasPidB = not (PidB =:= none),
+        if
+            HasPidA and (not HasPidB) -> true;
+            (not HasPidA) and HasPidB -> false;
+            StartA < StartB -> true;
+            StartA > StartB -> false;
+            HdlA < HdlB -> true;
+            HdlA > HdlB -> false
+        end
+    end, Hdls),
+    lists:foreach(fun (HD) ->
+        #{handle := Hdl, user := User, start := Start, min := Min, pid := Pid,
+          expiry := Expiry, ip := Ip, state := St} = HD,
+        ExpStr = case Expiry of
+            connected -> "-";
+            _ -> format_reltime(Expiry)
+        end,
+        Fields = [
+            Hdl,
+            User,
+            Ip,
+            St,
+            format_reltime(Start),
+            format_reltime(Min),
+            ExpStr,
+            io_lib:format("~w", [Pid])
+        ],
+        io:format(Fmt, Fields)
+    end, HdlsSorted).
+
+pool_list([]) ->
+    {ok, Pools} = session_ra:get_all_pools(),
+    Fmt = "~16.. s  ~30.. s  ~12.. s  ~7.. s  ~30.. s  ~14.. s  ~14.. s\n",
+    io:format(Fmt, ["ID", "TITLE", "MODE", "CHOICE", "ROLES", "MIN RSVD TIME",
+        "HDL EXP TIME"]),
+    lists:foreach(fun (PD) ->
+        #{id := Id, title := Title, mode := Mode, report_roles := Roles,
+          min_rsvd_time := MinRsvdTime, hdl_expiry_time := HdlExpTime,
+          choice := Choice} = PD,
+        RolesStr = case Roles of
+            [] -> "-";
+            _ -> string:join([unicode:characters_to_list(R, latin1) || R <- Roles], ",")
+        end,
+        Fields = [
+            Id,
+            Title,
+            Mode,
+            Choice,
+            RolesStr,
+            integer_to_list(MinRsvdTime),
+            integer_to_list(HdlExpTime)
+        ],
+        io:format(Fmt, Fields)
+    end, Pools).
+
+pool_create([NameStr]) ->
+    ok.
+
+pool_get([NameStr]) ->
+    Id = list_to_atom(NameStr),
+    case session_ra:get_pool(Id) of
+        {ok, PD} ->
+            #{id := Id, title := Title, help_text := HelpText,
+              acl := ACL, mode := Mode, report_roles := Roles,
+              min_rsvd_time := MinRsvdTime, hdl_expiry_time := HdlExpTime,
+              choice := Choice} = PD,
+            RolesStr = case Roles of
+                [] -> "-";
+                _ -> string:join([unicode:characters_to_list(R, latin1) || R <- Roles], ",")
+            end,
+            io:format("ID            ~s\n", [Id]),
+            io:format("TITLE         ~s\n", [Title]),
+            io:format("MODE          ~s\n", [Mode]),
+            io:format("CHOICE        ~s\n", [Choice]),
+            io:format("ROLES         ~s\n", [RolesStr]),
+            io:format("\nHELP TEXT:\n~s\n", [HelpText]),
+            io:format("\nACL:\n"),
+            lists:foreach(fun (AclEnt) ->
+                io:format("  ~p\n", [AclEnt])
+            end, ACL);
+        Err ->
+            io:format("~p\n", [Err])
+    end.
+
+pool_update([Id, Map]) ->
+    session_ra:update_pool(Map#{id => Id}).
+
+host_update([Ip, Map]) ->
+    session_ra:update_host(Map#{ip => Ip}).
+
+alloc_pool([User]) ->
+    {ok, Pools} = session_ra:get_pools_for(#{user => User, groups => []}),
+    io:format("~p\n", [Pools]).
+
+alloc_host([PoolStr, User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
-    {ok, Prefs} = pool_ra:get_prefs(UserBin),
-    Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~26.. s  ~16.. s  ~8.. s  "
+    Pool = list_to_atom(PoolStr),
+    {ok, Prefs} = session_ra:get_prefs(Pool, UserBin),
+    Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~26.. s  ~16.. s  ~16.. s  ~8.. s  "
         "~22.. s  ~13.. s\n",
     io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER",
-        "LASTREP", "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
+        "LASTREP", "SESSIONS", "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
     lists:foreach(fun (Ip) ->
-        {ok, Host} = pool_ra:get_host(Ip),
+        {ok, Host} = session_ra:get_host(Ip),
         #{hostname := Hostname, enabled := Ena, image := Img,
-          role := Role, last_report := LastRep,
+          role := Role, last_report := LastRep, handles := Hdls,
           report_state := {RepState, RepChanged}} = Host,
         #{error_history := EHist, alloc_history := AHist,
           session_history := SHist} = Host,
@@ -108,6 +240,21 @@ alloc_user([User]) ->
         end,
         RepStateTxt = io_lib:format("~w (~s)",
             [RepState, format_reltime(RepChanged)]),
+        HDs = lists:foldl(fun (Hdl, Acc) ->
+            case session_ra:get_handle(Hdl) of
+                {ok, HD} -> [HD | Acc];
+                _ -> Acc
+            end
+        end, [], Hdls),
+        ActiveSess = length(lists:filter(fun
+            (#{expiry := connected}) -> true;
+            (_) -> false
+        end, HDs)),
+        ReadySess = length(lists:filter(fun
+            (#{expiry := I}) when is_integer(I) -> true;
+            (_) -> false
+        end, HDs)),
+        SessTxt = io_lib:format("~B act/~B rdy", [ActiveSess, ReadySess]),
         Fields = [
             Ip,
             Hostname,
@@ -115,6 +262,7 @@ alloc_user([User]) ->
             LastErr,
             LastUser,
             LastSess,
+            SessTxt,
             Img,
             Role,
             RepStateTxt,
@@ -123,29 +271,45 @@ alloc_user([User]) ->
         io:format(Fmt, Fields)
     end, Prefs).
 
-host_create([Ip, Hostname, Port]) ->
+host_create([Pool, Ip]) ->
+    PoolAtom = list_to_atom(Pool),
+    IpBin = unicode:characters_to_binary(Ip, latin1),
+    {ok, IpInet} = inet:parse_address(Ip),
+    {ok, Hostname} = http_api:rev_lookup(IpInet),
+    Ret = session_ra:create_host(#{
+        pool => PoolAtom,
+        ip => IpBin,
+        hostname => iolist_to_binary([Hostname]),
+        port => 3389}),
+    io:format("~p\n", [Ret]);
+host_create([Pool, Ip, Hostname, Port]) ->
+    PoolAtom = list_to_atom(Pool),
     IpBin = unicode:characters_to_binary(Ip, latin1),
     HostnameBin = unicode:characters_to_binary(Hostname, latin1),
     PortNum = list_to_integer(Port),
-    Ret = pool_ra:create(IpBin, HostnameBin, PortNum),
+    Ret = session_ra:create_host(#{
+        pool => PoolAtom,
+        ip => IpBin,
+        hostname => HostnameBin,
+        port => PortNum}),
     io:format("~p\n", [Ret]).
 
 host_enable([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
-    Ret = pool_ra:enable(IpBin),
+    Ret = session_ra:enable_host(IpBin),
     io:format("~p\n", [Ret]).
 
 host_disable([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
-    Ret = pool_ra:disable(IpBin),
+    Ret = session_ra:disable_host(IpBin),
     io:format("~p\n", [Ret]).
 
 host_get([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
-    case pool_ra:get_host(IpBin) of
+    case session_ra:get_host(IpBin) of
         {ok, Host} ->
             #{hostname := Hostname, enabled := Ena, image := Img,
-              role := Role, last_report := LastRep,
+              role := Role, last_report := LastRep, handles := Hdls,
               report_state := {RepState, RepChanged}} = Host,
             #{error_history := EHist, alloc_history := AHist,
               session_history := SHist} = Host,
@@ -169,6 +333,28 @@ host_get([Ip]) ->
             io:format("ROLE          ~s\n", [Role]),
             io:format("LAST REPORT   ~s\n", [LastRepTxt]),
             io:format("REPORT STATE  ~s\n", [RepStateTxt]),
+            io:format("\n"),
+            Fmt = "~17.. s  ~16.. s  ~10.. s  ~20.. s  ~20.. s  ~20.. s  ~20.. s\n",
+            io:format(Fmt, ["HANDLE", "USER", "STATE", "START", "MIN", "EXPIRY", "PID"]),
+            lists:foreach(fun (Hdl) ->
+                {ok, HD} = session_ra:get_handle(Hdl),
+                #{user := User, start := Start, min := Min, pid := Pid,
+                  expiry := Expiry, state := St} = HD,
+                ExpStr = case Expiry of
+                    connected -> "-";
+                    _ -> format_reltime(Expiry)
+                end,
+                Fields = [
+                    Hdl,
+                    User,
+                    St,
+                    format_reltime(Start),
+                    format_reltime(Min),
+                    ExpStr,
+                    io_lib:format("~w", [Pid])
+                ],
+                io:format(Fmt, Fields)
+            end, Hdls),
             io:format("\nRECENT USERS\n"),
             lists:foreach(fun (#{time := AT, user := U}) ->
                 io:format(" * ~s (~s)\n", [U, format_reltime(AT)])
@@ -188,30 +374,30 @@ host_get([Ip]) ->
 
 host_test([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
-    {ok, Hdl, IpBin, Port} = pool_ra:reserve(
-        <<"_admin_cli">>, IpBin,
-        #{min_rsvd_time => 0, rsv_expire_time => 300}),
+    {ok, Hdl, HD0} = session_ra:reserve_ip(<<"_admin_cli">>, IpBin),
+    #{port := Port} = HD0,
     case backend:probe(binary_to_list(IpBin), Port) of
         ok ->
-            ok = pool_ra:allocate(Hdl),
-            io:format("probe returned ok, refreshing preferences\n");
+            HD1 = HD0#{password => <<"_admin_cli">>},
+            {ok, _HD1} = session_ra:allocate(Hdl, HD1),
+            io:format("probe returned ok (handle ~s)\n", [Hdl]);
         {error, Reason} ->
             io:format("error: ~p\n", [Reason]),
-            pool_ra:alloc_error(Hdl, Reason);
+            session_ra:alloc_error(Hdl, Reason);
         Other ->
             io:format("error: ~p\n", [Other]),
-            pool_ra:alloc_error(Hdl, Other)
+            session_ra:alloc_error(Hdl, Other)
     end.
 
 host_list([]) ->
-    {ok, Hosts} = pool_ra:get_all_hosts(),
-    Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~16.. s  ~8.. s  "
+    {ok, Hosts} = session_ra:get_all_hosts(),
+    Fmt = "~10.. s  ~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~16.. s  ~8.. s  "
         "~22.. s  ~13.. s\n",
-    io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER", "IMAGE",
-        "ROLE", "REPSTATE", "REPORT"]),
+    io:format(Fmt, ["POOL", "IP", "HOST", "ENABLED", "LASTERR", "LASTUSER",
+        "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
     lists:foreach(fun (Host) ->
-        #{ip := Ip, hostname := Hostname, enabled := Ena, image := Img,
-          role := Role, last_report := LastRep,
+        #{ip := Ip, pool := Pool, hostname := Hostname, enabled := Ena,
+          image := Img, role := Role, last_report := LastRep,
           report_state := {RepState, RepChanged}} = Host,
         #{error_history := EHist, alloc_history := AHist} = Host,
         LastErr = case queue:out_r(EHist) of
@@ -234,6 +420,7 @@ host_list([]) ->
         RepStateTxt = io_lib:format("~w (~s)",
             [RepState, format_reltime(RepChanged)]),
         Fields = [
+            Pool,
             Ip,
             Hostname,
             if Ena -> "true"; not Ena -> "false" end,
@@ -249,10 +436,10 @@ host_list([]) ->
 
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
-    Fmt = "~12.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~15.. s  ~8.. s  ~14.. s  "
+    Fmt = "~16.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~16.. s  ~15.. s  ~8.. s  ~14.. s  "
         "~11.. s  ~9.. s\n",
-    io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "BACKEND", "PROTVER",
-        "REMHOST", "RES", "RECONN"]),
+    io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "HANDLE",
+        "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
     ConnsSorted = lists:sort(fun (CA, CB) ->
         #{started := StartedA, id := IdA} = CA,
         #{started := StartedB, id := IdB} = CB,
@@ -265,7 +452,11 @@ conn_list([]) ->
     end, Conns),
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port}, frontend_pid := Pid,
-          session := #session{user = U, host = Backend}} = Conn,
+          session := S = #{user := U, ip := Backend}} = Conn,
+        Hdl = case S of
+            #{handle := HH} -> HH;
+            _ -> <<"-">>
+        end,
         BackendText = case Conn of
             #{ui_fsm := _} when (Backend =/= undefined) -> [Backend, "*"];
             _ when (Backend =:= undefined) -> "";
@@ -310,6 +501,7 @@ conn_list([]) ->
             Node,
             format_reltime(Started),
             U,
+            Hdl,
             BackendText,
             ProtVer,
             Client,
@@ -326,7 +518,8 @@ conn_user(["-v", User]) ->
     Fmt = "~12.. s  ~25.. s  ~14.. s  ~14.. s  ~15.. s  ~8.. s  ~10.. s  "
         "~10.. s  ~9.. s\n",
     lists:foreach(fun (Conn) ->
-        #{id := Id, started := Started, peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
+        #{id := Id, started := Started, peer := {Ip, Port},
+          session := #{user := U, ip := Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         case Conn of
             #{tsuds := Tsuds} ->
@@ -401,7 +594,7 @@ conn_user([User]) ->
         "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, frontend_pid := Pid, started := Started,
-          peer := {Ip, Port}, session := #session{user = U, host = Backend}} = Conn,
+          peer := {Ip, Port}, session := #{user := U, ip := Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         BackendText = case Conn of
             #{ui_fsm := _} when (Backend =/= undefined) -> [Backend, "*"];

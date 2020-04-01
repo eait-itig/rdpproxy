@@ -63,7 +63,8 @@ probe_rx(Pid, MonRef, RetVal) ->
         probe_rx(Pid, MonRef, {error, timeout})
     end.
 
--record(data, {addr, port, sock, sslsock=none, themref=0, usref=0, unused, server, origcr}).
+-record(?MODULE,
+    {addr, port, sock, sslsock=none, themref=0, usref=0, unused, server, origcr}).
 
 %% @private
 init([Pid, Address, Port]) when is_pid(Pid) ->
@@ -86,25 +87,25 @@ init([Srv, Address, Port, OrigCr]) ->
             {ok, CrData} = x224:encode(Cr),
             {ok, Packet} = tpkt:encode(CrData),
             ok = gen_tcp:send(Sock, Packet),
-            {ok, initiation, #data{addr = Address, port = Port, server = Srv, sock = Sock, usref = Us, origcr = OrigCr}};
+            {ok, initiation, #?MODULE{addr = Address, port = Port, server = Srv, sock = Sock, usref = Us, origcr = OrigCr}};
 
         {error, Reason} ->
             case Srv of
                 P when is_pid(P) -> ok;
-                {P, _} when is_pid(P) -> pool_ra:host_error(Address, Reason)
+                {P, _} when is_pid(P) -> session_ra:host_error(Address, Reason)
             end,
             {stop, Reason}
     end.
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = ssl_not_allowed}},
-        #data{addr = Address, usref = UsRef, server = Srv} = Data) ->
+        #?MODULE{addr = Address, usref = UsRef, server = Srv} = Data) ->
     case Srv of
         P when is_pid(P) -> ok;
-        {P, _} when is_pid(P) -> pool_ra:host_error(Address, no_ssl)
+        {P, _} when is_pid(P) -> session_ra:host_error(Address, no_ssl)
     end,
     {stop, no_ssl, Data};
 
-initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data{usref = UsRef, sock = Sock, server = Srv, addr = Address} = Data) ->
+initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MODULE{usref = UsRef, sock = Sock, server = Srv, addr = Address} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected} = Pkt,
 
     HasSsl = lists:member(ssl, Selected),
@@ -125,18 +126,18 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #data
                         {keyfile, "etc/key.pem"}]), Pkt)
         end,
 
-        {next_state, proxy_intercept, Data#data{sslsock = SslSock, themref = ThemRef}};
+        {next_state, proxy_intercept, Data#?MODULE{sslsock = SslSock, themref = ThemRef}};
     true ->
         lager:debug("upstream server rejected SSL, dying"),
         gen_tcp:close(Sock),
         case Srv of
             P when is_pid(P) -> ok;
-            {P, _} when is_pid(P) -> pool_ra:host_error(Address, no_ssl)
+            {P, _} when is_pid(P) -> session_ra:host_error(Address, no_ssl)
         end,
         {stop, no_ssl, Data}
     end.
 
-proxy_intercept({data, Bin}, #data{server = Srv, origcr = OrigCr} = Data) ->
+proxy_intercept({data, Bin}, #?MODULE{server = Srv, origcr = OrigCr} = Data) ->
     case rdpp:decode_connseq(Bin) of
         %
         % The server sends a copy of what protocols the client requested in the
@@ -164,7 +165,7 @@ proxy_intercept({data, Bin}, #data{server = Srv, origcr = OrigCr} = Data) ->
             {next_state, proxy_intercept, Data}
     end;
 
-proxy_intercept({frontend_data, Bin}, #data{sock = Sock, sslsock = SslSock} = Data) ->
+proxy_intercept({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
     if SslSock =:= none ->
         ok = gen_tcp:send(Sock, Bin);
     true ->
@@ -175,11 +176,11 @@ proxy_intercept({frontend_data, Bin}, #data{sock = Sock, sslsock = SslSock} = Da
 proxy_intercept(close, Data) ->
     {stop, normal, Data}.
 
-proxy({data, Bin}, #data{server = Srv} = Data) ->
+proxy({data, Bin}, #?MODULE{server = Srv} = Data) ->
     rdp_server:send_raw(Srv, Bin),
     {next_state, proxy, Data};
 
-proxy({frontend_data, Bin}, #data{sock = Sock, sslsock = SslSock} = Data) ->
+proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
     if SslSock =:= none ->
         ok = gen_tcp:send(Sock, Bin);
     true ->
@@ -244,7 +245,7 @@ debug_print_data(Bin) ->
     end.
 
 %% @private
-handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Data) ->
+handle_info({tcp, Sock, Bin}, State, #?MODULE{sslsock = SslSock, sock = Sock} = Data) ->
     %debug_print_data(Bin),
     case rdpp:decode_connseq(Bin) of
         {ok, {x224_pdu, Pdu}, Rem} ->
@@ -258,17 +259,17 @@ handle_info({tcp, Sock, Bin}, State, #data{sslsock = SslSock, sock = Sock} = Dat
             {next_state, State, Data}
     end;
 
-handle_info({ssl, SslSock, Bin}, State, #data{sslsock = SslSock} = Data)
+handle_info({ssl, SslSock, Bin}, State, #?MODULE{sslsock = SslSock} = Data)
         when (State =:= proxy) orelse (State =:= proxy_intercept) ->
     %debug_print_data(Bin),
     ?MODULE:State({data, Bin}, Data);
-handle_info({ssl, SslSock, Bin}, State, #data{sock = Sock, sslsock = SslSock} = Data) ->
+handle_info({ssl, SslSock, Bin}, State, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
     handle_info({tcp, Sock, Bin}, State, Data);
 
-handle_info({ssl_closed, SslSock}, _State, #data{sslsock = SslSock} = Data) ->
+handle_info({ssl_closed, SslSock}, _State, #?MODULE{sslsock = SslSock} = Data) ->
     {stop, normal, Data};
 
-handle_info({tcp_closed, Sock}, _State, #data{sock = Sock} = Data) ->
+handle_info({tcp_closed, Sock}, _State, #?MODULE{sock = Sock} = Data) ->
     {stop, normal, Data};
 
 handle_info(Msg, State, Data) ->
@@ -276,9 +277,9 @@ handle_info(Msg, State, Data) ->
     {next_state, State, Data}.
 
 %% @private
-terminate(_Reason, _State, #data{sslsock = none, sock = Sock}) ->
+terminate(_Reason, _State, #?MODULE{sslsock = none, sock = Sock}) ->
     gen_tcp:close(Sock);
-terminate(_Reason, _State, #data{sslsock = SslSock, sock = Sock}) ->
+terminate(_Reason, _State, #?MODULE{sslsock = SslSock, sock = Sock}) ->
     ssl:close(SslSock),
     gen_tcp:close(Sock).
 

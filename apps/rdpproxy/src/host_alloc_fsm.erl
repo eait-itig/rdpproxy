@@ -31,44 +31,49 @@
 
 -behaviour(gen_fsm).
 
--include("session.hrl").
-
--export([start/1]).
+-export([start/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
--export([reserve/2]).
+-export([reserve_ip/2, reserve_pool/2]).
 -export([probe/2, save_cookie/2]).
 
--spec start(BaseSession :: #session{}) -> {ok, pid()}.
-start(BaseSession = #session{}) ->
-    gen_fsm:start(?MODULE, [self(), BaseSession], []).
+-spec start(Pool :: session_ra:pool(), BaseSession :: session_ra:handle_state()) -> {ok, pid()}.
+start(Pool, BaseSession = #{}) ->
+    gen_fsm:start(?MODULE, [self(), Pool, BaseSession], []).
 
--record(state, {from, mref, sess, hdl, retries, errs = 0}).
+-record(?MODULE, {from, mref, pool, sess, hdl, retries, errs = 0}).
 
 %% @private
-init([From, Sess = #session{user = U}]) ->
+init([From, Pool, Sess = #{user := U}]) ->
     lager:debug("allocating session for ~p", [U]),
     MRef = erlang:monitor(process, From),
-    case Sess of
-        #session{host = undefined} ->
-            {ok, reserve, #state{mref = MRef, from = From, sess = Sess}, 0};
-        _ ->
-            {ok, probe, #state{mref = MRef, from = From, sess = Sess, retries = unlimited}, 0}
-    end.
+    NextState = case Sess of
+        #{ip := _Ip} -> reserve_ip;
+        _ -> reserve_pool
+    end,
+    {ok, NextState, #?MODULE{mref = MRef, pool = Pool, from = From,
+        sess = Sess}, 0}.
 
-reserve(timeout, S = #state{sess = Sess}) ->
-    #session{user = U} = Sess,
-    case pool_ra:reserve(U) of
-        {ok, Hdl, Ip, Port} ->
-            Sess1 = Sess#session{host = Ip, port = Port},
-            S1 = S#state{sess = Sess1, hdl = Hdl, retries = 3, errs = 0},
+reserve_pool(timeout, S = #?MODULE{pool = Pool, sess = Sess}) ->
+    #{user := U, password := Pw, domain := D} = Sess,
+    case session_ra:reserve(Pool, U) of
+        {ok, Hdl, HD0} ->
+            Sess1 = HD0#{password => Pw, domain => D},
+            S1 = S#?MODULE{sess = Sess1, hdl = Hdl, retries = 3, errs = 0},
             {next_state, probe, S1, 0};
         {error, no_hosts} ->
-            lager:warning("no pool hosts available for ~p", [U]),
-            {next_state, reserve, S, 2000}
+            lager:warning("no pool hosts available for ~p in ~p", [U, Pool]),
+            {next_state, reserve_pool, S, 2000}
     end.
 
-probe(timeout, S = #state{sess = Sess, retries = R0, errs = E0}) ->
-    #session{host = Ip, port = Port} = Sess,
+reserve_ip(timeout, S = #?MODULE{sess = Sess}) ->
+    #{ip := Ip, user := U, password := Pw, domain := D} = Sess,
+    {ok, Hdl, HD0} = session_ra:reserve_ip(U, Ip),
+    Sess1 = HD0#{password => Pw, domain => D},
+    S1 = S#?MODULE{sess = Sess1, hdl = Hdl, retries = unlimited, errs = 0},
+    {next_state, probe, S1, 0}.
+
+probe(timeout, S = #?MODULE{sess = Sess, hdl = Hdl, retries = R0, errs = E0}) ->
+    #{ip := Ip, port := Port} = Sess,
     {R1, Retry} = case R0 of
         unlimited -> {unlimited, true};
         1 -> {0, false};
@@ -79,13 +84,13 @@ probe(timeout, S = #state{sess = Sess, retries = R0, errs = E0}) ->
         ok ->
             {ok, 0, none};
         {error, no_ssl} ->
-            S#state.from ! {alloc_persistent_error, self(), no_ssl},
+            S#?MODULE.from ! {alloc_persistent_error, self(), no_ssl},
             {error, 2000, no_ssl};
         {error, econnrefused} ->
             T = if
                 (E1 > 10) -> 10000;
                 (E1 > 5) ->
-                    S#state.from ! {alloc_persistent_error, self(), refused},
+                    S#?MODULE.from ! {alloc_persistent_error, self(), refused},
                     5000;
                 true -> 1000
             end,
@@ -96,7 +101,7 @@ probe(timeout, S = #state{sess = Sess, retries = R0, errs = E0}) ->
                 (E1 > 30) -> 5000;
                 (E1 > 7) -> 2000;
                 (E1 > 5) ->
-                    S#state.from ! {alloc_persistent_error, self(), down},
+                    S#?MODULE.from ! {alloc_persistent_error, self(), down},
                     2000;
                 true -> 1000
             end,
@@ -106,36 +111,35 @@ probe(timeout, S = #state{sess = Sess, retries = R0, errs = E0}) ->
             {error, 1000, E}
     end,
     case Ok of
-        ok -> {next_state, save_cookie, S, 0};
+        ok ->
+            {next_state, save_cookie, S, 0};
         error ->
             case Retry of
                 true ->
-                    {next_state, probe, S#state{retries = R1, errs = E1}, Timeout};
-                false ->
-                    case S of
-                        #state{hdl = undefined} ->
-                            pool_ra:host_error(Ip, Err);
-                        #state{hdl = Hdl} ->
-                            pool_ra:alloc_error(Hdl, Err)
+                    % Log errors even if we're in unlimited retries mode
+                    case R1 of
+                        unlimited when ((E1 rem 3) == 0) ->
+                            ok = session_ra:host_error(Ip, Err);
+                        _ -> ok
                     end,
-                    {next_state, reserve, S, 1000}
+                    {next_state, probe, S#?MODULE{retries = R1, errs = E1}, Timeout};
+                false ->
+                    ok = session_ra:alloc_error(Hdl, Err),
+                    {next_state, reserve_pool, S, 1000}
             end
     end.
 
-save_cookie(timeout, S = #state{sess = Sess}) ->
-    {ok, Cookie} = cookie_ra:create(Sess),
-    case S of
-        #state{hdl = undefined} -> ok;
-        #state{hdl = Hdl} -> pool_ra:allocate(Hdl)
-    end,
+save_cookie(timeout, S = #?MODULE{sess = Sess0, hdl = Hdl}) ->
+    {ok, Sess1} = session_ra:allocate(Hdl, Sess0),
+    #{ip := Ip, user := U} = Sess1,
     lager:debug("allocated session on ~p for user ~p, cookie: ~p",
-        [Sess#session.host, Sess#session.user, Cookie]),
-    S#state.from ! {allocated_session, self(), Sess#session{cookie = Cookie}},
+        [Ip, U, Hdl]),
+    S#?MODULE.from ! {allocated_session, self(), Sess1},
     {stop, normal, S}.
 
-handle_info({'DOWN', MRef, process, _, _}, _State, S = #state{mref = MRef}) ->
+handle_info({'DOWN', MRef, process, _, _}, _State, S = #?MODULE{mref = MRef}) ->
     {stop, normal, S};
-handle_info(Msg, State, S = #state{}) ->
+handle_info(Msg, State, S = #?MODULE{}) ->
     ?MODULE:State(Msg, S).
 
 %% @private

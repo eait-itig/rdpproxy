@@ -36,21 +36,20 @@
 -include_lib("cairerl/include/cairerl.hrl").
 -include_lib("rdp_ui/include/ui.hrl").
 
--include("session.hrl").
-
 -export([start_link/1]).
--export([startup/2, login/2, no_redir/2, waiting/2, mfa/2, mfa_waiting/2, choose/2]).
+-export([startup/2, login/2, no_redir/2, waiting/2, mfa/2, mfa_waiting/2, choose/2, choose_pool/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -spec start_link(Frontend :: pid()) -> {ok, pid()}.
 start_link(Frontend) ->
     gen_fsm:start_link(?MODULE, [Frontend], []).
 
--record(state, {
+-record(?MODULE, {
     frontend,
     mref,
     w, h, bpp, format,
     root, sess, peer, tsudcore,
+    uinfo, pool,
     allocpid, allocmref,
     nms,
     duo, duodevs, duoid, duotx,
@@ -62,21 +61,21 @@ init([Frontend]) ->
     lager:debug("ui_fsm for frontend ~p", [Pid]),
     gen_fsm:send_event(Pid, {subscribe, self()}),
     MRef = monitor(process, Pid),
-    {ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
+    {ok, startup, #?MODULE{mref = MRef, frontend = Frontend}, 0}.
 
-send_orders(#state{frontend = F, format = Fmt}, Orders) ->
+send_orders(#?MODULE{frontend = F, format = Fmt}, Orders) ->
     Updates = ui:orders_to_updates(Orders, Fmt),
     lists:foreach(fun(U) ->
         rdp_server:send_update(F, U)
     end, Updates).
 
-handle_root_events(State, S = #state{root = Root}, Events) ->
+handle_root_events(State, S = #?MODULE{root = Root}, Events) ->
     {Root2, Orders, UiEvts} = ui:handle_events(Root, Events),
     lists:foreach(fun(UiEvt) ->
         gen_fsm:send_event(self(), {ui, UiEvt})
     end, UiEvts),
     send_orders(S, Orders),
-    {next_state, State, S#state{root = Root2}}.
+    {next_state, State, S#?MODULE{root = Root2}}.
 
 bgcolour() ->
     {R, G, B} = rdpproxy:config([ui, bg_colour], {16#49, 16#07, 16#5e}),
@@ -86,7 +85,21 @@ logopath() ->
     lists:flatten([code:priv_dir(rdpproxy), $/,
         rdpproxy:config([ui, logo], "uq-logo.png")]).
 
-startup(timeout, S = #state{frontend = F}) ->
+get_msg(Name, S = #?MODULE{sess = #{user := U}}) ->
+    Msg0 = rdpproxy:config([ui, Name]),
+    Msg1 = binary:replace(Msg0, [<<"%USER%">>], U, [global]),
+    Msg2 = binary:replace(Msg1, [<<"%HELPDESK%">>],
+        rdpproxy:config([ui, helpdesk]), [global]),
+    MsgLines = length(binary:matches(Msg2, [<<"\n">>])) + 1,
+    {Msg2, MsgLines};
+get_msg(Name, S = #?MODULE{}) ->
+    Msg0 = rdpproxy:config([ui, Name]),
+    Msg1 = binary:replace(Msg0, [<<"%HELPDESK%">>],
+        rdpproxy:config(ui, helpdesk), [global]),
+    MsgLines = length(binary:matches(Msg1, [<<"\n">>])) + 1,
+    {Msg1, MsgLines}.
+
+startup(timeout, S = #?MODULE{frontend = F}) ->
     {W, H, Bpp} = rdp_server:get_canvas(F),
     Format = case Bpp of
         24 -> rgb24;
@@ -117,7 +130,7 @@ startup(timeout, S = #state{frontend = F}) ->
 
     lager:debug("peer = ~p, duoid = ~p", [PeerIp, DuoId]),
 
-    S2 = S#state{w = W, h = H, bpp = Bpp, format = Format, tsudcore = TsudCore,
+    S2 = S#?MODULE{w = W, h = H, bpp = Bpp, format = Format, tsudcore = TsudCore,
                  duoid = DuoId, peer = list_to_binary(inet:ntoa(PeerIp))},
     lager:debug("starting session ~px~p @~p bpp (format ~p)", [W, H, Bpp, Format]),
     case rdp_server:get_redir_support(F) of
@@ -130,21 +143,20 @@ startup(timeout, S = #state{frontend = F}) ->
             case Mode of
                 nms_choice ->
                     {ok, Nms} = nms:start_link(),
-                    login(setup_ui, S2#state{duo = Duo, nms = Nms});
+                    login(setup_ui, S2#?MODULE{duo = Duo, nms = Nms});
                 _ ->
-                    login(setup_ui, S2#state{duo = Duo})
+                    login(setup_ui, S2#?MODULE{duo = Duo})
             end
     end.
 
-no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
+no_redir(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     TopMod = case (H > W) of
         true -> ui_vlayout;
         false -> ui_hlayout
     end,
-    Msg = rdpproxy:config([ui, msg_noredir]),
-    MsgLines = length(binary:matches(Msg, [<<"\n">>])) + 1,
+    {Msg, MsgLines} = get_msg(msg_noredir, S),
     Events = [
         { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
@@ -188,9 +200,9 @@ no_redir(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(S, Orders),
-    {next_state, no_redir, S#state{root = Root2}};
+    {next_state, no_redir, S#?MODULE{root = Root2}};
 
-no_redir({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
+no_redir({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -212,12 +224,12 @@ no_redir({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}
             {next_state, no_redir, S}
     end;
 
-no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+no_redir({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
 
-login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
+login(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
@@ -292,9 +304,9 @@ login(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     {Root3, Orders2, []} = ui:handle_events(Root2, Events2),
     send_orders(S, Orders2),
 
-    {next_state, login, S#state{root = Root3}};
+    {next_state, login, S#?MODULE{root = Root3}};
 
-login({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
+login({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -322,17 +334,17 @@ login({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
             {next_state, login, S}
     end;
 
-login({ui, {submitted, userinp}}, S = #state{}) ->
+login({ui, {submitted, userinp}}, S = #?MODULE{}) ->
     Event = { [{id, passinp}], focus },
     handle_root_events(login, S, [Event]);
 
-login({ui, {submitted, passinp}}, S = #state{}) ->
+login({ui, {submitted, passinp}}, S = #?MODULE{}) ->
     login(check_creds, S);
 
-login({ui, {clicked, loginbtn}}, S = #state{}) ->
+login({ui, {clicked, loginbtn}}, S = #?MODULE{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
+login(check_creds, S = #?MODULE{root = Root, duo = Duo, frontend = {FPid,_}}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
@@ -357,13 +369,14 @@ login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
             login(invalid_login, S);
         _ ->
             Creds = #{username => Username, password => Password},
-            case krb_auth:authenticate(Creds) of
-                true ->
+            case {true, #{user => Username, groups => []}} of %krb_auth:authenticate(Creds) of
+                {true, UInfo} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
-                    #state{duoid = DuoId, peer = Peer} = S,
-                    Sess0 = #session{user = Username, domain = Domain, password = Password},
-                    conn_ra:annotate(FPid, #{session => Sess0#session{password = snip}}),
-                    S1 = S#state{sess = Sess0},
+                    #?MODULE{duoid = DuoId, peer = Peer} = S,
+                    Sess0 = #{user => Username, domain => Domain,
+                        password => Password},
+                    conn_ra:annotate(FPid, #{session => Sess0#{ip => undefined, password => snip}}),
+                    S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
                     Mode = rdpproxy:config([frontend, mode], pool),
                     Args = #{
                         <<"username">> => Username,
@@ -374,21 +387,15 @@ login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
                     case duo:preauth(Duo, Args) of
                         {ok, Resp = #{<<"result">> := <<"enroll">>}} when EnrollIsAllow ->
                             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
-                            case Mode of
-                                nms_choice -> choose(setup_ui, S1);
-                                pool -> waiting(setup_ui, S1)
-                            end;
+                            mfa(allow, S1);
                         {ok, Resp = #{<<"result">> := <<"enroll">>}} ->
                             login(mfa_enroll, S1);
-                        {ok, #{<<"result">> := <<"allow">>}} ->
+                        {ok, _} -> %#{<<"result">> := <<"allow">>}} ->
                             lager:debug("duo bypass for ~p", [Username]),
-                            case Mode of
-                                nms_choice -> choose(setup_ui, S1);
-                                pool -> waiting(setup_ui, S1)
-                            end;
+                            mfa(allow, S1);
                         {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
                             lager:debug("sending ~p to duo screen", [Username]),
-                            mfa(setup_ui, S1#state{duodevs = Devs});
+                            mfa(setup_ui, S1#?MODULE{duodevs = Devs});
                         Else ->
                             lager:debug("duo preauth else for ~p: ~p", [Username, Else]),
                             login(invalid_login, S)
@@ -399,7 +406,7 @@ login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
             end
     end;
 
-login(invalid_login, S = #state{}) ->
+login(invalid_login, S = #?MODULE{}) ->
     BgColour = bgcolour(),
     LightRed = {1.0, 0.8, 0.8},
     Events = [
@@ -413,7 +420,7 @@ login(invalid_login, S = #state{}) ->
     ],
     handle_root_events(login, S, Events);
 
-login(mfa_enroll, S = #state{}) ->
+login(mfa_enroll, S = #?MODULE{}) ->
     BgColour = bgcolour(),
     LightRed = {1.0, 0.8, 0.8},
     Events = [
@@ -427,14 +434,14 @@ login(mfa_enroll, S = #state{}) ->
     ],
     handle_root_events(login, S, Events).
 
-mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
+mfa(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 2 * (H div 3)};
         false -> {ui_hlayout, H}
     end,
-    DuoDevs = S#state.duodevs,
+    DuoDevs = S#?MODULE.duodevs,
     Events0 = [
         { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
@@ -575,9 +582,9 @@ mfa(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     {Root3, Orders2, []} = ui:handle_events(Root2, Events1),
     send_orders(S, Orders2),
 
-    {next_state, mfa, S#state{root = Root3}};
+    {next_state, mfa, S#?MODULE{root = Root3}};
 
-mfa({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
+mfa({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -605,15 +612,15 @@ mfa({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
             {next_state, mfa, S}
     end;
 
-mfa({ui, {submitted, {otpinp, DevId}}}, S = #state{root = Root}) ->
+mfa({ui, {submitted, {otpinp, DevId}}}, S = #?MODULE{root = Root}) ->
     [Txt] = ui:select(Root, [{id, {otpinp, DevId}}]),
     V = ui_textinput:get_text(Txt),
     mfa({submit_otp, DevId, V}, S);
-mfa({ui, {clicked, {otpbtn, DevId}}}, S = #state{root = Root}) ->
+mfa({ui, {clicked, {otpbtn, DevId}}}, S = #?MODULE{root = Root}) ->
     [Txt] = ui:select(Root, [{id, {otpinp, DevId}}]),
     V = ui_textinput:get_text(Txt),
     mfa({submit_otp, DevId, V}, S);
-mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudcore = TsudCore, sess = #session{user = U}, frontend = F}) ->
+mfa({ui, {clicked, {pushbtn, DevId}}}, S = #?MODULE{duo = Duo, peer = Peer, tsudcore = TsudCore, sess = #{user := U}, frontend = F}) ->
     [Name|_] = binary:split(unicode:characters_to_binary(
         TsudCore#tsud_core.client_name, {utf16, little}, utf8), [<<0>>]),
     [Maj,Min] = TsudCore#tsud_core.version,
@@ -642,17 +649,13 @@ mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudco
         {ok, #{<<"result">> := <<"deny">>}} ->
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
-            Mode = rdpproxy:config([frontend, mode], pool),
-            case Mode of
-                nms_choice -> choose(setup_ui, S);
-                pool -> waiting(setup_ui, S)
-            end;
+            mfa(allow, S);
         {error, _} ->
             mfa(mfa_deny, S);
         {ok, #{<<"txid">> := TxId}} ->
-            mfa_waiting(setup_ui, S#state{duotx = TxId})
+            mfa_waiting(setup_ui, S#?MODULE{duotx = TxId})
     end;
-mfa({ui, {clicked, {smsbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {smsbtn, DevId}}}, S = #?MODULE{duo = Duo, peer = Peer, sess = #{user := U}}) ->
     Args = #{
         <<"username">> => U,
         <<"ipaddr">> => Peer,
@@ -662,7 +665,7 @@ mfa({ui, {clicked, {smsbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = 
     _ = duo:auth(Duo, Args),
     lager:debug("sending duo sms"),
     {next_state, mfa, S};
-mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
+mfa({ui, {clicked, {callbtn, DevId}}}, S = #?MODULE{duo = Duo, peer = Peer, sess = #{user := U}}) ->
     Args = #{
         <<"username">> => U,
         <<"ipaddr">> => Peer,
@@ -675,18 +678,14 @@ mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess =
         {ok, #{<<"result">> := <<"deny">>}} ->
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
-            Mode = rdpproxy:config([frontend, mode], pool),
-            case Mode of
-                nms_choice -> choose(setup_ui, S);
-                pool -> waiting(setup_ui, S)
-            end;
+            mfa(allow, S);
         {error, _} ->
             mfa(mfa_deny, S);
         {ok, #{<<"txid">> := TxId}} ->
-            mfa_waiting(setup_ui, S#state{duotx = TxId})
+            mfa_waiting(setup_ui, S#?MODULE{duotx = TxId})
     end;
 
-mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
+mfa({submit_otp, DevId, Code}, S = #?MODULE{duo = Duo, peer = Peer, sess = #{user := U}}) ->
     Args = #{
         <<"username">> => U,
         <<"ipaddr">> => Peer,
@@ -701,14 +700,27 @@ mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, peer = Peer, sess = #sessio
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("used an OTP code, proceeding"),
-            Mode = rdpproxy:config([frontend, mode], pool),
-            case Mode of
-                nms_choice -> choose(setup_ui, S);
-                pool -> waiting(setup_ui, S)
+            mfa(allow, S)
+    end;
+
+mfa(allow, S = #?MODULE{uinfo = UInfo}) ->
+    Mode = rdpproxy:config([frontend, mode], pool),
+    case Mode of
+        nms_choice ->
+            choose(setup_ui, S#?MODULE{pool = nms});
+        pool ->
+            {ok, Pools} = session_ra:get_pools_for(UInfo),
+            case Pools of
+                [#{id := Pool, choice := false}] ->
+                    waiting(setup_ui, S#?MODULE{pool = Pool});
+                [#{id := Pool, choice := true}] ->
+                    choose(setup_ui, S#?MODULE{pool = Pool});
+                _ ->
+                    choose_pool(setup_ui, S)
             end
     end;
 
-mfa(mfa_deny, S = #state{}) ->
+mfa(mfa_deny, S = #?MODULE{}) ->
     LightRed = {1.0, 0.8, 0.8},
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
@@ -721,15 +733,14 @@ mfa(mfa_deny, S = #state{}) ->
     ],
     handle_root_events(mfa, S, Events).
 
-mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
+mfa_waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 200};
         false -> {ui_hlayout, H}
     end,
-    Msg = rdpproxy:config([ui, instruction_mfa_waiting]),
-    MsgLines = length(binary:matches(Msg, [<<"\n">>])) + 1,
+    {Msg, MsgLines} = get_msg(instruction_mfa_waiting, S),
     Events = [
         { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
@@ -769,14 +780,14 @@ mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(S, Orders),
     Fsm = self(),
-    #state{duotx = TxId, duo = Duo} = S,
+    #?MODULE{duotx = TxId, duo = Duo} = S,
     Pid = spawn_link(fun () ->
         mfa_waiter(Fsm, Duo, TxId)
     end),
     lager:debug("spawned mfa_waiter ~p", [Pid]),
-    {next_state, mfa_waiting, S#state{root = Root2}};
+    {next_state, mfa_waiting, S#?MODULE{root = Root2}};
 
-mfa_waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
+mfa_waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -804,20 +815,16 @@ mfa_waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Ro
             {next_state, mfa_waiting, S}
     end;
 
-mfa_waiting({auth_finished, Result}, S = #state{}) ->
+mfa_waiting({auth_finished, Result}, S = #?MODULE{}) ->
     case Result of
         #{<<"result">> := <<"allow">>} ->
             lager:debug("mfa finished, proceeding"),
-            Mode = rdpproxy:config([frontend, mode], pool),
-            case Mode of
-                nms_choice -> choose(setup_ui, S);
-                pool -> waiting(setup_ui, S)
-            end;
+            mfa(allow, S);
         _ ->
             mfa(setup_ui, S)
     end;
 
-mfa_waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+mfa_waiting({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
@@ -836,7 +843,7 @@ mfa_waiter(Fsm, Duo, TxId) ->
             mfa_waiter(Fsm, Duo, TxId)
     end.
 
-choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
+choose(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     Helpdesk = rdpproxy:config([ui, helpdesk]),
@@ -878,26 +885,85 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     {Root2, Orders, []} = ui:handle_events(Root, Events0),
     send_orders(S, Orders),
 
-    #state{nms = Nms, sess = #session{user = U}} = S,
-    Devs0 = case nms:get_user_hosts(Nms, U) of
-        {ok, D} -> D;
-        Err ->
-            lager:debug("failed to get user hosts from nms: ~p", [Err]),
-            []
+    #?MODULE{sess = #{user := U}} = S,
+
+    Devs0 = case S of
+        #?MODULE{nms = undefined, pool = Pool} ->
+            {ok, Prefs} = session_ra:get_prefs(Pool, U),
+            Devs = lists:map(fun (Ip) ->
+                {ok, Dev} = session_ra:get_host(Ip),
+                #{handles := Hdls} = Dev,
+                HDs = lists:map(fun (Hdl) ->
+                    {ok, HD} = session_ra:get_handle(Hdl),
+                    HD
+                end, Hdls),
+                Dev#{handles => HDs}
+            end, Prefs),
+            AnyAvail = lists:any(fun (Dev) ->
+                #{handles := HDs, report_state := {St, When}} = Dev,
+                OtherUserHDs = lists:filter(fun
+                    (#{user := U}) -> false;
+                    (_) -> true
+                end, HDs),
+                case {OtherUserHDs, St} of
+                    {[], available} -> true;
+                    _ -> false
+                end
+            end, Devs),
+            lists:map(fun (Dev) ->
+                #{ip := Ip, handles := HDs, report_state := {St, When},
+                  role := Role, desc := Desc0} = Dev,
+                OtherUserHDs = lists:filter(fun
+                    (#{user := U}) -> false;
+                    (_) -> true
+                end, HDs),
+                Busy = case {AnyAvail, OtherUserHDs, St} of
+                    % Always allow selecting available machines with 0 handles
+                    {_, [], available} -> false;
+                    % Allow selecting machines with active handles if
+                    % there are no available machines
+                    {false, _, available} -> false;
+                    _ -> true
+                end,
+                RoleBin = if
+                    is_binary(Role) -> Role;
+                    is_atom(Role) -> atom_to_binary(Role, latin1)
+                end,
+                Desc1 = case Desc0 of
+                    none -> <<"IP address: ", Ip/binary>>;
+                    _ -> Desc0
+                end,
+                Desc2 = <<Desc1/binary, "\nRole: ", RoleBin/binary>>,
+                Dev#{desc => Desc2, busy => Busy}
+            end, Devs);
+
+        #?MODULE{nms = Nms} ->
+            case nms:get_user_hosts(Nms, U) of
+                {ok, D} ->
+                    lists:map(fun (Dev) ->
+                        #{<<"hostname">> := Hostname, <<"ip">> := Ip} = Dev,
+                        DescText = case Dev of
+                            #{<<"building">> := Building, <<"room">> := null} ->
+                                <<Building/binary, ", unknown room\n",
+                                  "IP address: ", Ip/binary>>;
+                            #{<<"building">> := Building, <<"room">> := Room} ->
+                                <<Building/binary, ", Room ", Room/binary, "\n",
+                                  "IP address: ", Ip/binary>>;
+                            #{<<"desc">> := Desc} -> Desc
+                        end,
+                        #{hostname => Hostname, ip => Ip, desc => DescText,
+                          busy => false}
+                    end, D);
+                Err ->
+                    lager:debug("failed to get user hosts from nms: ~p", [Err]),
+                    []
+            end
     end,
     Devs1 = lists:sublist(Devs0, 6),
-    lager:debug("giving ~p choice menu: ~p", [U, Devs1]),
+    lager:debug("giving ~p choice menu: ~p", [U, [Ip || #{ip := Ip} <- Devs1]]),
 
     Events1 = lists:foldl(fun (Dev, Acc) ->
-        #{<<"hostname">> := Hostname,
-          <<"ip">> := Ip} = Dev,
-        DescText = case Dev of
-            #{<<"building">> := Building, <<"room">> := null} ->
-                <<Building/binary, ", unknown room\nIP address: ", Ip/binary>>;
-            #{<<"building">> := Building, <<"room">> := Room} ->
-                <<Building/binary, ", Room ", Room/binary, "\nIP address: ", Ip/binary>>;
-            #{<<"desc">> := Desc} -> Desc
-        end,
+        #{hostname := Hostname, ip := Ip, desc := DescText} = Dev,
         Acc ++ [
                 { [{id, loginlyt}],     {add_child,
                                          #widget{id = {devlyt, Ip},
@@ -922,27 +988,35 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
                                                   mod = ui_label,
                                                   size = {220.0, 30.0}}} },
                 { [{id, {devtlbl, Ip}}],  {init, left, DescText} },
-                { [{id, {devtlbl, Ip}}],  {set_bgcolor, BgColour} },
-
+                { [{id, {devtlbl, Ip}}],  {set_bgcolor, BgColour} }
+        ] ++ (case Dev of
+            #{busy := false} -> [
                 { [{id, {devlyt, Ip}}], {add_child,
                                              #widget{id = {choosebtn, Ip, Hostname},
                                                      mod = ui_button,
                                                      size = {120.0, 28.0}}} },
                 { [{id, {choosebtn, Ip, Hostname}}],  {init, <<"Connect", 0>>} }
-        ]
+                ];
+            _ -> [
+                { [{id, {devlyt, Ip}}], {add_child,
+                                             #widget{id = {busylbl, Ip},
+                                                     mod = ui_label,
+                                                     size = {120.0, 18.0}}} },
+                { [{id, {busylbl, Ip}}],  {init, center, <<"(Currently busy)">>} },
+                { [{id, {busylbl, Ip}}],  {set_bgcolor, BgColour} }
+            ]
+        end)
     end, [], Devs1),
     Events2 = case Devs1 of
         [] ->
+            {Msg, MsgLines} = get_msg(no_machines, S),
             Events1 ++ [
                 { [{id, instru}],       {set_text, <<"\n">>} },
                 { [{id, loginlyt}],     {add_child,
                                          #widget{id = nohostslbl,
                                                  mod = ui_label,
-                                                 size = {400.0, 60.0}}} },
-                { [{id, nohostslbl}],   {init, left,
-                                          <<"Sorry, we have no computers recorded as belonging to your\n"
-                                            "user (", U/binary, ").\n\n"
-                                            "If you think this is incorrect, please email ", Helpdesk/binary, ".">>} },
+                                                 size = {400.0, 15.0 * MsgLines}}} },
+                { [{id, nohostslbl}],   {init, left, Msg} },
                 { [{id, nohostslbl}],   {set_bgcolor, BgColour} },
 
                 { [{id, loginlyt}],     {add_child,
@@ -953,12 +1027,19 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
             ];
         _ -> Events1
     end,
-    {Root3, Orders2, []} = ui:handle_events(Root2, Events2),
+    Events3 = Events2 ++ [
+        { [{id, loginlyt}],     {add_child,
+                                 #widget{id = refreshbtn,
+                                         mod = ui_button,
+                                         size = {120.0, 36.0}}} },
+        { [{id, refreshbtn}],     {init, <<"Refresh list", 0>>} }
+    ],
+    {Root3, Orders2, []} = ui:handle_events(Root2, Events3),
     send_orders(S, Orders2),
 
-    {next_state, choose, S#state{root = Root3}};
+    {next_state, choose, S#?MODULE{root = Root3}};
 
-choose({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
+choose({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -986,18 +1067,155 @@ choose({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
             {next_state, choose, S}
     end;
 
-choose({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+choose({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S};
 
-choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #state{nms = Nms, sess = Sess0}) ->
-    Sess1 = Sess0#session{host = Ip, port = 3389},
-    Ret = nms:wol(Nms, Hostname),
-    lager:debug("wol for ~p returned ~p", [Hostname, Ret]),
-    waiting(setup_ui, S#state{sess = Sess1}).
+choose({ui, {clicked, refreshbtn}}, S = #?MODULE{}) ->
+    choose(setup_ui, S);
 
-waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
+choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0}) ->
+    Sess1 = Sess0#{ip => Ip, port => 3389},
+    _ = session_ra:create_host(#{
+        pool => default,
+        ip => Ip,
+        port => 3389,
+        hostname => Hostname}),
+    lager:debug("user chose host ~p/~p", [Hostname, Ip]),
+    case S of
+        #?MODULE{nms = undefined} -> ok;
+        #?MODULE{nms = Nms} ->
+            Ret = nms:wol(Nms, Hostname),
+            lager:debug("wol for ~p returned ~p", [Hostname, Ret])
+    end,
+    waiting(setup_ui, S#?MODULE{sess = Sess1}).
+
+choose_pool(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
+    BgColour = bgcolour(),
+    {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
+    {TopMod, LH} = case (H > W) of
+        true -> {ui_vlayout, 2 * (H div 3)};
+        false -> {ui_hlayout, H}
+    end,
+    {InstrText, InstrLines} = get_msg(instruction_choose_pool, S),
+    Events0 = [
+        { [{id, root}],     {set_bgcolor, BgColour} },
+        { [{id, root}],     {add_child,
+                             #widget{id = hlayout,
+                                     mod = TopMod}} },
+        { [{id, hlayout}],  init },
+        { [{id, hlayout}],  {set_halign, center} },
+        { [{id, hlayout}],  {set_margin, 100} },
+        { [{id, hlayout}],  {add_child,
+                             #widget{id = logo,
+                                     mod = ui_image}} },
+        { [{id, hlayout}],  {add_child,
+                             #widget{id = loginlyt,
+                                     mod = ui_vlayout,
+                                     size = {440.0, LH}}} },
+        { [{id, loginlyt}], init },
+        { [{id, loginlyt}], {add_child,
+                             #widget{id = subbanner,
+                                     mod = ui_label,
+                                     size = {400.0, 36.0}}} },
+        { [{id, loginlyt}], {add_child,
+                             #widget{id = instru,
+                                     mod = ui_label,
+                                     size = {400.0, 15.0 * InstrLines}}} },
+
+        { [{id, logo}],         {init, logopath()} },
+        { [{id, subbanner}],    {init, left, rdpproxy:config([ui, title_choose_pool])} },
+        { [{id, subbanner}],    {set_bgcolor, BgColour} },
+        { [{id, instru}],       {init, left, InstrText} },
+        { [{id, instru}],       {set_bgcolor, BgColour} }
+    ],
+    {Root2, Orders, []} = ui:handle_events(Root, Events0),
+    send_orders(S, Orders),
+
+    #?MODULE{uinfo = UInfo = #{user := U}} = S,
+    {ok, Pools0} = session_ra:get_pools_for(UInfo),
+    Pools1 = lists:sublist(Pools0, 6),
+    lager:debug("giving ~p pool choice menu: ~p", [U, Pools1]),
+
+    Events1 = lists:foldl(fun (PD, Acc) ->
+        #{id := Id, title := Title, help_text := HelpText} = PD,
+        HelpTextLines = length(binary:matches(HelpText, [<<"\n">>])) + 1,
+        Acc ++ [
+                { [{id, loginlyt}],     {add_child,
+                                         #widget{id = {devlyt, Id},
+                                                 mod = ui_hlayout,
+                                                 size = {420.0, 80.0}}} },
+                { [{id, {devlyt, Id}}],  init },
+
+                { [{id, {devlyt, Id}}], {add_child,
+                                         #widget{id = {devlbllyt, Id},
+                                                 mod = ui_vlayout,
+                                                 size = {250.0, 80.0}}} },
+                { [{id, {devlbllyt, Id}}], init },
+
+                { [{id, {devlbllyt, Id}}],  {add_child,
+                                          #widget{id = {devlbl, Id},
+                                                  mod = ui_label,
+                                                  size = {220.0, 19.0}}} },
+                { [{id, {devlbl, Id}}],  {init, left, Title} },
+                { [{id, {devlbl, Id}}],  {set_bgcolor, BgColour} },
+                { [{id, {devlbllyt, Id}}],  {add_child,
+                                          #widget{id = {devtlbl, Id},
+                                                  mod = ui_label,
+                                                  size = {220.0, 15.0 * HelpTextLines}}} },
+                { [{id, {devtlbl, Id}}],  {init, left, HelpText} },
+                { [{id, {devtlbl, Id}}],  {set_bgcolor, BgColour} },
+
+                { [{id, {devlyt, Id}}], {add_child,
+                                             #widget{id = {choosebtn, Id},
+                                                     mod = ui_button,
+                                                     size = {120.0, 28.0}}} },
+                { [{id, {choosebtn, Id}}],  {init, <<"Connect", 0>>} }
+        ]
+    end, [], Pools1),
+    {Root3, Orders2, []} = ui:handle_events(Root2, Events1),
+    send_orders(S, Orders2),
+
+    {next_state, choose_pool, S#?MODULE{root = Root3}};
+
+choose_pool({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
+    case Evt of
+        #ts_inpevt_mouse{point = P} ->
+            Event = { [{contains, P}], Evt },
+            handle_root_events(choose_pool, S, [Event]);
+        #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
+            rdp_server:close(F),
+            {stop, normal, S};
+        #ts_inpevt_key{code = tab, action = down} ->
+            Event = { [{id, root}], focus_next },
+            handle_root_events(choose_pool, S, [Event]);
+        #ts_inpevt_key{code = caps} ->
+            Event = { [{tag, focusable}], Evt },
+            handle_root_events(choose_pool, S, [Event]);
+        #ts_inpevt_sync{} ->
+            Event = { [{tag, focusable}], Evt },
+            handle_root_events(choose_pool, S, [Event]);
+        #ts_inpevt_key{code = _Code} ->
+            Event = { [{tag, focus}], Evt },
+            handle_root_events(choose_pool, S, [Event]);
+        #ts_inpevt_unicode{code = _Code} ->
+            Event = { [{tag, focus}], Evt },
+            handle_root_events(choose_pool, S, [Event]);
+        _ ->
+            {next_state, choose_pool, S}
+    end;
+
+choose_pool({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
+    lager:debug("user clicked closebtn"),
+    rdp_server:close(F),
+    {stop, normal, S};
+
+choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
+    waiting(setup_ui, S#?MODULE{pool = Id}).
+
+waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
@@ -1049,11 +1267,12 @@ waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     ],
     {Root2, Orders, []} = ui:handle_events(Root, Events),
     send_orders(S, Orders),
-    {ok, AllocPid} = host_alloc_fsm:start(S#state.sess),
+    #?MODULE{pool = Pool, sess = Sess} = S,
+    {ok, AllocPid} = host_alloc_fsm:start(Pool, Sess),
     MRef = erlang:monitor(process, AllocPid),
-    {next_state, waiting, S#state{root = Root2, allocpid = AllocPid, allocmref = MRef}};
+    {next_state, waiting, S#?MODULE{root = Root2, allocpid = AllocPid, allocmref = MRef}};
 
-waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
+waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
         #ts_inpevt_mouse{point = P} ->
             Event = { [{contains, P}], Evt },
@@ -1081,11 +1300,10 @@ waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root})
             {next_state, waiting, S}
     end;
 
-waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F = {FPid, _}, allocpid = AllocPid}) ->
-    #session{cookie = Cookie, host = Ip, user = U} = Sess,
-    SessId = cookie_ra:session_id(Sess),
-    erlang:demonitor(S#state.allocmref),
-    #state{nms = Nms} = S,
+waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, _}, allocpid = AllocPid}) ->
+    #{handle := Cookie, ip := Ip, user := U, sessid := SessId} = Sess,
+    erlang:demonitor(S#?MODULE.allocmref),
+    #?MODULE{nms = Nms} = S,
     case Nms of
         undefined -> ok;
         _ ->
@@ -1094,72 +1312,75 @@ waiting({allocated_session, AllocPid, Sess}, S = #state{frontend = F = {FPid, _}
                 Else -> lager:debug("nms:bump_count returned ~p", [Else])
             end
     end,
-    conn_ra:annotate(FPid, #{session => Sess#session{password = snip}}),
+    conn_ra:annotate(FPid, #{session => Sess#{password => snip}}),
     rdp_server:send_redirect(F, Cookie, SessId,
         rdpproxy:config([frontend, hostname], <<"localhost">>)),
     {stop, normal, S};
 
-waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #state{frontend = F, allocpid = AllocPid}) ->
+waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #?MODULE{frontend = F, allocpid = AllocPid}) ->
     LightRed = {1.0, 0.8, 0.8},
+    {Msg, MsgLines} = get_msg(err_ssl, S),
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
         { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
-            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0 * MsgLines}}
             } },
-        { [{id, badlbl}],   {init, center, <<"Host has RDP TLS disabled, contact helpdesk@eait.uq.edu.au">>} },
+        { [{id, badlbl}],   {init, center, Msg} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
     handle_root_events(waiting, S, Events);
 
-waiting({alloc_persistent_error, AllocPid, down}, S = #state{frontend = F, allocpid = AllocPid}) ->
+waiting({alloc_persistent_error, AllocPid, down}, S = #?MODULE{frontend = F, allocpid = AllocPid}) ->
     LightRed = {1.0, 0.8, 0.8},
+    {Msg, MsgLines} = get_msg(err_unreach, S),
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
         { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
-            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0 * MsgLines}}
             } },
-        { [{id, badlbl}],   {init, center, <<"Host appears to be off, trying to wake it up...">>} },
+        { [{id, badlbl}],   {init, center, Msg} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
-    #state{nms = Nms, sess = #session{host = Ip}} = S,
+    #?MODULE{nms = Nms, sess = #{ip := Ip}} = S,
     Ret = nms:wol(Nms, Ip),
     lager:debug("wol for ~p returned ~p", [Ip, Ret]),
     handle_root_events(waiting, S, Events);
 
-waiting({alloc_persistent_error, AllocPid, refused}, S = #state{frontend = F, allocpid = AllocPid}) ->
+waiting({alloc_persistent_error, AllocPid, refused}, S = #?MODULE{frontend = F, allocpid = AllocPid}) ->
     LightRed = {1.0, 0.8, 0.8},
+    {Msg, MsgLines} = get_msg(err_refused, S),
     Events = [
         { [{id, loginlyt}], {remove_child, {id, badlbl}} },
         { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
-            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0 * MsgLines}}
             } },
-        { [{id, badlbl}],   {init, center, <<"Host not listening for RDP, contact helpdesk@eait.uq.edu.au">>} },
+        { [{id, badlbl}],   {init, center, Msg} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
     ],
     handle_root_events(waiting, S, Events);
 
-waiting({'DOWN', MRef, process, _, _}, S = #state{allocmref = MRef}) ->
-    {ok, AllocPid} = host_alloc_fsm:start(S#state.sess),
+waiting({'DOWN', MRef, process, _, _}, S = #?MODULE{allocmref = MRef}) ->
+    {ok, AllocPid} = host_alloc_fsm:start(S#?MODULE.sess),
     NewMRef = erlang:monitor(process, AllocPid),
-    {next_state, waiting, S#state{allocpid = AllocPid, allocmref = NewMRef}};
+    {next_state, waiting, S#?MODULE{allocpid = AllocPid, allocmref = NewMRef}};
 
-waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+waiting({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
 
-handle_info({'DOWN', MRef, process, _, _}, _State, S = #state{mref = MRef}) ->
+handle_info({'DOWN', MRef, process, _, _}, _State, S = #?MODULE{mref = MRef}) ->
     {stop, normal, S};
-handle_info(Msg, State, S = #state{}) ->
+handle_info(Msg, State, S = #?MODULE{}) ->
     ?MODULE:State(Msg, S).
 
 %% @private
-terminate(_Reason, _State, #state{duo = undefined, nms = undefined}) ->
+terminate(_Reason, _State, #?MODULE{duo = undefined, nms = undefined}) ->
     ok;
-terminate(_Reason, _State, #state{duo = Duo, nms = Nms}) ->
+terminate(_Reason, _State, #?MODULE{duo = Duo, nms = Nms}) ->
     duo:stop(Duo),
     case Nms of
         undefined -> ok;

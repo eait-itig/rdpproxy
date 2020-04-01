@@ -63,16 +63,22 @@ content_types_provided(Req, S = #state{}) ->
     {Types, Req, S}.
 
 resource_exists(Req, S = #state{ip = undefined}) ->
-    case pool_ra:get_prefs(new_user) of
-        {ok, Ips} when length(Ips) > 0 ->
-            Metas = [begin {ok, Meta} = pool_ra:get_host(Ip), Meta end
-                || Ip <- Ips],
-            {true, Req, S#state{meta = Metas}};
+    {ok, Pools} = session_ra:get_pools_for(#{user => nobody, groups => []}),
+    case Pools of
+        [Pool | _] ->
+            case session_ra:get_prefs(Pool, nobody) of
+                {ok, Ips} when length(Ips) > 0 ->
+                    Metas = [begin {ok, Meta} = session_ra:get_host(Ip), Meta end
+                        || Ip <- Ips],
+                    {true, Req, S#state{meta = Metas}};
+                _ ->
+                    {false, Req, S}
+            end;
         _ ->
             {false, Req, S}
     end;
 resource_exists(Req, S = #state{ip = Ip}) ->
-    case pool_ra:get_host(Ip) of
+    case session_ra:get_host(Ip) of
         {ok, Meta} -> {true, Req, S#state{meta = Meta}};
         _ -> {false, Req, S}
     end.
@@ -127,7 +133,9 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
         _ -> UpdateChanges0
     end,
     UpdateChanges2 = UpdateChanges1#{
-        hypervisor => PeerBin
+        hypervisor => PeerBin,
+        ip => Ip,
+        port => 3389
     },
     {ok, IpInet} = inet:parse_address(binary_to_list(Ip)),
     UpdateChanges3 = case http_api:rev_lookup(IpInet) of
@@ -138,20 +146,19 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
             Hostname = Ip,
             UpdateChanges2
     end,
-    case pool_ra:get_host(Ip) of
+    case session_ra:get_host(Ip) of
         {ok, Meta0} ->
-            ok = pool_ra:update(Ip, UpdateChanges3);
+            ok = session_ra:update_host(UpdateChanges3);
         {error, not_found} ->
-            ok = pool_ra:create(Ip, Hostname, 3389),
-            ok = pool_ra:update(Ip, UpdateChanges3),
-            ok = pool_ra:enable(Ip),
-            {ok, Meta0} = pool_ra:get_host(Ip)
+            ok = session_ra:create_host(UpdateChanges3),
+            ok = session_ra:enable_host(Ip),
+            {ok, Meta0} = session_ra:get_host(Ip)
     end,
     case Input of
         #{status := <<"available">>} ->
-            ok = pool_ra:status_report(Ip, available);
+            ok = session_ra:status_report(Ip, available);
         _ ->
-            ok = pool_ra:status_report(Ip, busy)
+            ok = session_ra:status_report(Ip, busy)
     end,
     NewSessions = case {Input, Meta0} of
         {#{sessions := ISessions}, #{session_history := SHist}} ->
@@ -170,7 +177,7 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
             type => TypeI,
             id => IdI
         },
-        ok = pool_ra:add_session(Ip, Sess)
+        ok = session_ra:add_session(Ip, Sess)
     end, NewSessions),
     {true, Req2, S}.
 

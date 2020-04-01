@@ -76,32 +76,27 @@
             {instruction_choose, <<"Please choose which computer to connect to:">>},
 
             %%
+            %% Text for the pool chooser screen
+            %%
+            {title_choose_pool, <<"What type of computer?">>},
+            {instruction_choose_pool, <<"You have access to more than one type of computer.\nPlease choose which type to connect to:">>},
+
+            %%
+            %% Error message when no machines are available on "choice" page
+            %%
+            {no_machines, <<"Sorry, we have no computers recorded as belonging to your\nuser (%USER%).\n\nIf you think this is incorrect, please email %HELPDESK%.">>},
+
+            %%
+            %% Error messages for different host problems
+            %%
+            {err_ssl, <<"Host has RDP TLS disabled, contact %HELPDESK%">>},
+            {err_unreach, <<"Host appears to be off, trying to wake it up...">>},
+            {err_refused, <<"Host not listening for RDP, contact %HELPDESK%">>},
+
+            %%
             %% Helpdesk email, used in some error messages
             %%
             {helpdesk, <<"helpdesk@eait.uq.edu.au">>}
-        ]},
-        {pool, [
-            %%
-            %% Are hosts in the pool for the use of a single user at a time, or
-            %% can they host multiple?
-            %%
-            {mode, single_user},
-            %{mode, multi_user},
-
-            %%
-            %% Minimum reservation time (single_user). Never hand out a
-            %% backend to a different user until this long as elapsed since
-            %% it was last handed out to someone else. (seconds)
-            %%
-            {min_rsvd_time, 900},
-
-            %%
-            %% Reservation expiry time (single_user). Try not to allocate a
-            %% different user to a machine if someone has reserved it in the
-            %% last (this many) sec. Also try to take the user back to the same
-            %% machine only if their session has been seen this recently.
-            %%
-            {rsv_expire_time, 57600}
         ]},
         {backend, [
             %%

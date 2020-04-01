@@ -30,7 +30,6 @@
 -module(conn_ra).
 -behaviour(ra_machine).
 
--include("session.hrl").
 -include_lib("rdp_proto/include/rdpp.hrl").
 
 -export([init/1, apply/3, state_enter/2]).
@@ -42,8 +41,8 @@
 start() ->
     Config = application:get_env(rdpproxy, ra, []),
     Nodes = proplists:get_value(nodes, Config, [node() | nodes()]),
-    Servers = [{conn_ra, N} || N <- Nodes],
-    ra:start_or_restart_cluster("conn_ra", {module, ?MODULE, #{}}, Servers).
+    Servers = [{?MODULE, N} || N <- Nodes],
+    ra:start_or_restart_cluster(?MODULE_STRING, {module, ?MODULE, #{}}, Servers).
 
 tick() ->
     Time = erlang:system_time(second),
@@ -52,10 +51,10 @@ tick() ->
         Else -> Else
     end.
 
-register_conn(Peer = {_Ip, _Port}, Session = #session{}) ->
+register_conn(Peer = {_Ip, _Port}, Session = #{}) ->
     Now = erlang:system_time(second),
-    Id = cookie_ra:gen_key(),
-    Session1 = Session#session{password = snip},
+    Id = session_ra:gen_key(),
+    Session1 = Session#{password => snip},
     case ra:process_command(conn_ra, {register, Id, self(), Now, Peer, Session1}) of
         {ok, {error, duplicate_id}, _Leader} -> register(Peer, Session1);
         {ok, Ret, _Leader} -> Ret;
@@ -92,12 +91,12 @@ annotate(SessIdOrPid, Data) ->
     started => integer(),
     stopped => integer(),
     peer => {inet:ip_address(), integer()},
-    session => #session{},
+    session => session_ra:handle_state_nopw(),
     tsuds => [term()],
     ts_info => #ts_info{}
     }.
 
--record(state, {
+-record(?MODULE, {
     users = #{} :: #{username() => queue:queue(conn_id())},
     watches = #{} :: #{pid() => conn_id()},
     conns = #{} :: #{conn_id() => conn()},
@@ -105,13 +104,13 @@ annotate(SessIdOrPid, Data) ->
     }).
 
 init(_Config) ->
-    #state{}.
+    #?MODULE{}.
 
-apply(#{index := Idx}, {tick, T}, S0 = #state{}) ->
-    S1 = S0#state{last_time = T},
+apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{}) ->
+    S1 = S0#?MODULE{last_time = T},
     {S1, ok, [{release_cursor, Idx, S1}]};
 
-apply(_Meta, {get_user, User}, S0 = #state{conns = C0, users = U0}) ->
+apply(_Meta, {get_user, User}, S0 = #?MODULE{conns = C0, users = U0}) ->
     UL0 = case U0 of
         #{User := Q} -> queue:to_list(Q);
         _ -> []
@@ -122,7 +121,7 @@ apply(_Meta, {get_user, User}, S0 = #state{conns = C0, users = U0}) ->
     end, UL0),
     {S0, {ok, UL1}, []};
 
-apply(_Meta, get_all_open, S0 = #state{conns = C0, watches = W0}) ->
+apply(_Meta, get_all_open, S0 = #?MODULE{conns = C0, watches = W0}) ->
     WL0 = maps:values(W0),
     WL1 = lists:foldl(fun(Id, Acc) ->
         case C0 of
@@ -133,7 +132,7 @@ apply(_Meta, get_all_open, S0 = #state{conns = C0, watches = W0}) ->
     {S0, {ok, WL1}, []};
 
 apply(_Meta, {register, Id, Pid, T, Peer, Session},
-        S0 = #state{conns = C0, users = U0, watches = W0}) ->
+        S0 = #?MODULE{conns = C0, users = U0, watches = W0}) ->
     case {C0, W0} of
         {#{Id := _}, _} ->
             {S0, {error, duplicate_id}, []};
@@ -149,7 +148,7 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
                 session => Session
             },
             C1 = C0#{Id => Conn},
-            #session{user = User} = Session,
+            #{user := User} = Session,
             UQ0 = case U0 of
                 #{User := Q} -> Q;
                 _ -> queue:new()
@@ -167,11 +166,11 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
             end,
             U1 = U0#{User => UQ2},
             W1 = W0#{Pid => Id},
-            S1 = S0#state{conns = C2, users = U1, watches = W1},
+            S1 = S0#?MODULE{conns = C2, users = U1, watches = W1},
             {S1, {ok, Id}, [{monitor, process, Pid}]}
     end;
 
-apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #state{conns = C0, watches = W0}) ->
+apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0}) ->
     Id = if
         is_pid(IdOrPid) ->
             case W0 of
@@ -192,17 +191,17 @@ apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #state{conns = C0, watches = W0})
             end, Conn0, Map),
             Conn2 = Conn1#{updated => T},
             C1 = C0#{Id => Conn2},
-            S1 = S0#state{conns = C1},
+            S1 = S0#?MODULE{conns = C1},
             {S1, ok, []};
         _ ->
             {S0, {error, not_found}, []}
     end;
 
-apply(_Meta, {down, Pid, noconnection}, S0 = #state{}) ->
+apply(_Meta, {down, Pid, noconnection}, S0 = #?MODULE{}) ->
     {S0, ok, [{monitor, node, node(Pid)}]};
 
 apply(_Meta, {down, Pid, _Reason},
-        S0 = #state{watches = W0, conns = C0, last_time = T}) ->
+        S0 = #?MODULE{watches = W0, conns = C0, last_time = T}) ->
     #{Pid := Id} = W0,
     C1 = case C0 of
         #{Id := Conn0} ->
@@ -211,10 +210,10 @@ apply(_Meta, {down, Pid, _Reason},
         _ -> C0
     end,
     W1 = maps:remove(Pid, W0),
-    S1 = S0#state{watches = W1, conns = C1},
+    S1 = S0#?MODULE{watches = W1, conns = C1},
     {S1, ok, []};
 
-apply(_Meta, {nodeup, Node}, S0 = #state{watches = W0}) ->
+apply(_Meta, {nodeup, Node}, S0 = #?MODULE{watches = W0}) ->
     Effects = maps:fold(fun
         (Pid, _Id, Acc) when (node(Pid) =:= Node) ->
             [{monitor, process, Pid} | Acc];
@@ -222,11 +221,11 @@ apply(_Meta, {nodeup, Node}, S0 = #state{watches = W0}) ->
     end, [], W0),
     {S0, ok, Effects};
 
-apply(_Meta, {nodedown, _}, S0 = #state{}) ->
+apply(_Meta, {nodedown, _}, S0 = #?MODULE{}) ->
     {S0, ok, []}.
 
-state_enter(leader, #state{watches = W0}) ->
+state_enter(leader, #?MODULE{watches = W0}) ->
     maps:fold(fun (Pid, _Id, Acc) ->
         [{monitor, process, Pid} | Acc]
     end, [], W0);
-state_enter(_, #state{}) -> [].
+state_enter(_, #?MODULE{}) -> [].
