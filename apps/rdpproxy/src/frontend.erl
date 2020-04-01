@@ -56,6 +56,18 @@
 init(Peer) ->
     {ok, #state{peer = Peer}}.
 
+retry_start_backend(0, _, _, _, LastErr) -> LastErr;
+retry_start_backend(N, Srv, HostBin, Port, _) ->
+    case backend:start_link(Srv, HostBin, Port) of
+        {ok, Backend} ->
+            {ok, Backend};
+        Err ->
+            timer:sleep(200),
+            retry_start_backend(N - 1, Srv, HostBin, Port, Err)
+    end.
+retry_start_backend(Srv, HostBin, Port) ->
+    retry_start_backend(2, Srv, HostBin, Port, none).
+
 handle_connect(Cookie, _Protocols, Srv, S = #state{}) ->
     case cookie_ra:get(Cookie) of
         {ok, Sess = #session{
@@ -63,7 +75,7 @@ handle_connect(Cookie, _Protocols, Srv, S = #state{}) ->
             lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
                 [S#state.peer, Cookie, User, HostBin]),
             {ok, ConnId} = conn_ra:register_conn(S#state.peer, Sess),
-            {ok, Backend} = backend:start_link(Srv, binary_to_list(HostBin), Port),
+            {ok, Backend} = retry_start_backend(Srv, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),
             {accept_raw, S#state{session = Sess, backend = Backend, connid = ConnId}};
 
