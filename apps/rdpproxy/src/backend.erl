@@ -41,7 +41,7 @@ start_link(Frontend, Address, Port) ->
     gen_fsm:start_link(?MODULE, [Frontend, Address, Port], [{timeout, 10000}]).
 
 probe(Address, Port) ->
-    case (catch gen_fsm:start(?MODULE, [self(), Address, Port], [{timeout, 5000}])) of
+    case (catch gen_fsm:start(?MODULE, [self(), Address, Port], [{timeout, 7000}])) of
         {ok, Pid} ->
             MonRef = monitor(process, Pid),
             probe_rx(Pid, MonRef, {error, bad_host});
@@ -79,7 +79,7 @@ init([Srv, Address, Port, OrigCr]) ->
     random:seed(os:timestamp()),
     #x224_cr{src = Us} = OrigCr,
     lager:debug("backend for frontend ~p", [Srv]),
-    case gen_tcp:connect(Address, Port, [binary, {active, once}, {nodelay, true}], 2000) of
+    case gen_tcp:connect(Address, Port, [binary, {active, once}, {nodelay, true}], 5000) of
         {ok, Sock} ->
             lager:debug("backend connected to ~p", [Address]),
             Cr = OrigCr#x224_cr{rdp_protocols = [ssl], rdp_cookie = none},
