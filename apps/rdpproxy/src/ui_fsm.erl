@@ -59,6 +59,7 @@ start_link(Frontend) ->
 %% @private
 init([Frontend]) ->
     {Pid, _} = Frontend,
+    lager:debug("ui_fsm for frontend ~p", [Pid]),
     gen_fsm:send_event(Pid, {subscribe, self()}),
     MRef = monitor(process, Pid),
     {ok, startup, #state{mref = MRef, frontend = Frontend}, 0}.
