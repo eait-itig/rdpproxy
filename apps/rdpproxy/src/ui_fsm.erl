@@ -195,6 +195,7 @@ no_redir({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}
             Event = { [{contains, P}], Evt },
             handle_root_events(no_redir, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
@@ -211,6 +212,7 @@ no_redir({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}
     end;
 
 no_redir({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+    lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
 
@@ -297,6 +299,7 @@ login({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
             Event = { [{contains, P}], Evt },
             handle_root_events(login, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
@@ -383,6 +386,7 @@ login(check_creds, S = #state{root = Root, duo = Duo, frontend = {FPid,_}}) ->
                                 pool -> waiting(setup_ui, S1)
                             end;
                         {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
+                            lager:debug("sending ~p to duo screen", [Username]),
                             mfa(setup_ui, S1#state{duodevs = Devs});
                         Else ->
                             lager:debug("duo preauth else for ~p: ~p", [Username, Else]),
@@ -578,6 +582,7 @@ mfa({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
             Event = { [{contains, P}], Evt },
             handle_root_events(mfa, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
@@ -608,7 +613,8 @@ mfa({ui, {clicked, {otpbtn, DevId}}}, S = #state{root = Root}) ->
     V = ui_textinput:get_text(Txt),
     mfa({submit_otp, DevId, V}, S);
 mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudcore = TsudCore, sess = #session{user = U}, frontend = F}) ->
-    Name = unicode:characters_to_binary(TsudCore#tsud_core.client_name, {utf16, little}, utf8),
+    [Name|_] = binary:split(unicode:characters_to_binary(
+        TsudCore#tsud_core.client_name, {utf16, little}, utf8), [<<0>>]),
     [Maj,Min] = TsudCore#tsud_core.version,
     Version = iolist_to_binary(
         io_lib:format("version ~B.~B build ~w",
@@ -630,6 +636,7 @@ mfa({ui, {clicked, {pushbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, tsudco
         <<"async">> => <<"true">>,
         <<"pushinfo">> => PushInfo
     },
+    lager:debug("doing duo push: ~p", [Args]),
     case duo:auth(Duo, Args) of
         {ok, #{<<"result">> := <<"deny">>}} ->
             mfa(mfa_deny, S);
@@ -652,6 +659,7 @@ mfa({ui, {clicked, {smsbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = 
         <<"device">> => DevId
     },
     _ = duo:auth(Duo, Args),
+    lager:debug("sending duo sms"),
     {next_state, mfa, S};
 mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess = #session{user = U}}) ->
     Args = #{
@@ -661,6 +669,7 @@ mfa({ui, {clicked, {callbtn, DevId}}}, S = #state{duo = Duo, peer = Peer, sess =
         <<"device">> => DevId,
         <<"async">> => <<"true">>
     },
+    lager:debug("doing duo phone call"),
     case duo:auth(Duo, Args) of
         {ok, #{<<"result">> := <<"deny">>}} ->
             mfa(mfa_deny, S);
@@ -685,10 +694,12 @@ mfa({submit_otp, DevId, Code}, S = #state{duo = Duo, peer = Peer, sess = #sessio
     },
     case duo:auth(Duo, Args) of
         {ok, #{<<"result">> := <<"deny">>}} ->
+            lager:debug("user gave an invalid OTP code"),
             mfa(mfa_deny, S);
         {error, _} ->
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
+            lager:debug("used an OTP code, proceeding"),
             Mode = rdpproxy:config([frontend, mode], pool),
             case Mode of
                 nms_choice -> choose(setup_ui, S);
@@ -758,9 +769,10 @@ mfa_waiting(setup_ui, S = #state{w = W, h = H, format = Fmt}) ->
     send_orders(S, Orders),
     Fsm = self(),
     #state{duotx = TxId, duo = Duo} = S,
-    spawn_link(fun () ->
+    Pid = spawn_link(fun () ->
         mfa_waiter(Fsm, Duo, TxId)
     end),
+    lager:debug("spawned mfa_waiter ~p", [Pid]),
     {next_state, mfa_waiting, S#state{root = Root2}};
 
 mfa_waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root}) ->
@@ -769,6 +781,7 @@ mfa_waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Ro
             Event = { [{contains, P}], Evt },
             handle_root_events(mfa_waiting, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
@@ -793,6 +806,7 @@ mfa_waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Ro
 mfa_waiting({auth_finished, Result}, S = #state{}) ->
     case Result of
         #{<<"result">> := <<"allow">>} ->
+            lager:debug("mfa finished, proceeding"),
             Mode = rdpproxy:config([frontend, mode], pool),
             case Mode of
                 nms_choice -> choose(setup_ui, S);
@@ -803,6 +817,7 @@ mfa_waiting({auth_finished, Result}, S = #state{}) ->
     end;
 
 mfa_waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+    lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
 
@@ -865,9 +880,12 @@ choose(setup_ui, S = #state{frontend = F, w = W, h = H, format = Fmt}) ->
     #state{nms = Nms, sess = #session{user = U}} = S,
     Devs0 = case nms:get_user_hosts(Nms, U) of
         {ok, D} -> D;
-        _ -> []
+        Err ->
+            lager:debug("failed to get user hosts from nms: ~p", [Err]),
+            []
     end,
     Devs1 = lists:sublist(Devs0, 6),
+    lager:debug("giving ~p choice menu: ~p", [U, Devs1]),
 
     Events1 = lists:foldl(fun (Dev, Acc) ->
         #{<<"hostname">> := Hostname,
@@ -945,6 +963,7 @@ choose({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
             Event = { [{contains, P}], Evt },
             handle_root_events(choose, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
@@ -967,6 +986,7 @@ choose({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}}) ->
     end;
 
 choose({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+    lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S};
 
@@ -1038,6 +1058,7 @@ waiting({input, F = {Pid,_}, Evt}, S = #state{frontend = {Pid,_}, root = _Root})
             Event = { [{contains, P}], Evt },
             handle_root_events(waiting, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
         #ts_inpevt_key{code = tab, action = down} ->
@@ -1125,6 +1146,7 @@ waiting({'DOWN', MRef, process, _, _}, S = #state{allocmref = MRef}) ->
     {next_state, waiting, S#state{allocpid = AllocPid, allocmref = NewMRef}};
 
 waiting({ui, {clicked, closebtn}}, S = #state{frontend = F}) ->
+    lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
 
