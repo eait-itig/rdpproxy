@@ -174,7 +174,10 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
 apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #state{conns = C0, watches = W0}) ->
     Id = if
         is_pid(IdOrPid) ->
-            #{IdOrPid := I} = W0, I;
+            case W0 of
+                #{IdOrPid := I} -> I;
+                _ -> unknown
+            end;
         true -> IdOrPid
     end,
     case C0 of
