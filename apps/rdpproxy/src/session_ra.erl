@@ -746,7 +746,7 @@ apply(_Meta, {disable_host, T, Ip}, S0 = #?MODULE{meta = M0}) ->
     end;
 
 apply(_Meta, {get_prefs, T, Pool, User, SortVsn}, S0 = #?MODULE{}) ->
-    UserPrefs = user_existing_hosts(User, S0),
+    UserPrefs = user_existing_hosts(User, Pool, S0),
     Prefs0 = sort_prefs(SortVsn, Pool, S0),
     Prefs1 = filter_min_reserved(T, User, Prefs0, S0),
     Prefs2 = UserPrefs ++ (Prefs1 -- UserPrefs),
@@ -757,7 +757,7 @@ apply(_Meta, {reserve, T, Hdl, Pool, SortVsn, User, Pid}, S0 = #?MODULE{hdls = H
         #{Hdl := _} ->
             {S0, {error, duplicate_handle}, []};
         _ ->
-            case user_existing_hosts(User, S0) of
+            case user_existing_hosts(User, Pool, S0) of
                 [Ip | _] ->
                     {S1, H, Effects} = begin_handle(Hdl, T, User, Ip, Pid, S0),
                     {S1, {ok, Hdl, H}, Effects};
@@ -1051,8 +1051,8 @@ filter_min_reserved(T, User, Ips, #?MODULE{meta = M0, hdls = H0}) ->
         end
     end, Ips).
 
--spec user_existing_hosts(username(), #?MODULE{}) -> [ipstr()].
-user_existing_hosts(User, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
+-spec user_existing_hosts(username(), pool(), #?MODULE{}) -> [ipstr()].
+user_existing_hosts(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
     % First, look at all recent reservations which belong to this user.
     % If we have any, keep track of the last handle we had each host (so
     % we can see if it was an error or a good alloc)
@@ -1100,19 +1100,19 @@ user_existing_hosts(User, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
     ToGive = maps:fold(fun
         (Ip, {none, #{state := ok}}, Acc) ->
             case M0 of
-                #{Ip := #{enabled := true, handles := [Hdl|_]}} ->
+                #{Ip := #{pool := Pool, enabled := true, handles := [Hdl|_]}} ->
                     case H0 of
                         #{Hdl := #{user := User}} -> [Ip | Acc];
                         #{Hdl := #{}} -> Acc;
                         _ -> [Ip | Acc]
                     end;
-                #{Ip := #{enabled := true}} ->
+                #{Ip := #{pool := Pool, enabled := true}} ->
                     [Ip | Acc];
                 _ -> Acc
             end;
         (Ip, {Hdl, #{state := ok}}, Acc) ->
             case M0 of
-                #{Ip := #{enabled := true, handles := [Hdl|_]}} ->
+                #{Ip := #{pool := Pool, enabled := true, handles := [Hdl|_]}} ->
                     [Ip | Acc];
                 _ -> Acc
             end;
