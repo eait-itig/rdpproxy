@@ -369,7 +369,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, frontend = {FPid,_}}) ->
             login(invalid_login, S);
         _ ->
             Creds = #{username => Username, password => Password},
-            case {true, #{user => Username, groups => []}} of %krb_auth:authenticate(Creds) of
+            case krb_auth:authenticate(Creds) of
                 {true, UInfo} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #?MODULE{duoid = DuoId, peer = Peer} = S,
@@ -390,7 +390,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, frontend = {FPid,_}}) ->
                             mfa(allow, S1);
                         {ok, Resp = #{<<"result">> := <<"enroll">>}} ->
                             login(mfa_enroll, S1);
-                        {ok, _} -> %#{<<"result">> := <<"allow">>}} ->
+                        {ok, #{<<"result">> := <<"allow">>}} ->
                             lager:debug("duo bypass for ~p", [Username]),
                             mfa(allow, S1);
                         {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
