@@ -65,7 +65,7 @@ content_types_provided(Req, S = #state{}) ->
 resource_exists(Req, S = #state{ip = undefined}) ->
     {ok, Pools} = session_ra:get_pools_for(#{user => nobody, groups => []}),
     case Pools of
-        [Pool | _] ->
+        [#{id := Pool} | _] ->
             case session_ra:get_prefs(Pool, nobody) of
                 {ok, Ips} when length(Ips) > 0 ->
                     Metas = [begin {ok, Meta} = session_ra:get_host(Ip), Meta end
