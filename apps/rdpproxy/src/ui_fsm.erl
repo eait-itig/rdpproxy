@@ -1213,7 +1213,15 @@ choose_pool({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     {stop, normal, S};
 
 choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
-    waiting(setup_ui, S#?MODULE{pool = Id}).
+    case session_ra:get_pool(Id) of
+        {ok, #{choice := false}} ->
+            waiting(setup_ui, S#?MODULE{pool = Id});
+        {ok, #{choice := true}} ->
+            choose(setup_ui, S#?MODULE{pool = Id});
+        _ ->
+            timer:sleep(1000),
+            choose_pool({ui, {clicked, {choosebtn, Id}}}, S)
+    end.
 
 waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),
