@@ -159,7 +159,7 @@ pool_list([]) ->
         #{id := Id, title := Title, mode := Mode, report_roles := Roles,
           min_rsvd_time := MinRsvdTime, hdl_expiry_time := HdlExpTime,
           choice := Choice} = PD,
-        Hs = [H || H = #{pool := Id} <- Hosts],
+        Hs = [H || H = #{pool := PoolId} <- Hosts, PoolId =:= Id],
         Hdls = lists:foldl(fun (#{handles := HostHdls}, Acc0) ->
             lists:foldl(fun (Hdl, Acc1) ->
                 {ok, #{state := St}} = session_ra:get_handle(Hdl),
