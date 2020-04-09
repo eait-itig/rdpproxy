@@ -1060,9 +1060,12 @@ user_existing_hosts(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
         #{User := UH0} ->
             lists:foldl(fun (Hdl, Acc) ->
                 case H0 of
+                    #{Hdl := HD = #{ip := Ip, state := probe}} ->
+                        Acc;
                     #{Hdl := HD = #{ip := Ip}} ->
                         Acc#{Ip => {Hdl, HD}};
-                    _ -> Acc
+                    _ ->
+                        Acc
                 end
             end, #{}, queue:to_list(UH0));
         _ ->
@@ -1079,14 +1082,14 @@ user_existing_hosts(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
         case queue:out_r(SHist0) of
             {{value, #{user := User, time := T0}}, _} ->
                 case Acc of
-                    #{Ip := {_Hdl, #{time := TH}}} when (TH >= T0) ->
+                    #{Ip := {_Hdl, #{start := TH}}} when (TH >= T0) ->
                         Acc;
                     _ ->
                         Acc#{Ip => {none, #{time => T0, state => ok}}}
                 end;
             {{value, #{time := T0}}, _} ->
                 case Acc of
-                    #{Ip := {_Hdl, #{time := TH, state := ok}}}
+                    #{Ip := {_Hdl, #{start := TH, state := ok}}}
                             when ((TH + 900) < T0) ->
                         maps:remove(Ip, Acc);
                     _ ->
