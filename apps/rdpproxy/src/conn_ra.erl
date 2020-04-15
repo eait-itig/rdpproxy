@@ -93,7 +93,8 @@ annotate(SessIdOrPid, Data) ->
     peer => {inet:ip_address(), integer()},
     session => session_ra:handle_state_nopw(),
     tsuds => [term()],
-    ts_info => #ts_info{}
+    ts_info => #ts_info{},
+    on_user => boolean()
     }.
 
 -record(?MODULE, {
@@ -145,7 +146,8 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
                 started => T,
                 updated => T,
                 peer => Peer,
-                session => Session
+                session => Session,
+                on_user => true
             },
             C1 = C0#{Id => Conn},
             #{user := User} = Session,
@@ -161,8 +163,17 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
             {UQ2, C2} = case queue:len(UQ1) of
                 N when (N > Limit) ->
                     {{value, OldId}, QQ} = queue:out(UQ1),
-                    {QQ, maps:remove(OldId, C1)};
-                _ -> {UQ1, C1}
+                    case C1 of
+                        #{OldId := #{stopped := _}} ->
+                            {QQ, maps:remove(OldId, C1)};
+                        #{OldId := OldConn0} ->
+                            OldConn1 = OldConn0#{on_user => false},
+                            {QQ, C1#{OldId => OldConn1}};
+                        _ ->
+                            {QQ, C1}
+                    end;
+                _ ->
+                    {UQ1, C1}
             end,
             U1 = U0#{User => UQ2},
             W1 = W0#{Pid => Id},
@@ -187,6 +198,7 @@ apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0
                 (started, _, Acc) -> Acc;
                 (updated, _, Acc) -> Acc;
                 (peer, _, Acc) -> Acc;
+                (on_user, _, Acc) -> Acc;
                 (K, V, Acc) -> Acc#{K => V}
             end, Conn0, Map),
             Conn2 = Conn1#{updated => T},
@@ -204,6 +216,8 @@ apply(_Meta, {down, Pid, _Reason},
         S0 = #?MODULE{watches = W0, conns = C0, last_time = T}) ->
     #{Pid := Id} = W0,
     C1 = case C0 of
+        #{Id := #{on_user := false}} ->
+            maps:remove(Id, C0);
         #{Id := Conn0} ->
             Conn1 = Conn0#{stopped => T},
             C0#{Id => Conn1};
