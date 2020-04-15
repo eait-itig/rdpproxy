@@ -17,8 +17,8 @@
             %% Allocation mode: nms_choice = look up user in NMS, present
             %% choose menu. pool = allocate from the pool of known machines.
             %%
-            {mode, nms_choice},
-            %{mode, pool},
+            %{mode, nms_choice},
+            {mode, pool},
 
             %%
             %% Options for TLS from proxy => clients
@@ -234,9 +234,9 @@
             %% Options for talking to NMS (if using nms_choice mode, ignored
             %% in pool mode)
             %%
-            {api_host, "nms.eait.uq.edu.au"},
-            {key_id, <<"rdpproxy">>},
-            {privkey_path, "etc/nms_key.pem"}
+            %{api_host, "nms.eait.uq.edu.au"},
+            %{key_id, <<"rdpproxy">>},
+            %{privkey_path, "etc/nms_key.pem"}
         ]}
     ]},
 
