@@ -663,7 +663,8 @@ apply(_Meta, {create_host, T, Map}, S0 = #?MODULE{meta = M0, pools = P0}) ->
                     case Ps of
                         [P | _] -> P;
                         _ -> undefined
-                    end
+                    end;
+                _ -> undefined
             end,
             case P0 of
                 #{Pool := _PConf} ->
