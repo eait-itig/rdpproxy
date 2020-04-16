@@ -923,6 +923,9 @@ choose(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
                     % Allow selecting machines with active handles if
                     % there are no available machines
                     {false, _, available} -> false;
+                    % Also allow selecting "busy" machines without any active
+                    % handles if nothing else is available
+                    {false, [], busy} -> false;
                     _ -> true
                 end,
                 RoleBin = if
