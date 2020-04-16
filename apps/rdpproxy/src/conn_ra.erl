@@ -56,7 +56,7 @@ register_conn(Peer = {_Ip, _Port}, Session = #{}) ->
     Id = session_ra:gen_key(),
     Session1 = Session#{password => snip},
     case ra:process_command(conn_ra, {register, Id, self(), Now, Peer, Session1}) of
-        {ok, {error, duplicate_id}, _Leader} -> register(Peer, Session1);
+        {ok, {error, duplicate_id}, _Leader} -> register_conn(Peer, Session1);
         {ok, Ret, _Leader} -> Ret;
         Else -> Else
     end.

@@ -227,7 +227,11 @@
             %%
             %% Interpret "enroll" responses from Duo as bypass
             %%
-            {enroll_is_allow, true}
+            {enroll_is_allow, true},
+            %%
+            %% Lifetime of "remember me" entries in seconds
+            %%
+            {remember_time, 36000}
         ]},
         {nms_api, [
             %%

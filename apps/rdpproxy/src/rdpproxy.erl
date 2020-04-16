@@ -43,6 +43,11 @@ dpath_resolve(Plist, [Key | Rest]) when is_atom(Key) or is_binary(Key) ->
 dpath_resolve(List, [Index | Rest]) when is_integer(Index) ->
     dpath_resolve(lists:nth(Index, List), Rest).
 
+-type dpath() :: [key()].
+-type key() :: atom().
+
+-spec config(key() | dpath()) -> term() | undefined.
+-spec config(key() | dpath(), term()) -> term().
 config(KeyOrDPath) -> config(KeyOrDPath, undefined).
 config([ConfigKey | DPath], Default) ->
     case application:get_env(rdpproxy, ConfigKey) of
@@ -76,8 +81,10 @@ init(_Args) ->
 
     _ = (catch conn_ra:start()),
     _ = (catch session_ra:start()),
+    _ = (catch remember_ra:start()),
     {ok, _} = timer:apply_interval(5000, conn_ra, tick, []),
     {ok, _} = timer:apply_interval(10000, session_ra, tick, []),
+    {ok, _} = timer:apply_interval(30000, remember_ra, tick, []),
 
     {ok, {
         #{strategy => one_for_one, intensity => 60, period => 60},

@@ -36,7 +36,7 @@
 -export([initiation/2, proxy_intercept/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
--spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()}.
+-spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()} | {error, any()}.
 start_link(Frontend, Address, Port) ->
     gen_fsm:start_link(?MODULE, [Frontend, Address, Port], [{timeout, 10000}]).
 

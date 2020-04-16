@@ -45,6 +45,7 @@
     host_get/1,
     host_list/1,
     host_test/1,
+    host_update/1,
     host_enable/1,
     host_disable/1,
     host_help/1,
@@ -212,6 +213,9 @@ pool_get([NameStr]) ->
             io:format("MODE          ~s\n", [Mode]),
             io:format("CHOICE        ~s\n", [Choice]),
             io:format("ROLES         ~s\n", [RolesStr]),
+            io:format("TIMEOUTS      min_rsvd_time: ~B\n"
+                      "              hdl_expiry_time: ~B\n",
+                      [MinRsvdTime, HdlExpTime]),
             io:format("\nHELP TEXT:\n~s\n", [HelpText]),
             io:format("\nACL:\n"),
             lists:foreach(fun (AclEnt) ->
@@ -606,7 +610,7 @@ conn_user(["-v", User]) ->
         "~10.. s  ~9.. s\n",
     lists:foreach(fun (Conn) ->
         #{id := Id, started := Started, peer := {Ip, Port},
-          session := #{user := U, ip := Backend}} = Conn,
+          session := #{ip := Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         case Conn of
             #{tsuds := Tsuds} ->

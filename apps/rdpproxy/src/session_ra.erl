@@ -67,6 +67,7 @@ gen_key(N) ->
     [element(crypto:rand_uniform(1, size(A)+1), A) | gen_key(N - 1)].
 gen_key() -> list_to_binary(gen_key(16)).
 
+-type ra_error() :: {error, term()} | {timeout, ra:server_id()}.
 
 start() ->
     Config = application:get_env(rdpproxy, ra, []),
@@ -74,7 +75,7 @@ start() ->
     Servers = [{?MODULE, N} || N <- Nodes],
     ra:start_or_restart_cluster(?MODULE_STRING, {module, ?MODULE, #{}}, Servers).
 
--spec tick() -> ok.
+-spec tick() -> ok | ra_error().
 tick() ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {tick, T}) of
@@ -82,14 +83,14 @@ tick() ->
         Else -> Else
     end.
 
--spec get_all_pools() -> [pool_config()].
+-spec get_all_pools() -> {ok, [pool_config()]} | ra_error().
 get_all_pools() ->
     case ra:process_command(?MODULE, get_all_pools) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec get_pool(pool()) -> {ok, pool_config()} | {error, not_found}.
+-spec get_pool(pool()) -> {ok, pool_config()} | {error, not_found} | ra_error().
 get_pool(Pool) ->
     case ra:process_command(?MODULE, {get_pool, Pool}) of
         {ok, Res, _Leader} -> Res;
@@ -101,56 +102,56 @@ get_pool(Pool) ->
     groups => [#sid{}]
     }.
 
--spec get_pools_for(user_info()) -> {ok, [pool()]}.
+-spec get_pools_for(user_info()) -> {ok, [pool_config()]} | ra_error().
 get_pools_for(UserInfo) ->
     case ra:process_command(?MODULE, {get_pools_for, UserInfo}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec create_pool(pool_config()) -> ok | {error, already_exists}.
+-spec create_pool(pool_config()) -> ok | {error, already_exists} | ra_error().
 create_pool(PoolMap) ->
     case ra:process_command(?MODULE, {create_pool, PoolMap}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec update_pool(pool_config()) -> ok | {error, not_found}.
+-spec update_pool(pool_config()) -> ok | {error, not_found} | ra_error().
 update_pool(PoolMap) ->
     case ra:process_command(?MODULE, {update_pool, PoolMap}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec get_all_hosts() -> {ok, [host_state()]}.
+-spec get_all_hosts() -> {ok, [host_state()]} | ra_error().
 get_all_hosts() ->
     case ra:process_command(?MODULE, get_all_hosts) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec get_all_handles() -> {ok, [handle()]}.
+-spec get_all_handles() -> {ok, [handle()]} | ra_error().
 get_all_handles() ->
     case ra:process_command(?MODULE, get_all_handles) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec get_user_handles(username()) -> {ok, [handle()]} | {error, not_found}.
+-spec get_user_handles(username()) -> {ok, [handle()]} | ra_error().
 get_user_handles(User) ->
     case ra:process_command(?MODULE, {get_user_handles, User}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec get_host(ipstr()) -> {ok, host_state()}.
+-spec get_host(ipstr()) -> {ok, host_state()} | ra_error().
 get_host(Ip) ->
     case ra:process_command(?MODULE, {get_host, Ip}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
 
--spec claim_handle(handle()) -> {ok, handle_state_plain()} | {error, not_found} | {error, bad_hdl_state}.
+-spec claim_handle(handle()) -> {ok, handle_state_plain()} | {error, not_found} | {error, bad_hdl_state} | ra_error().
 claim_handle(Hdl) ->
     Pid = self(),
     T = erlang:system_time(second),
@@ -167,7 +168,7 @@ claim_handle(Hdl) ->
         Else -> Else
     end.
 
--spec get_handle(handle()) -> {ok, handle_state_nopw()} | {error, not_found}.
+-spec get_handle(handle()) -> {ok, handle_state_nopw()} | {error, not_found} | ra_error().
 get_handle(Hdl) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {get_handle, T, Hdl}) of
@@ -178,7 +179,7 @@ get_handle(Hdl) ->
         Else -> Else
     end.
 
--spec create_host(host_state()) -> ok | {error, invalid_pool} | {error, duplicate_ip}.
+-spec create_host(host_state()) -> ok | {error, invalid_pool} | {error, duplicate_ip} | ra_error().
 create_host(Data) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {create_host, T, Data}) of
@@ -186,7 +187,7 @@ create_host(Data) ->
         Else -> Else
     end.
 
--spec update_host(host_state()) -> ok | {error, not_found}.
+-spec update_host(host_state()) -> ok | {error, not_found} | ra_error().
 update_host(Data) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {update_host, T, Data}) of
@@ -194,7 +195,7 @@ update_host(Data) ->
         Else -> Else
     end.
 
--spec enable_host(ipstr()) -> ok | {error, not_found} | {error, already_enabled}.
+-spec enable_host(ipstr()) -> ok | {error, not_found} | {error, already_enabled} | ra_error().
 enable_host(Ip) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {enable_host, T, Ip}) of
@@ -202,7 +203,7 @@ enable_host(Ip) ->
         Else -> Else
     end.
 
--spec disable_host(ipstr()) -> ok | {error, not_found} | {error, already_disabled}.
+-spec disable_host(ipstr()) -> ok | {error, not_found} | {error, already_disabled} | ra_error().
 disable_host(Ip) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {disable_host, T, Ip}) of
@@ -210,7 +211,7 @@ disable_host(Ip) ->
         Else -> Else
     end.
 
--spec reserve(pool(), username()) -> {ok, Hdl :: binary(), handle_state()} | {error, no_hosts}.
+-spec reserve(pool(), username()) -> {ok, Hdl :: binary(), handle_state()} | {error, no_hosts} | ra_error().
 reserve(Pool, User) ->
     T = erlang:system_time(second),
     Pid = self(),
@@ -221,7 +222,7 @@ reserve(Pool, User) ->
         Else -> Else
     end.
 
--spec reserve_ip(username(), ipstr()) -> {ok, Hdl :: binary(), handle_state()} | {error, not_found}.
+-spec reserve_ip(username(), ipstr()) -> {ok, Hdl :: binary(), handle_state()} | {error, not_found} | ra_error().
 reserve_ip(User, Ip) ->
     T = erlang:system_time(second),
     Pid = self(),
@@ -231,7 +232,7 @@ reserve_ip(User, Ip) ->
         Else -> Else
     end.
 
--spec get_prefs(pool(), username()) -> {ok, [ipstr()]}.
+-spec get_prefs(pool(), username()) -> {ok, [ipstr()]} | ra_error().
 get_prefs(Pool, User) ->
     T = erlang:system_time(second),
     SortVsn = ?SORT_VSN,
@@ -240,7 +241,7 @@ get_prefs(Pool, User) ->
         Else -> Else
     end.
 
--spec allocate(handle(), handle_state_plain()) -> {ok, handle_state()} | {error, not_found}.
+-spec allocate(handle(), handle_state_plain()) -> {ok, handle_state()} | {error, not_found} | ra_error().
 allocate(Hdl, HD0) ->
     T = erlang:system_time(second),
     Id = crypto:rand_uniform(0, 1 bsl 31),
@@ -252,7 +253,7 @@ allocate(Hdl, HD0) ->
         Else -> Else
     end.
 
--spec alloc_error(handle(), any()) -> ok | {error, not_found}.
+-spec alloc_error(handle(), any()) -> ok | {error, not_found} | ra_error().
 alloc_error(Hdl, Err) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {alloc_error, T, Hdl, Err}) of
@@ -260,7 +261,7 @@ alloc_error(Hdl, Err) ->
         Else -> Else
     end.
 
--spec host_error(ipstr(), any()) -> ok | {error, not_found}.
+-spec host_error(ipstr(), any()) -> ok | {error, not_found} | ra_error().
 host_error(Ip, Err) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {host_error, T, Ip, Err}) of
@@ -268,7 +269,7 @@ host_error(Ip, Err) ->
         Else -> Else
     end.
 
--spec add_session(ipstr(), session_record()) -> ok | {error, not_found}.
+-spec add_session(ipstr(), session_record()) -> ok | {error, not_found} | ra_error().
 add_session(Ip, SessMap) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {add_session, T, Ip, SessMap}) of
@@ -276,7 +277,7 @@ add_session(Ip, SessMap) ->
         Else -> Else
     end.
 
--spec status_report(ipstr(), available | busy) -> ok | {error, not_found}.
+-spec status_report(ipstr(), available | busy) -> ok | {error, not_found} | ra_error().
 status_report(Ip, State) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {status_report, T, Ip, State}) of
@@ -1062,7 +1063,7 @@ user_existing_hosts(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
         #{User := UH0} ->
             lists:foldl(fun (Hdl, Acc) ->
                 case H0 of
-                    #{Hdl := HD = #{ip := Ip, state := probe}} ->
+                    #{Hdl := #{ip := _Ip, state := probe}} ->
                         Acc;
                     #{Hdl := HD = #{ip := Ip}} ->
                         Acc#{Ip => {Hdl, HD}};

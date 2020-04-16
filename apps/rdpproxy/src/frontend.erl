@@ -45,10 +45,10 @@
     peer :: term(),
     session :: session_ra:handle_state() | undefined,
     subs = [] :: [pid()],
-    backend :: pid(),
+    backend :: pid() | undefined,
     intercept = true :: boolean(),
     matched_sessid = false :: boolean(),
-    connid :: binary()
+    connid :: binary() | undefined
     }).
 
 init(Peer) ->
@@ -154,7 +154,6 @@ handle_raw_data(Bin, _Srv, S = #?MODULE{intercept = true, backend = B}) ->
                     lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCluster1)]),
                     Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),
 
-                    PrefColor0 = TsudCore0#tsud_core.color,
                     Colors1 = ['32bpp' | Colors0],
                     Color1 = '32bpp',
                     Caps1 = ['want_32bpp' | Caps0],
