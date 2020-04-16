@@ -143,43 +143,53 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
             Hostname = iolist_to_binary([HostnameStr]),
             UpdateChanges2#{hostname => Hostname};
         _ ->
-            Hostname = Ip,
             UpdateChanges2
     end,
-    case session_ra:get_host(Ip) of
+    Status = case session_ra:get_host(Ip) of
         {ok, Meta0} ->
-            ok = session_ra:update_host(UpdateChanges3);
+            session_ra:update_host(UpdateChanges3);
         {error, not_found} ->
-            ok = session_ra:create_host(UpdateChanges3),
-            ok = session_ra:enable_host(Ip),
-            {ok, Meta0} = session_ra:get_host(Ip)
+            case session_ra:create_host(UpdateChanges3) of
+                ok ->
+                    ok = session_ra:enable_host(Ip),
+                    {ok, Meta0} = session_ra:get_host(Ip),
+                    ok;
+                Other ->
+                    Meta0 = #{},
+                    Other
+            end
     end,
-    case Input of
-        #{status := <<"available">>} ->
-            ok = session_ra:status_report(Ip, available);
+    case Status of
+        ok ->
+            case Input of
+                #{status := <<"available">>} ->
+                    ok = session_ra:status_report(Ip, available);
+                _ ->
+                    ok = session_ra:status_report(Ip, busy)
+            end,
+            NewSessions = case {Input, Meta0} of
+                {#{sessions := ISessions}, #{session_history := SHist}} ->
+                    new_sessions(ISessions, queue:to_list(SHist));
+                _ -> []
+            end,
+            lists:foreach(fun (InpSess) ->
+                #{'session-id' := IdI, start := StartI, user := UserI} = InpSess,
+                TypeI = case InpSess of
+                    #{type := T} -> T;
+                    _ -> <<"other">>
+                end,
+                Sess = #{
+                    time => StartI,
+                    user => UserI,
+                    type => TypeI,
+                    id => IdI
+                },
+                ok = session_ra:add_session(Ip, Sess)
+            end, NewSessions),
+            {true, Req2, S};
         _ ->
-            ok = session_ra:status_report(Ip, busy)
-    end,
-    NewSessions = case {Input, Meta0} of
-        {#{sessions := ISessions}, #{session_history := SHist}} ->
-            new_sessions(ISessions, queue:to_list(SHist));
-        _ -> []
-    end,
-    lists:foreach(fun (InpSess) ->
-        #{'session-id' := IdI, start := StartI, user := UserI} = InpSess,
-        TypeI = case InpSess of
-            #{type := T} -> T;
-            _ -> <<"other">>
-        end,
-        Sess = #{
-            time => StartI,
-            user => UserI,
-            type => TypeI,
-            id => IdI
-        },
-        ok = session_ra:add_session(Ip, Sess)
-    end, NewSessions),
-    {true, Req2, S}.
+            {false, Req2, S}
+    end.
 
 new_sessions(Inputs, PoolRecords) ->
     lists:sort(fun (InpA, InpB) ->
