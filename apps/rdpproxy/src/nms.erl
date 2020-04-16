@@ -32,6 +32,7 @@
 
 -export([start_link/0, stop/1]).
 -export([init/1, terminate/2, handle_call/3, handle_info/2]).
+-export([handle_cast/2]).
 
 -export([get_user_hosts/2, wol/2, bump_count/3]).
 
@@ -74,11 +75,11 @@ terminate(_Reason, _S = #?MODULE{gun = Gun}) ->
     gun:close(Gun),
     ok.
 
-handle_info(Info, S = #?MODULE{}) ->
+handle_info(_Info, S = #?MODULE{}) ->
     {noreply, S}.
 
-to_hex(Bin) ->
-    << <<Y>> ||<<X:4>> <= Bin, Y <- integer_to_list(X,16)>>.
+handle_cast(_, S = #?MODULE{}) ->
+    {noreply, S}.
 
 do_signed_req(Method, Uri, Params, #?MODULE{gun = Gun, host = Host, signer = Signer}) ->
     Hdrs0 = #{<<"host">> => Host},
@@ -97,7 +98,7 @@ do_signed_req(Method, Uri, Params, #?MODULE{gun = Gun, host = Host, signer = Sig
     #{headers := Hdrs2} = SReq,
     Req = gun:request(Gun, MethodBin, Uri, maps:to_list(Hdrs2), Body),
     case gun:await(Gun, Req, 2000) of
-        {response, fin, Status, Headers} ->
+        {response, fin, Status, _Headers} ->
             {ok, Status};
         {response, nofin, Status, Headers} ->
             RHdrs = maps:from_list(Headers),

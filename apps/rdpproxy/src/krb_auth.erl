@@ -103,9 +103,11 @@ check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
             false
     end.
 
+-type groupmap() :: #{groups => [#sid{}]}.
+-type result() :: false | {true, groupmap()}.
+-spec merge([result()]) -> result().
 merge([]) -> {true, #{groups => []}};
 merge([false | _]) -> false;
-merge([{false, _} | _]) -> false;
 merge([{true, #{groups := G0}} | Rest]) ->
     case merge(Rest) of
         {true, #{groups := G1}} ->

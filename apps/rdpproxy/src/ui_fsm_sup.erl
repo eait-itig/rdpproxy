@@ -39,7 +39,11 @@ start_ui(Frontend) ->
     supervisor:start_child(?MODULE, [Frontend]).
 
 init([]) ->
-    Ui = {undefined,
-        {ui_fsm, start_link, []},
-        transient, 1000, worker, [ui_fsm]},
-    {ok, {{simple_one_for_one, 60, 60}, [Ui]}}.
+    {ok, {
+        #{strategy => simple_one_for_one, intensity => 60, period => 60},
+        [
+            #{id => undefined,
+              start => {ui_fsm, start_link, []},
+              restart => transient}
+        ]
+    }}.

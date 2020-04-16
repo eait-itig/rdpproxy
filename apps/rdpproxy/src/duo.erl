@@ -31,7 +31,7 @@
 -behaviour(gen_server).
 
 -export([start_link/0, stop/1]).
--export([init/1, terminate/2, handle_call/3, handle_info/2]).
+-export([init/1, terminate/2, handle_call/3, handle_info/2, handle_cast/2]).
 
 -export([preauth/2, auth/2, auth_status/2]).
 
@@ -64,7 +64,10 @@ terminate(_Reason, _S = #?MODULE{gun = Gun}) ->
     gun:close(Gun),
     ok.
 
-handle_info(Info, S = #?MODULE{}) ->
+handle_info(_Info, S = #?MODULE{}) ->
+    {noreply, S}.
+
+handle_cast(_Msg, S = #?MODULE{}) ->
     {noreply, S}.
 
 to_hex(Bin) ->
@@ -101,7 +104,7 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
     end,
     Req = gun:request(Gun, MethodBin, Uri, Hdrs1, Body),
     case gun:await(Gun, Req, 1000) of
-        {response, fin, Status, Headers} ->
+        {response, fin, Status, _Headers} ->
             {ok, Status};
         {response, nofin, Status, Headers} ->
             RHdrs = maps:from_list(Headers),
@@ -137,7 +140,7 @@ handle_call({auth_status, TxId}, _From, S = #?MODULE{}) ->
 handle_call(check, _From, S = #?MODULE{}) ->
     case do_signed_req(get, <<"/auth/v2/check">>, #{}, S) of
         {ok, 200, #{<<"stat">> := <<"OK">>}} -> {reply, ok, S};
-        {ok, Code, Info} -> {reply, {error, Info}, S};
+        {ok, _Code, Info} -> {reply, {error, Info}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
