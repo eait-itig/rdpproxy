@@ -1349,7 +1349,7 @@ sort_prefs(2, Pool, #?MODULE{meta = M, hdls = H}) ->
         ResvdTimesA = lists:foldl(fun (Hdl, Acc) ->
             case H of
                 #{Hdl := #{state := error}} -> Acc;
-                #{Hdl := #{start := TR}} -> TR;
+                #{Hdl := #{start := TR}} -> [TR | Acc];
                 _ -> Acc
             end
         end, [], HdlsA),
@@ -1360,7 +1360,7 @@ sort_prefs(2, Pool, #?MODULE{meta = M, hdls = H}) ->
         ResvdTimesB = lists:foldl(fun (Hdl, Acc) ->
             case H of
                 #{Hdl := #{state := error}} -> Acc;
-                #{Hdl := #{start := TR}} -> TR;
+                #{Hdl := #{start := TR}} -> [TR | Acc];
                 _ -> Acc
             end
         end, [], HdlsB),
