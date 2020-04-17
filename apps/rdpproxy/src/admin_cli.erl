@@ -53,8 +53,11 @@
     conn_user/1,
     handle_get/1,
     handle_list/1,
-    handle_help/1
+    handle_help/1,
+    host_update/1
     ]).
+
+-export([print_prefs/1]).
 
 help([]) ->
     io:format("usage: rdpproxy-admin <cmd> <subcmd> [args]\n"
@@ -228,17 +231,13 @@ alloc_pool([User]) ->
     {ok, Pools} = session_ra:get_pools_for(#{user => User, groups => []}),
     io:format("~p\n", [Pools]).
 
-alloc_host([PoolStr, User]) ->
-    UserBin = unicode:characters_to_binary(User, utf8),
-    Pool = list_to_atom(PoolStr),
-    {ok, Prefs} = session_ra:get_prefs(Pool, UserBin),
+print_prefs(Prefs) ->
     Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~26.. s  ~16.. s  ~16.. s  ~8.. s  "
         "~22.. s  ~13.. s\n",
     io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER",
         "LASTREP", "SESSIONS", "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
-    lists:foreach(fun (Ip) ->
-        {ok, Host} = session_ra:get_host(Ip),
-        #{hostname := Hostname, enabled := Ena, image := Img,
+    lists:foreach(fun (Host) ->
+        #{ip := Ip, hostname := Hostname, enabled := Ena, image := Img,
           role := Role, last_report := LastRep, handles := Hdls,
           report_state := {RepState, RepChanged}} = Host,
         #{error_history := EHist, alloc_history := AHist,
@@ -298,6 +297,16 @@ alloc_host([PoolStr, User]) ->
         ],
         io:format(Fmt, Fields)
     end, Prefs).
+
+alloc_host([PoolStr, User]) ->
+    UserBin = unicode:characters_to_binary(User, utf8),
+    Pool = list_to_atom(PoolStr),
+    {ok, Prefs0} = session_ra:get_prefs(Pool, UserBin),
+    Prefs1 = lists:map(fun(Ip) ->
+        {ok, Host} = session_ra:get_host(Ip),
+        Host
+    end, Prefs0),
+    print_prefs(Prefs1).
 
 host_create([Pool, Ip]) ->
     PoolAtom = list_to_atom(Pool),

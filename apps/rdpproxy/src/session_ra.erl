@@ -45,6 +45,7 @@
 -export([get_prefs/2, get_pools_for/1]).
 -export([get_all_hosts/0, get_user_handles/1, get_host/1, get_all_handles/0]).
 -export([host_error/2]).
+-export([annotate_prefs/3, sort_prefs/3, pref_compare/3, sort_prefs_raw/3]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
                 $a,$b,$c,$d,$e,$f,$g,$h,$i,$j,
@@ -53,7 +54,7 @@
                 $A,$B,$C,$D,$E,$F,$G,$H,$I,$J,
                 $K,$L,$M,$N,$O,$P,$Q,$R,$S,$T,
                 $U,$V,$W,$X,$Y,$Z}).
--define(SORT_VSN, 2).
+-define(SORT_VSN, 3).
 -define(HISTORY_LIMIT, 16).
 
 -export_types([handle/0, handle_state_nopw/0, handle_state_plain/0]).
@@ -1158,6 +1159,162 @@ user_existing_hosts(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
         end
     end, ToGive).
 
+-type host_decision_info() :: #{
+    ip => ipstr(),
+    role => none | binary(),
+    image => none | binary(),
+    idle_from => none | time(),
+    e_latest => time(),
+    s_latest => time(),
+    sa_latest => time(),
+    in_error => boolean(),
+    report_state => available | busy,
+    rep_state_changed => time(),
+    last_report => time(),
+    is_lab => boolean(),
+    resvd_count => integer(),
+    latest_resvd_time => time()
+    }.
+
+-spec annotate_prefs(Vsn :: integer(), Pool :: atom(), #?MODULE{}) -> [host_decision_info()].
+annotate_prefs(N, Pool, #?MODULE{meta = M0, hdls = H})
+            when (N == 2) or (N == 3)->
+    M1 = maps:fold(fun (_Ip, HM, Acc) ->
+        case HM of
+            #{pool := Pool, enabled := true} -> [HM | Acc];
+            _ -> Acc
+        end
+    end, [], M0),
+    lists:map(fun (HM) ->
+        #{ip := Ip, role := Role, image := Image, idle_from := IdleFrom} = HM,
+
+        #{error_history := EHist, alloc_history := AHist,
+          session_history := SHist} = HM,
+        ELatest = case queue:out_r(EHist) of
+            {{value, #{time := ELAT}}, _} -> ELAT;
+            _ -> 0
+        end,
+        ALatest = case queue:out_r(AHist) of
+            {{value, #{time := ALAT}}, _} -> ALAT;
+            _ -> 0
+        end,
+        SLatest = lists:foldl(fun (#{time := SLAT}, Max) ->
+            if
+                (SLAT > Max) -> SLAT;
+                true -> Max
+            end
+        end, 0, queue:to_list(SHist)),
+        SALatest = lists:max([ALatest, SLatest]),
+
+        InError = (ELatest > ALatest),
+
+        #{report_state := {RepState, RepStCh}, last_report := LastReport} = HM,
+
+        IsLab = if
+            is_binary(Image) ->
+                (binary:longest_common_prefix([Image, <<"lab">>]) == 3);
+            true -> false
+        end,
+
+        #{handles := Hdls} = HM,
+        ResvdTimes = lists:foldl(fun (Hdl, Acc) ->
+            case H of
+                #{Hdl := #{state := error}} -> Acc;
+                #{Hdl := #{start := TR}} -> [TR | Acc];
+                _ -> Acc
+            end
+        end, [], Hdls),
+        ResvdCount = length(ResvdTimes),
+        LatestResvdTime = lists:max([0 | ResvdTimes]),
+
+        #{
+            ip => Ip,
+            role => Role,
+            image => Image,
+            idle_from => IdleFrom,
+            e_latest => ELatest,
+            s_latest => SLatest,
+            sa_latest => SALatest,
+            in_error => InError,
+            report_state => RepState,
+            rep_state_changed => RepStCh,
+            last_report => LastReport,
+            is_lab => IsLab,
+            resvd_count => ResvdCount,
+            latest_resvd_time => LatestResvdTime
+        }
+    end, M1).
+
+-spec pref_compare(integer(), host_decision_info(), host_decision_info()) -> {boolean(), any()}.
+pref_compare(N, A, B) when (N == 2) or (N == 3) ->
+    #{ip := IpA, role := RoleA, image := ImageA, idle_from := IdleFromA,
+        e_latest := ELatestA, sa_latest := SALatestA,
+        in_error := InErrorA, report_state := RepStateA,
+        last_report := LastReportA, is_lab := IsLabA,
+        resvd_count := ResvdCountA, latest_resvd_time := LatestResvdTimeA,
+        rep_state_changed := RepStateChangedA} = A,
+    #{ip := IpB, role := RoleB, image := ImageB, idle_from := IdleFromB,
+        e_latest := ELatestB, sa_latest := SALatestB,
+        in_error := InErrorB, report_state := RepStateB,
+        last_report := LastReportB, is_lab := IsLabB,
+        resvd_count := ResvdCountB, latest_resvd_time := LatestResvdTimeB,
+        rep_state_changed := RepStateChangedB} = B,
+    % A <= B  => true
+    % else    => false
+    %
+    % lists:sort sorts ascending, and we are going to start at the front,
+    % so more preferred => return true
+    if
+        % prefer machines where the latest event wasn't an error
+        (not InErrorA) and InErrorB -> {true, "B in error"};
+        InErrorA and (not InErrorB) -> {false, "A in error"};
+        % prefer machines with fewer reservations
+        (ResvdCountA < ResvdCountB) -> {true, "B reserved"};
+        (ResvdCountA > ResvdCountB) -> {false, "A reserved"};
+        % prefer machines whose last status report was available, if
+        % the report was after the last session/allocation
+        (N == 2) and (RepStateChangedA > SALatestA) and (RepStateA =:= available) and
+            (RepStateB =:= busy) -> {true, "B busy"};
+        (N == 2) and (RepStateA =:= busy) and (RepStateChangedB > SALatestB) and
+            (RepStateB =:= available) -> {false, "A busy"};
+        (N == 3) and (LastReportA > SALatestA) and (RepStateA =:= available) and
+            (RepStateB =:= busy) -> {true, "B busy"};
+        (N == 3) and (RepStateA =:= busy) and (LastReportB > SALatestB) and
+            (RepStateB =:= available) -> {false, "A busy"};
+        % prefer machines with role == vlab
+        (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) ->
+            {true, "A vlab"};
+        (not (RoleA =:= <<"vlab">>)) and (RoleB =:= <<"vlab">>) ->
+            {false, "B vlab"};
+        % prefer lab images
+        IsLabA and (not IsLabB) -> {true, "A lab"};
+        (not IsLabA) and IsLabB -> {false, "B lab"};
+        % prefer recent images
+        (ImageA > ImageB) -> {true, "A image"};
+        (ImageA < ImageB) -> {false, "B image"};
+        % for machines which are reserved, pick longest idle first
+        (ResvdCountA > 0) and (ResvdCountB > 0) and
+            (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
+            (IdleFromA < IdleFromB) -> {true, "A idle"};
+        (ResvdCountA > 0) and (ResvdCountB > 0) and
+            (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
+            (IdleFromA > IdleFromB) -> {false, "B idle"};
+        % if we don't have an idle time (it might not be reported) use
+        % the time we reserved it
+        (LatestResvdTimeA < LatestResvdTimeB) -> {true, "A rsvdtime"};
+        (LatestResvdTimeA > LatestResvdTimeB) -> {false, "B rsvdtime"};
+        % prefer machines where the last alloc or session start was further
+        % in the past
+        (SALatestA < SALatestB) -> {true, "A SAlatest"};
+        (SALatestA > SALatestB) -> {false, "B SAlatest"};
+        % last error further in the past
+        (ELatestA < ELatestB) -> {true, "A elatest"};
+        (ELatestA > ELatestB) -> {false, "B elatest"};
+        % failing everything else, sort by IP
+        (IpA < IpB) -> {true, "A ip"};
+        (IpA > IpB) -> {false, "B ip"}
+    end.
+
 -spec sort_prefs(Vsn :: integer(), Pool :: atom(), #?MODULE{}) -> [ipstr()].
 sort_prefs(1, Pool, #?MODULE{meta = M, hdls = H}) ->
     SortFun = fun(IpA, IpB) ->
@@ -1290,138 +1447,20 @@ sort_prefs(1, Pool, #?MODULE{meta = M, hdls = H}) ->
         end
     end, [], M),
     lists:sort(SortFun, Ips);
-sort_prefs(2, Pool, #?MODULE{meta = M, hdls = H}) ->
-    SortFun = fun(IpA, IpB) ->
-        #{IpA := A, IpB := B} = M,
-        #{role := RoleA, image := ImageA, idle_from := IdleFromA} = A,
-        #{role := RoleB, image := ImageB, idle_from := IdleFromB} = B,
-
-        #{error_history := EHistA, alloc_history := AHistA,
-          session_history := SHistA} = A,
-        ELatestA = case queue:out_r(EHistA) of
-            {{value, #{time := ELAT}}, _} -> ELAT;
-            _ -> 0
-        end,
-        ALatestA = case queue:out_r(AHistA) of
-            {{value, #{time := ALAT}}, _} -> ALAT;
-            _ -> 0
-        end,
-        SLatestA = case queue:out_r(SHistA) of
-            {{value, #{time := SLAT}}, _} -> SLAT;
-            _ -> 0
-        end,
-        SALatestA = lists:max([ALatestA, SLatestA]),
-
-        #{error_history := EHistB, alloc_history := AHistB,
-          session_history := SHistB} = B,
-        ELatestB = case queue:out_r(EHistB) of
-            {{value, #{time := ELBT}}, _} -> ELBT;
-            _ -> 0
-        end,
-        ALatestB = case queue:out_r(AHistB) of
-            {{value, #{time := ALBT}}, _} -> ALBT;
-            _ -> 0
-        end,
-        SLatestB = case queue:out_r(SHistB) of
-            {{value, #{time := SLBT}}, _} -> SLBT;
-            _ -> 0
-        end,
-        SALatestB = lists:max([ALatestB, SLatestB]),
-
-        InErrorA = (ELatestA > ALatestA),
-        InErrorB = (ELatestB > ALatestB),
-
-        #{report_state := {RepStateA, RepStateChangedA}} = A,
-        #{report_state := {RepStateB, RepStateChangedB}} = B,
-
-        IsLabA = if
-            is_binary(ImageA) ->
-                (binary:longest_common_prefix([ImageA, <<"lab">>]) =/= 0);
-            true -> false
-        end,
-        IsLabB = if
-            is_binary(ImageB) ->
-                (binary:longest_common_prefix([ImageB, <<"lab">>]) =/= 0);
-            true -> false
-        end,
-
-        #{handles := HdlsA} = A,
-        ResvdTimesA = lists:foldl(fun (Hdl, Acc) ->
-            case H of
-                #{Hdl := #{state := error}} -> Acc;
-                #{Hdl := #{start := TR}} -> [TR | Acc];
-                _ -> Acc
-            end
-        end, [], HdlsA),
-        ResvdCountA = length(ResvdTimesA),
-        LatestResvdTimeA = lists:max([0 | ResvdTimesA]),
-
-        #{handles := HdlsB} = B,
-        ResvdTimesB = lists:foldl(fun (Hdl, Acc) ->
-            case H of
-                #{Hdl := #{state := error}} -> Acc;
-                #{Hdl := #{start := TR}} -> [TR | Acc];
-                _ -> Acc
-            end
-        end, [], HdlsB),
-        ResvdCountB = length(ResvdTimesB),
-        LatestResvdTimeB = lists:max([0 | ResvdTimesB]),
-
-        % A <= B  => true
-        % else    => false
-        %
-        % lists:sort sorts ascending, and we are going to start at the front,
-        % so more preferred => return true
-        if
-            % prefer machines where the latest event wasn't an error
-            (not InErrorA) and InErrorB -> true;
-            InErrorA and (not InErrorB) -> false;
-            % prefer machines with fewer reservations
-            (ResvdCountA < ResvdCountB) -> true;
-            (ResvdCountA > ResvdCountB) -> false;
-            % prefer machines whose last status report was available, if
-            % the report was after the last session/allocation
-            (RepStateChangedA > SALatestA) and (RepStateA =:= available) and
-                (RepStateB =:= busy) -> true;
-            (RepStateA =:= busy) and (RepStateChangedB > SALatestB) and
-                (RepStateB =:= available) -> false;
-            % prefer machines with role == vlab
-            (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) -> true;
-            (not (RoleA =:= <<"vlab">>)) and (RoleB =:= <<"vlab">>) -> false;
-            % prefer lab images
-            IsLabA and (not IsLabB) -> true;
-            (not IsLabA) and IsLabB -> false;
-            % prefer recent images
-            (ImageA > ImageB) -> true;
-            (ImageA < ImageB) -> false;
-            % for machines which are reserved, pick longest idle first
-            (ResvdCountA > 0) and (ResvdCountB > 0) and
-                (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
-                (IdleFromA < IdleFromB) -> true;
-            (ResvdCountA > 0) and (ResvdCountB > 0) and
-                (not (IdleFromA =:= none)) and (not (IdleFromB =:= none)) and
-                (IdleFromA > IdleFromB) -> false;
-            % if we don't have an idle time (it might not be reported) use
-            % the time we reserved it
-            (LatestResvdTimeA < LatestResvdTimeB) -> true;
-            (LatestResvdTimeA > LatestResvdTimeB) -> false;
-            % prefer machines where the last alloc or session start was further
-            % in the past
-            (SALatestA < SALatestB) -> true;
-            (SALatestA > SALatestB) -> false;
-            % last error further in the past
-            (ELatestA < ELatestB) -> true;
-            (ELatestA > ELatestB) -> false;
-            % failing everything else, sort by IP
-            (IpA < IpB) -> true;
-            (IpA > IpB) -> false
-        end
+sort_prefs(N, Pool, S0 = #?MODULE{}) ->
+    SortFun = fun(A, B) ->
+        {R, _Why} = pref_compare(N, A, B),
+        R
     end,
-    Ips = maps:fold(fun (Ip, HM, Acc) ->
-        case HM of
-            #{pool := Pool, enabled := true} -> [Ip | Acc];
-            _ -> Acc
-        end
-    end, [], M),
-    lists:sort(SortFun, Ips).
+    lists:map(fun (#{ip := Ip}) -> Ip end,
+        lists:sort(SortFun, annotate_prefs(N, Pool, S0))).
 
+sort_prefs_raw(N, Pool, S0 = #?MODULE{meta = M}) ->
+    SortFun = fun(A, B) ->
+        {R, _Why} = pref_compare(N, A, B),
+        R
+    end,
+    lists:map(fun (Ann = #{ip := Ip}) ->
+        #{Ip := HM} = M,
+        HM#{annotation => Ann}
+    end, lists:sort(SortFun, annotate_prefs(N, Pool, S0))).
