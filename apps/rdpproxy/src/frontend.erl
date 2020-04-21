@@ -66,7 +66,8 @@ retry_start_backend(N, Srv, HostBin, Port, _) ->
 retry_start_backend(Srv, HostBin, Port) ->
     retry_start_backend(2, Srv, HostBin, Port, none).
 
-handle_connect(Cookie, _Protocols, Srv, S = #?MODULE{}) ->
+handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P}) ->
+    lager:debug("connect ~p, protocols ~p", [P, Protocols]),
     case session_ra:claim_handle(Cookie) of
         {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
             lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
