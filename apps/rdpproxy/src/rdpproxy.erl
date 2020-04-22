@@ -86,14 +86,19 @@ init(_Args) ->
     {ok, _} = timer:apply_interval(10000, session_ra, tick, []),
     {ok, _} = timer:apply_interval(30000, remember_ra, tick, []),
 
+    Listeners = rdpproxy:config(frontend, []),
+    FrontendSups = lists:map(fun ({Name, ConfigList}) ->
+        Port = proplists:get_value(port, ConfigList, 3389),
+        #{id => list_to_atom("frontend_sup_" ++ atom_to_list(Name)),
+          start => {rdp_server_sup, start_link, [Port, {frontend, Name}]},
+          type => supervisor}
+    end, Listeners),
+
     {ok, {
         #{strategy => one_for_one, intensity => 60, period => 60},
         [
             #{id => ui_fsm_sup,
               start => {ui_fsm_sup, start_link, []},
-              type => supervisor},
-            #{id => frontend_sup,
-              start => {rdp_server_sup, start_link, [3389, frontend]},
               type => supervisor}
-        ]
+        ] ++ FrontendSups
     }}.

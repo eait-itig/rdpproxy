@@ -32,16 +32,18 @@
 
 -include_lib("rdp_proto/include/rdp_server.hrl").
 
--export([start_link/3, probe/2]).
+-export([start_link/4, probe/2]).
 -export([initiation/2, proxy_intercept/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
--spec start_link(Frontend :: pid(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()} | {error, any()}.
-start_link(Frontend, Address, Port) ->
-    gen_fsm:start_link(?MODULE, [Frontend, Address, Port], [{timeout, 10000}]).
+-spec start_link(Frontend :: pid(), Listener :: atom(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()} | {error, any()}.
+start_link(Frontend, L, Address, Port) ->
+    gen_fsm:start_link(?MODULE, [Frontend, L, Address, Port], [{timeout, 10000}]).
 
 probe(Address, Port) ->
-    case (catch gen_fsm:start(?MODULE, [self(), Address, Port], [{timeout, 7000}])) of
+    % Just use the first listener in the config
+    [{L, _} | _] = rdpproxy:config(frontend, []),
+    case (catch gen_fsm:start(?MODULE, [self(), L, Address, Port], [{timeout, 7000}])) of
         {ok, Pid} ->
             MonRef = monitor(process, Pid),
             probe_rx(Pid, MonRef, {error, bad_host});
@@ -63,20 +65,30 @@ probe_rx(Pid, MonRef, RetVal) ->
         probe_rx(Pid, MonRef, {error, timeout})
     end.
 
--record(?MODULE,
-    {addr, port, sock, sslsock=none, themref=0, usref=0, unused, server, origcr}).
+-record(?MODULE, {
+    addr :: inet:ip_address() | inet:hostname(),
+    port :: integer(),
+    sock :: gen_tcp:socket(),
+    listener :: atom(),
+    sslsock=none :: none | ssl:ssl_socket(),
+    themref=0 :: integer(),
+    usref=0 :: integer(),
+    unused,
+    server :: rdp_server:server() | pid(),
+    origcr :: #x224_cr{}
+    }).
 
 %% @private
-init([Pid, Address, Port]) when is_pid(Pid) ->
-    init([Pid, Address, Port, #x224_cr{
+init([Pid, L, Address, Port]) when is_pid(Pid) ->
+    init([Pid, L, Address, Port, #x224_cr{
         class = 0, dst = 0, src = crypto:rand_uniform(2000,9999)
         }]);
 
-init([Srv = {P, _}, Address, Port]) when is_pid(P) ->
+init([Srv = {P, _}, L, Address, Port]) when is_pid(P) ->
     #x224_state{cr = OrigCr} = rdp_server:x224_state(Srv),
-    init([Srv, Address, Port, OrigCr]);
+    init([Srv, L, Address, Port, OrigCr]);
 
-init([Srv, Address, Port, OrigCr]) ->
+init([Srv, L, Address, Port, OrigCr]) ->
     random:seed(os:timestamp()),
     #x224_cr{src = Us} = OrigCr,
     lager:debug("backend for frontend ~p", [Srv]),
@@ -87,7 +99,9 @@ init([Srv, Address, Port, OrigCr]) ->
             {ok, CrData} = x224:encode(Cr),
             {ok, Packet} = tpkt:encode(CrData),
             ok = gen_tcp:send(Sock, Packet),
-            {ok, initiation, #?MODULE{addr = Address, port = Port, server = Srv, sock = Sock, usref = Us, origcr = OrigCr}};
+            {ok, initiation, #?MODULE{
+                addr = Address, port = Port, server = Srv, listener = L,
+                sock = Sock, usref = Us, origcr = OrigCr}};
 
         {error, Reason} ->
             case Srv of
@@ -105,7 +119,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error 
     end,
     {stop, no_ssl, Data};
 
-initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MODULE{usref = UsRef, sock = Sock, server = Srv, addr = Address} = Data) ->
+initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MODULE{usref = UsRef, sock = Sock, server = Srv, addr = Address, listener = L} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected} = Pkt,
 
     HasSsl = lists:member(ssl, Selected),
@@ -121,7 +135,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
                 P ! {backend_ready, self()};
             {P,_} when is_pid(P) ->
                 rdp_server:start_tls(Srv,
-                    rdpproxy:config([frontend, ssl_options], [
+                    rdpproxy:config([frontend, L, ssl_options], [
                         {certfile, "etc/cert.pem"},
                         {keyfile, "etc/key.pem"}]), Pkt)
         end,

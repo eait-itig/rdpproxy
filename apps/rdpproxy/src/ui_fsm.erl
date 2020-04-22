@@ -36,17 +36,18 @@
 -include_lib("cairerl/include/cairerl.hrl").
 -include_lib("rdp_ui/include/ui.hrl").
 
--export([start_link/1]).
+-export([start_link/2]).
 -export([startup/2, login/2, no_redir/2, waiting/2, mfa/2, mfa_waiting/2, choose/2, choose_pool/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 -export([handle_event/3, handle_sync_event/4]).
 
--spec start_link(Frontend :: rdp_server:server()) -> {ok, pid()}.
-start_link(Frontend) ->
-    gen_fsm:start_link(?MODULE, [Frontend], []).
+-spec start_link(Frontend :: rdp_server:server(), Listener :: atom()) -> {ok, pid()} | {error, term()}.
+start_link(Frontend, L) ->
+    gen_fsm:start_link(?MODULE, [Frontend, L], []).
 
 -record(?MODULE, {
     frontend :: rdp_server:server(),
+    listener :: atom(),
     mref :: reference(),
     w = 0.0 :: float(), h = 0.0 :: float(),
     bpp = 16 :: integer(),
@@ -67,12 +68,12 @@ start_link(Frontend) ->
     duoremember = false :: boolean()}).
 
 %% @private
-init([Frontend]) ->
+init([Frontend, L]) ->
     {Pid, _} = Frontend,
     lager:debug("ui_fsm for frontend ~p", [Pid]),
     gen_fsm:send_event(Pid, {subscribe, self()}),
     MRef = monitor(process, Pid),
-    {ok, startup, #?MODULE{mref = MRef, frontend = Frontend}, 0}.
+    {ok, startup, #?MODULE{mref = MRef, frontend = Frontend, listener = L}, 0}.
 
 handle_event(_Evt, State, S) ->
     {next_state, State, S}.
@@ -116,7 +117,7 @@ get_msg(Name, #?MODULE{}) ->
     MsgLines = length(binary:matches(Msg1, [<<"\n">>])) + 1,
     {Msg1, MsgLines}.
 
-startup(timeout, S = #?MODULE{frontend = F}) ->
+startup(timeout, S = #?MODULE{frontend = F, listener = L}) ->
     {W, H, Bpp} = rdp_server:get_canvas(F),
     Format = case Bpp of
         24 -> rgb24;
@@ -157,7 +158,7 @@ startup(timeout, S = #?MODULE{frontend = F}) ->
             no_redir(setup_ui, S2);
         true ->
             {ok, Duo} = duo:start_link(),
-            Mode = rdpproxy:config([frontend, mode], pool),
+            Mode = rdpproxy:config([frontend, L, mode], pool),
             case Mode of
                 nms_choice ->
                     {ok, Nms} = nms:start_link(),
@@ -362,8 +363,8 @@ login({ui, {submitted, passinp}}, S = #?MODULE{}) ->
 login({ui, {clicked, loginbtn}}, S = #?MODULE{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #?MODULE{root = Root, duo = Duo, frontend = {FPid,_}}) ->
-    [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, domains], [<<".">>]),
+login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend = {FPid,_}}) ->
+    [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, L, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
     UserDomain = ui_textinput:get_text(UsernameTxt),
@@ -747,8 +748,8 @@ mfa({submit_otp, _DevId, Code}, S = #?MODULE{duo = Duo, root = Root, peer = Peer
             mfa(allow, S1)
     end;
 
-mfa(allow, S = #?MODULE{uinfo = UInfo, duoid = DuoId}) ->
-    Mode = rdpproxy:config([frontend, mode], pool),
+mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
+    Mode = rdpproxy:config([frontend, L, mode], pool),
     case S of
         #?MODULE{duoremember = true} ->
             #{user := U} = UInfo,
@@ -758,6 +759,14 @@ mfa(allow, S = #?MODULE{uinfo = UInfo, duoid = DuoId}) ->
     case Mode of
         nms_choice ->
             choose(setup_ui, S#?MODULE{pool = nms});
+        {pool, Pool} ->
+            {ok, PoolInfo} = session_ra:get_pool(Pool),
+            case PoolInfo of
+                #{choice := false} ->
+                    waiting(setup_ui, S#?MODULE{pool = Pool});
+                #{choice := true} ->
+                    choose(setup_ui, S#?MODULE{pool = Pool})
+            end;
         pool ->
             {ok, Pools} = session_ra:get_pools_for(UInfo),
             case Pools of
@@ -1275,16 +1284,18 @@ choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
             choose_pool({ui, {clicked, {choosebtn, Id}}}, S)
     end.
 
-waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
+waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt, listener = L}) ->
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 200};
         false -> {ui_hlayout, H}
     end,
-    Mode = rdpproxy:config([frontend, mode], pool),
+    Mode = rdpproxy:config([frontend, L, mode], pool),
     Text = case Mode of
         pool ->       <<"Looking for an available computer to\n"
+                        "log you in...\n">>;
+        {pool, _} ->  <<"Looking for an available computer to\n"
                         "log you in...\n">>;
         nms_choice -> <<"Checking to see if computer is available\n",
                         "and ready to log you in...\n">>
@@ -1360,7 +1371,7 @@ waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root
             {next_state, waiting, S}
     end;
 
-waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, _}, allocpid = AllocPid}) ->
+waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, _}, allocpid = AllocPid, listener = L}) ->
     #{handle := Cookie, ip := Ip, user := U, sessid := SessId} = Sess,
     erlang:demonitor(S#?MODULE.allocmref),
     #?MODULE{nms = Nms} = S,
@@ -1374,7 +1385,7 @@ waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, 
     end,
     conn_ra:annotate(FPid, #{session => Sess#{password => snip}}),
     rdp_server:send_redirect(F, Cookie, SessId,
-        rdpproxy:config([frontend, hostname], <<"localhost">>)),
+        rdpproxy:config([frontend, L, hostname], <<"localhost">>)),
     {stop, normal, S};
 
 waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #?MODULE{allocpid = AllocPid}) ->

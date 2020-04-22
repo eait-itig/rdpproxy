@@ -2,31 +2,43 @@
     {rdpproxy, [
         {frontend, [
             %%
-            %% The hostname that clients will connect to (must
-            %% match the certificate under ssl_options)
+            %% You can have multiple listeners running in different modes.
+            %% One entry here per listener. Names are atoms.
             %%
-            {hostname, <<"gs516-6440.eait.uq.edu.au">>},
+            {default, [
+                %%
+                %% Port to listen on
+                %%
+                {port, 3389},
 
-            %%
-            %% Domains to use with logins to backend servers
-            %% The first item on this list will be the default
-            %%
-            {domains, [<<"KRB5.UQ.EDU.AU">>]},
+                %%
+                %% The hostname that clients will connect to (must
+                %% match the certificate under ssl_options)
+                %%
+                {hostname, <<"gs516-6440.eait.uq.edu.au">>},
 
-            %%
-            %% Allocation mode: nms_choice = look up user in NMS, present
-            %% choose menu. pool = allocate from the pool of known machines.
-            %%
-            %{mode, nms_choice},
-            {mode, pool},
+                %%
+                %% Domains to use with logins to backend servers
+                %% The first item on this list will be the default
+                %%
+                {domains, [<<"KRB5.UQ.EDU.AU">>]},
 
-            %%
-            %% Options for TLS from proxy => clients
-            %%
-            {ssl_options, [
-                %% Certificate we will use to secure communication with the clients
-                {certfile, "etc/cert.pem"},
-                {keyfile, "etc/key.pem"}
+                %%
+                %% Allocation mode: nms_choice = look up user in NMS, present
+                %% choose menu. pool = allocate from the pool of known machines.
+                %%
+                %{mode, nms_choice},
+                %{mode, {pool, PoolName}},
+                {mode, pool},
+
+                %%
+                %% Options for TLS from proxy => clients
+                %%
+                {ssl_options, [
+                    %% Certificate we will use to secure communication with the clients
+                    {certfile, "etc/cert.pem"},
+                    {keyfile, "etc/key.pem"}
+                ]}
             ]}
         ]},
         {ui, [

@@ -30,13 +30,14 @@
 -module(ui_fsm_sup).
 
 -behaviour(supervisor).
--export([start_link/0, init/1, start_ui/1]).
+-export([start_link/0, init/1, start_ui/2]).
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-start_ui(Frontend) ->
-    supervisor:start_child(?MODULE, [Frontend]).
+-spec start_ui(rdp_server:server(), atom()) -> {ok, pid()} | {error, term()}.
+start_ui(Frontend, L) ->
+    supervisor:start_child(?MODULE, [Frontend, L]).
 
 init([]) ->
     {ok, {

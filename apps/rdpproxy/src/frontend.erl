@@ -34,6 +34,7 @@
 
 -export([
     init/1,
+    init/2,
     handle_connect/4,
     init_ui/2,
     handle_event/3,
@@ -43,6 +44,7 @@
 
 -record(?MODULE, {
     peer :: term(),
+    listener :: atom(),
     session :: session_ra:handle_state() | undefined,
     subs = [] :: [pid()],
     backend :: pid() | undefined,
@@ -52,42 +54,44 @@
     }).
 
 init(Peer) ->
-    {ok, #?MODULE{peer = Peer}}.
+    {ok, #?MODULE{peer = Peer, listener = default}}.
+init(Peer, Listener) ->
+    {ok, #?MODULE{peer = Peer, listener = Listener}}.
 
-retry_start_backend(0, _, _, _, LastErr) -> LastErr;
-retry_start_backend(N, Srv, HostBin, Port, _) ->
-    case backend:start_link(Srv, HostBin, Port) of
+retry_start_backend(0, _, _, _, _, LastErr) -> LastErr;
+retry_start_backend(N, Srv, L, HostBin, Port, _) ->
+    case backend:start_link(Srv, L, HostBin, Port) of
         {ok, Backend} ->
             {ok, Backend};
         Err ->
             timer:sleep(200),
-            retry_start_backend(N - 1, Srv, HostBin, Port, Err)
+            retry_start_backend(N - 1, Srv, L, HostBin, Port, Err)
     end.
-retry_start_backend(Srv, HostBin, Port) ->
-    retry_start_backend(2, Srv, HostBin, Port, none).
+retry_start_backend(Srv, L, HostBin, Port) ->
+    retry_start_backend(2, Srv, L, HostBin, Port, none).
 
-handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P}) ->
-    lager:debug("connect ~p, protocols ~p", [P, Protocols]),
+handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
+    lager:debug("connect ~p to listener ~p, protocols ~p", [P, L, Protocols]),
     case session_ra:claim_handle(Cookie) of
         {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
             lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
                 [S#?MODULE.peer, Cookie, User, HostBin]),
             {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer, Sess),
-            {ok, Backend} = retry_start_backend(Srv, binary_to_list(HostBin), Port),
+            {ok, Backend} = retry_start_backend(Srv, L, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),
             {accept_raw, S#?MODULE{session = Sess, backend = Backend, connid = ConnId}};
 
         _ ->
             {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer,
                 #{ip => undefined, user => <<"_">>}),
-            SslOpts = rdpproxy:config([frontend, ssl_options], [
+            SslOpts = rdpproxy:config([frontend, L, ssl_options], [
                 {certfile, "etc/cert.pem"},
                 {keyfile, "etc/key.pem"}]),
             {accept, SslOpts, S#?MODULE{connid = ConnId}}
     end.
 
-init_ui(Srv, S = #?MODULE{subs = [], connid = ConnId}) ->
-    {ok, Ui} = ui_fsm_sup:start_ui(Srv),
+init_ui(Srv, S = #?MODULE{subs = [], listener = L, connid = ConnId}) ->
+    {ok, Ui} = ui_fsm_sup:start_ui(Srv, L),
     lager:debug("frontend spawned ui_fsm ~p", [Ui]),
     Tsuds = rdp_server:get_tsuds(Srv),
     Caps = rdp_server:get_caps(Srv),

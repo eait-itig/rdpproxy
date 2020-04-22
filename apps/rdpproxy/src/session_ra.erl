@@ -751,7 +751,7 @@ apply(_Meta, {disable_host, T, Ip}, S0 = #?MODULE{meta = M0}) ->
 apply(_Meta, {get_prefs, T, Pool, User, SortVsn}, S0 = #?MODULE{}) ->
     UserPrefs = user_existing_hosts(User, Pool, S0),
     Prefs0 = sort_prefs(SortVsn, Pool, S0),
-    Prefs1 = filter_min_reserved(T, User, Prefs0, S0),
+    Prefs1 = filter_min_reserved(T, Pool, User, Prefs0, S0),
     Prefs2 = UserPrefs ++ (Prefs1 -- UserPrefs),
     {S0, {ok, Prefs2}, []};
 
@@ -766,7 +766,7 @@ apply(_Meta, {reserve, T, Hdl, Pool, SortVsn, User, Pid}, S0 = #?MODULE{hdls = H
                     {S1, {ok, Hdl, H}, Effects};
                 _ ->
                     Prefs = sort_prefs(SortVsn, Pool, S0),
-                    PrefsAv = filter_min_reserved(T, User, Prefs, S0),
+                    PrefsAv = filter_min_reserved(T, Pool, User, Prefs, S0),
                     case PrefsAv of
                         [Ip | _] ->
                             {S1, H, Effects} = begin_handle(Hdl, T, User, Ip,
@@ -1036,26 +1036,128 @@ begin_handle(Hdl, T, User, Ip, Pid, S0 = #?MODULE{}) ->
     S2 = S1#?MODULE{hdls = H1, meta = M1, users = U1, watches = W1},
     {S2, HD, Effects}.
 
--spec filter_min_reserved(time(), username(), [ipstr()], #?MODULE{}) -> [ipstr()].
-filter_min_reserved(T, User, Ips, #?MODULE{meta = M0, hdls = H0}) ->
-    lists:filter(fun (Ip) ->
-        #{Ip := HM} = M0,
-        case HM of
-            #{enabled := false} -> false;
-            #{handles := [Hdl | _]} ->
-                case H0 of
-                    #{Hdl := #{user := User}} -> true;
-                    #{Hdl := #{state := error}} -> true;
-                    #{Hdl := #{min := TE}} when (T > TE) -> true;
-                    #{Hdl := _} -> false;
+-spec filter_min_reserved(time(), atom(), username(), [ipstr()], #?MODULE{}) -> [ipstr()].
+filter_min_reserved(T, Pool, User, Ips, #?MODULE{meta = M0, hdls = H0, pools = P0}) ->
+    case P0 of
+        #{Pool := #{mode := multi_user}} -> Ips;
+        #{Pool := #{mode := single_user}} ->
+            lists:filter(fun (Ip) ->
+                #{Ip := HM} = M0,
+                case HM of
+                    #{enabled := false} -> false;
+                    #{handles := [Hdl | _]} ->
+                        case H0 of
+                            #{Hdl := #{user := User}} -> true;
+                            #{Hdl := #{state := error}} -> true;
+                            #{Hdl := #{min := TE}} when (T > TE) -> true;
+                            #{Hdl := _} -> false;
+                            _ -> true
+                        end;
                     _ -> true
-                end;
-            _ -> true
-        end
-    end, Ips).
+                end
+            end, Ips)
+    end.
 
 -spec user_existing_hosts(username(), pool(), #?MODULE{}) -> [ipstr()].
-user_existing_hosts(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
+user_existing_hosts(User, Pool, S0 = #?MODULE{pools = P0}) ->
+    case P0 of
+        #{Pool := #{mode := multi_user}} ->
+            user_existing_hosts_multi(User, Pool, S0);
+        #{Pool := #{mode := single_user}} ->
+            user_existing_hosts_single(User, Pool, S0)
+    end.
+
+-spec user_existing_hosts_multi(username(), pool(), #?MODULE{}) -> [ipstr()].
+user_existing_hosts_multi(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
+    % First, look at all recent reservations which belong to this user.
+    % If we have any, keep track of the last handle we had each host (so
+    % we can see if it was an error or a good alloc)
+    LastHMs = case U0 of
+        #{User := UH0} ->
+            lists:foldl(fun (Hdl, Acc) ->
+                case H0 of
+                    #{Hdl := #{ip := _Ip, state := probe}} ->
+                        Acc;
+                    #{Hdl := HD = #{ip := Ip}} ->
+                        Acc#{Ip => {Hdl, HD}};
+                    _ ->
+                        Acc
+                end
+            end, #{}, queue:to_list(UH0));
+        _ ->
+            #{}
+    end,
+    % Then look through all hosts which have a reported session set to this
+    % user. If the session started after the last handle we have, override it.
+    WithSess = maps:fold(fun (Ip, HM0, Acc) ->
+        #{session_history := SHist0} = HM0,
+        lists:foldl(fun (Sess, AccI) ->
+            case Sess of
+                #{user := User, time := T0} ->
+                    case AccI of
+                        #{Ip := {_Hdl, #{start := TH}}} when (TH >= T0) ->
+                            AccI;
+                        _ ->
+                            AccI#{Ip => {none, #{time => T0, state => ok}}}
+                    end;
+                _ -> AccI
+            end
+        end, Acc, queue:to_list(SHist0))
+    end, LastHMs, M0),
+    % Finally, check all of the hosts we found above for being enabled.
+    ToGive = maps:fold(fun
+        (Ip, {none, #{state := ok}}, Acc) ->
+            case M0 of
+                #{Ip := #{pool := Pool, enabled := true}} ->
+                    [Ip | Acc];
+                _ -> Acc
+            end;
+        (Ip, {_Hdl, #{state := ok}}, Acc) ->
+            case M0 of
+                #{Ip := #{pool := Pool, enabled := true}} ->
+                    [Ip | Acc];
+                _ -> Acc
+            end;
+        (_Ip, _, Acc) -> Acc
+    end, [], WithSess),
+    lists:sort(fun (IpA, IpB) ->
+        #{IpA := A, IpB := B} = M0,
+        #{alloc_history := AHistA,
+          session_history := SHistA} = A,
+        ALatestA = case queue:out_r(AHistA) of
+            {{value, #{time := ALAT}}, _} -> ALAT;
+            _ -> 0
+        end,
+        SLatestA = case queue:out_r(SHistA) of
+            {{value, #{time := SLAT}}, _} -> SLAT;
+            _ -> 0
+        end,
+        SALatestA = lists:max([ALatestA, SLatestA]),
+
+        #{alloc_history := AHistB,
+          session_history := SHistB} = B,
+        ALatestB = case queue:out_r(AHistB) of
+            {{value, #{time := ALBT}}, _} -> ALBT;
+            _ -> 0
+        end,
+        SLatestB = case queue:out_r(SHistB) of
+            {{value, #{time := SLBT}}, _} -> SLBT;
+            _ -> 0
+        end,
+        SALatestB = lists:max([ALatestB, SLatestB]),
+
+        if
+            % prefer the machine they used most recently
+            (SALatestA > SALatestB) -> true;
+            (SALatestA < SALatestB) -> false;
+            % failing everything else, sort by IP
+            (IpA < IpB) -> true;
+            (IpA > IpB) -> false
+        end
+    end, ToGive).
+
+-spec user_existing_hosts_single(username(), pool(), #?MODULE{}) -> [ipstr()].
+user_existing_hosts_single(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
     % First, look at all recent reservations which belong to this user.
     % If we have any, keep track of the last handle we had each host (so
     % we can see if it was an error or a good alloc)
