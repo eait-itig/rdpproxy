@@ -178,8 +178,13 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
                     #{type := T} -> T;
                     _ -> <<"other">>
                 end,
+                {StartI2, ReportTime} = case StartI of
+                    0 -> {erlang:system_time(second), true};
+                    _ -> {StartI, false}
+                end,
                 Sess = #{
-                    time => StartI,
+                    time => StartI2,
+                    report_time => ReportTime,
                     user => UserI,
                     type => TypeI,
                     id => IdI
@@ -203,22 +208,33 @@ new_sessions(Inputs, PoolRecords) ->
             true -> false
         end
     end, lists:filter(fun (Inp) ->
-        not lists:any(fun (PoolRec) ->
-            match_session(Inp, PoolRec)
-        end, PoolRecords)
+        not (match_session(Inp, PoolRecords))
     end, Inputs)).
 
-match_session(Input, PoolRecord) ->
-    #{'session-id' := IdI, start := StartI, user := UserI} = Input,
+match_session(_, []) -> false;
+match_session(#{start := 0, user := UserI}, PoolRecords) ->
+    PRsWithRepTime = lists:filter(fun
+        (#{report_time := true}) -> true;
+        (_) -> false
+    end, PoolRecords),
+    case lists:last(PRsWithRepTime) of
+        #{user := UserI} -> true;
+        _ -> false
+    end;
+match_session(Input, [PoolRecord | Rest]) ->
+    #{start := StartI, user := UserI} = Input,
     TypeI = case Input of
         #{type := T} -> T;
         _ -> <<"other">>
     end,
-    #{time := StartP, user := UserP, type := TypeP, id := IdP} = PoolRecord,
+    #{time := StartP, user := UserP, type := TypeP} = PoolRecord,
+    MaxDelta = case PoolRecord of
+        #{report_time := true} -> 600;
+        _ -> 30
+    end,
     if
-        not (IdI =:= IdP) -> false;
-        not (UserP =:= UserI) -> false;
-        not (TypeI =:= TypeP) -> false;
-        abs(StartP - StartI) > 5 -> false;
+        not (UserP =:= UserI) -> match_session(Input, Rest);
+        not (TypeI =:= TypeP) -> match_session(Input, Rest);
+        (abs(StartP - StartI) > MaxDelta) -> match_session(Input, Rest);
         true -> true
     end.
