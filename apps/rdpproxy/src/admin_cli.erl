@@ -55,7 +55,8 @@
     handle_get/1,
     handle_list/1,
     handle_help/1,
-    host_update/1
+    host_update/1,
+    dump_state/1
     ]).
 
 -export([print_prefs/1]).
@@ -744,6 +745,11 @@ conn_user([User]) ->
         ],
         io:format(Fmt, Fields)
     end, Conns).
+
+dump_state([]) ->
+    {ok, {_, SBin}, _} = ra:leader_query(session_ra,
+        fun (S) -> erlang:term_to_binary(S) end),
+    io:format("~s\n", [base64:encode(SBin)]).
 
 format_reltime(Time) -> format_reltime(Time, true).
 format_reltime(Time, Flavour) ->
