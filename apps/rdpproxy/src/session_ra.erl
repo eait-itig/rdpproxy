@@ -1093,7 +1093,7 @@ filter_min_reserved(4, T, Pool, User, Ips0, #?MODULE{meta = M0, hdls = H0, pools
                     not (U =:= User) and ((ST + RT) >= T)
                 end, queue:to_list(SH)),
                 ((St =:= available) and ((StT + HT) < T))
-                    or (WithinRsvdTime == 0)
+                    or (length(WithinRsvdTime) == 0)
             end, Ips1);
         _ -> []
     end.
