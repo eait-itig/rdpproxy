@@ -1094,7 +1094,8 @@ filter_min_reserved(4, T, Pool, User, Ips0, #?MODULE{meta = M0, hdls = H0, pools
                 end, queue:to_list(SH)),
                 ((St =:= available) and ((StT + HT) < T))
                     or (WithinRsvdTime == 0)
-            end, Ips1)
+            end, Ips1);
+        _ -> []
     end.
 
 -spec user_existing_hosts(username(), pool(), #?MODULE{}) -> [ipstr()].
@@ -1103,7 +1104,8 @@ user_existing_hosts(User, Pool, S0 = #?MODULE{pools = P0}) ->
         #{Pool := #{mode := multi_user}} ->
             user_existing_hosts_multi(User, Pool, S0);
         #{Pool := #{mode := single_user}} ->
-            user_existing_hosts_single(User, Pool, S0)
+            user_existing_hosts_single(User, Pool, S0);
+        _ -> []
     end.
 
 -spec user_existing_hosts_multi(username(), pool(), #?MODULE{}) -> [ipstr()].
