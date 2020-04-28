@@ -220,9 +220,9 @@ match_session(#{start := 0, user := UserI}, {St, TB}, PoolRecords) ->
         (#{report_time := true}) -> true;
         (_) -> false
     end, PoolRecords),
-    case lists:last(PRsWithRepTime) of
-        #{user := UserI} when (St =:= busy) -> true;
-        #{user := UserI, time := T} when (St =:= available) and (TB < T) -> true;
+    case lists:reverse(PRsWithRepTime) of
+        [#{user := UserI}|_] when (St =:= busy) -> true;
+        [#{user := UserI, time := T}|_] when (St =:= available) and (TB < T) -> true;
         _ -> false
     end;
 match_session(Input, LT, [PoolRecord | Rest]) ->
