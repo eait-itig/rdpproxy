@@ -45,7 +45,7 @@
 -export([get_prefs/2, get_pools_for/1]).
 -export([get_all_hosts/0, get_user_handles/1, get_host/1, get_all_handles/0]).
 -export([host_error/2]).
--export([annotate_prefs/3, sort_prefs/3, pref_compare/3, sort_prefs_raw/3]).
+-export([annotate_prefs/4, sort_prefs/4, pref_compare/3, sort_prefs_raw/4]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
                 $a,$b,$c,$d,$e,$f,$g,$h,$i,$j,
@@ -54,7 +54,7 @@
                 $A,$B,$C,$D,$E,$F,$G,$H,$I,$J,
                 $K,$L,$M,$N,$O,$P,$Q,$R,$S,$T,
                 $U,$V,$W,$X,$Y,$Z}).
--define(SORT_VSN, 3).
+-define(SORT_VSN, 4).
 -define(HISTORY_LIMIT, 16).
 
 -export_types([handle/0, handle_state_nopw/0, handle_state_plain/0]).
@@ -750,8 +750,8 @@ apply(_Meta, {disable_host, T, Ip}, S0 = #?MODULE{meta = M0}) ->
 
 apply(_Meta, {get_prefs, T, Pool, User, SortVsn}, S0 = #?MODULE{}) ->
     UserPrefs = user_existing_hosts(User, Pool, S0),
-    Prefs0 = sort_prefs(SortVsn, Pool, S0),
-    Prefs1 = filter_min_reserved(T, Pool, User, Prefs0, S0),
+    Prefs0 = sort_prefs(SortVsn, Pool, User, S0),
+    Prefs1 = filter_min_reserved(SortVsn, T, Pool, User, Prefs0, S0),
     Prefs2 = UserPrefs ++ (Prefs1 -- UserPrefs),
     {S0, {ok, Prefs2}, []};
 
@@ -765,8 +765,9 @@ apply(_Meta, {reserve, T, Hdl, Pool, SortVsn, User, Pid}, S0 = #?MODULE{hdls = H
                     {S1, H, Effects} = begin_handle(Hdl, T, User, Ip, Pid, S0),
                     {S1, {ok, Hdl, H}, Effects};
                 _ ->
-                    Prefs = sort_prefs(SortVsn, Pool, S0),
-                    PrefsAv = filter_min_reserved(T, Pool, User, Prefs, S0),
+                    Prefs = sort_prefs(SortVsn, Pool, User, S0),
+                    PrefsAv = filter_min_reserved(SortVsn, T, Pool, User,
+                        Prefs, S0),
                     case PrefsAv of
                         [Ip | _] ->
                             {S1, H, Effects} = begin_handle(Hdl, T, User, Ip,
@@ -1036,8 +1037,9 @@ begin_handle(Hdl, T, User, Ip, Pid, S0 = #?MODULE{}) ->
     S2 = S1#?MODULE{hdls = H1, meta = M1, users = U1, watches = W1},
     {S2, HD, Effects}.
 
--spec filter_min_reserved(time(), atom(), username(), [ipstr()], #?MODULE{}) -> [ipstr()].
-filter_min_reserved(T, Pool, User, Ips, #?MODULE{meta = M0, hdls = H0, pools = P0}) ->
+-spec filter_min_reserved(integer(), time(), atom(), username(), [ipstr()], #?MODULE{}) -> [ipstr()].
+filter_min_reserved(SortVsn, T, Pool, User, Ips, #?MODULE{meta = M0, hdls = H0, pools = P0})
+            when (SortVsn =< 3) ->
     case P0 of
         #{Pool := #{mode := multi_user}} -> Ips;
         #{Pool := #{mode := single_user}} ->
@@ -1056,6 +1058,43 @@ filter_min_reserved(T, Pool, User, Ips, #?MODULE{meta = M0, hdls = H0, pools = P
                     _ -> true
                 end
             end, Ips)
+    end;
+filter_min_reserved(4, T, Pool, User, Ips0, #?MODULE{meta = M0, hdls = H0, pools = P0}) ->
+    case P0 of
+        #{Pool := #{mode := multi_user}} -> Ips0;
+        #{Pool := #{mode := single_user, min_rsvd_time := RT, hdl_expiry_time := HT}} ->
+            Ips1 = lists:filter(fun (Ip) ->
+                #{Ip := HM} = M0,
+                case HM of
+                    % Eliminate all disabled backends
+                    #{enabled := false} -> false;
+                    % Eliminate all backends with a handle that's within min
+                    % belonging to a different user.
+                    #{handles := Hdls = [_ | _]} ->
+                        lists:any(fun (Hdl) ->
+                            case H0 of
+                                #{Hdl := #{user := User}} -> false;
+                                #{Hdl := #{state := error}} -> false;
+                                #{Hdl := #{min := TE}} when (T > TE) -> false;
+                                #{Hdl := _} -> true;
+                                _ -> false
+                            end
+                        end, Hdls);
+                    _ -> true
+                end
+            end, Ips0),
+            % Also eliminate any backends with a reported session that's
+            % within its min time if the backend is busy.
+            lists:filter(fun (Ip) ->
+                #{Ip := HM} = M0,
+                #{session_history := SH, report_state := {St, StT}} = HM,
+                WithinRsvdTime = lists:filter(fun (Sess) ->
+                    #{time := ST, user := U} = Sess,
+                    not (U =:= User) and ((ST + RT) >= T)
+                end, queue:to_list(SH)),
+                ((St =:= available) and ((StT + HT) < T))
+                    or (WithinRsvdTime == 0)
+            end, Ips1)
     end.
 
 -spec user_existing_hosts(username(), pool(), #?MODULE{}) -> [ipstr()].
@@ -1276,12 +1315,13 @@ user_existing_hosts_single(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0
     last_report => time(),
     is_lab => boolean(),
     resvd_count => integer(),
-    latest_resvd_time => time()
+    latest_resvd_time => time(),
+    n_user_sess => integer()
     }.
 
--spec annotate_prefs(Vsn :: integer(), Pool :: atom(), #?MODULE{}) -> [host_decision_info()].
-annotate_prefs(N, Pool, #?MODULE{meta = M0, hdls = H})
-            when (N == 2) or (N == 3)->
+-spec annotate_prefs(Vsn :: integer(), User :: username(), Pool :: atom(), #?MODULE{}) -> [host_decision_info()].
+annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H})
+            when (N =< 4) ->
     M1 = maps:fold(fun (_Ip, HM, Acc) ->
         case HM of
             #{pool := Pool, enabled := true} -> [HM | Acc];
@@ -1308,6 +1348,11 @@ annotate_prefs(N, Pool, #?MODULE{meta = M0, hdls = H})
             end
         end, 0, queue:to_list(SHist)),
         SALatest = lists:max([ALatest, SLatest]),
+
+        NUserSess = lists:foldl(fun
+            (#{user := U}, Acc) when (U =:= User) -> Acc + 1;
+            (_, Acc) -> Acc
+        end, 0, queue:to_list(SHist)),
 
         InError = (ELatest > ALatest),
 
@@ -1344,24 +1389,25 @@ annotate_prefs(N, Pool, #?MODULE{meta = M0, hdls = H})
             last_report => LastReport,
             is_lab => IsLab,
             resvd_count => ResvdCount,
-            latest_resvd_time => LatestResvdTime
+            latest_resvd_time => LatestResvdTime,
+            n_user_sess => NUserSess
         }
     end, M1).
 
 -spec pref_compare(integer(), host_decision_info(), host_decision_info()) -> {boolean(), any()}.
-pref_compare(N, A, B) when (N == 2) or (N == 3) ->
+pref_compare(N, A, B) when (N =< 4) ->
     #{ip := IpA, role := RoleA, image := ImageA, idle_from := IdleFromA,
         e_latest := ELatestA, sa_latest := SALatestA,
         in_error := InErrorA, report_state := RepStateA,
         last_report := LastReportA, is_lab := IsLabA,
         resvd_count := ResvdCountA, latest_resvd_time := LatestResvdTimeA,
-        rep_state_changed := RepStateChangedA} = A,
+        rep_state_changed := RepStateChangedA, n_user_sess := NUserSessA} = A,
     #{ip := IpB, role := RoleB, image := ImageB, idle_from := IdleFromB,
         e_latest := ELatestB, sa_latest := SALatestB,
         in_error := InErrorB, report_state := RepStateB,
         last_report := LastReportB, is_lab := IsLabB,
         resvd_count := ResvdCountB, latest_resvd_time := LatestResvdTimeB,
-        rep_state_changed := RepStateChangedB} = B,
+        rep_state_changed := RepStateChangedB, n_user_sess := NUserSessB} = B,
     % A <= B  => true
     % else    => false
     %
@@ -1380,9 +1426,9 @@ pref_compare(N, A, B) when (N == 2) or (N == 3) ->
             (RepStateB =:= busy) -> {true, "B busy"};
         (N == 2) and (RepStateA =:= busy) and (RepStateChangedB > SALatestB) and
             (RepStateB =:= available) -> {false, "A busy"};
-        (N == 3) and (LastReportA > SALatestA) and (RepStateA =:= available) and
+        (N >= 3) and (LastReportA > SALatestA) and (RepStateA =:= available) and
             (RepStateB =:= busy) -> {true, "B busy"};
-        (N == 3) and (RepStateA =:= busy) and (LastReportB > SALatestB) and
+        (N >= 3) and (RepStateA =:= busy) and (LastReportB > SALatestB) and
             (RepStateB =:= available) -> {false, "A busy"};
         % prefer machines with role == vlab
         (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) ->
@@ -1406,6 +1452,9 @@ pref_compare(N, A, B) when (N == 2) or (N == 3) ->
         % the time we reserved it
         (LatestResvdTimeA < LatestResvdTimeB) -> {true, "A rsvdtime"};
         (LatestResvdTimeA > LatestResvdTimeB) -> {false, "B rsvdtime"};
+        % prefer machines this user has used before
+        (N >= 4) and (NUserSessA < NUserSessB) -> {false, "A usersess"};
+        (N >= 4) and (NUserSessA > NUserSessB) -> {true, "B usersess"};
         % prefer machines where the last alloc or session start was further
         % in the past
         (SALatestA < SALatestB) -> {true, "A SAlatest"};
@@ -1418,8 +1467,8 @@ pref_compare(N, A, B) when (N == 2) or (N == 3) ->
         (IpA > IpB) -> {false, "B ip"}
     end.
 
--spec sort_prefs(Vsn :: integer(), Pool :: atom(), #?MODULE{}) -> [ipstr()].
-sort_prefs(1, Pool, #?MODULE{meta = M, hdls = H}) ->
+-spec sort_prefs(Vsn :: integer(), Pool :: atom(), User :: username(), #?MODULE{}) -> [ipstr()].
+sort_prefs(1, Pool, _User, #?MODULE{meta = M, hdls = H}) ->
     SortFun = fun(IpA, IpB) ->
         #{IpA := A, IpB := B} = M,
         #{role := RoleA, image := ImageA, idle_from := IdleFromA} = A,
@@ -1550,15 +1599,15 @@ sort_prefs(1, Pool, #?MODULE{meta = M, hdls = H}) ->
         end
     end, [], M),
     lists:sort(SortFun, Ips);
-sort_prefs(N, Pool, S0 = #?MODULE{}) ->
+sort_prefs(N, Pool, User, S0 = #?MODULE{}) ->
     SortFun = fun(A, B) ->
         {R, _Why} = pref_compare(N, A, B),
         R
     end,
     lists:map(fun (#{ip := Ip}) -> Ip end,
-        lists:sort(SortFun, annotate_prefs(N, Pool, S0))).
+        lists:sort(SortFun, annotate_prefs(N, Pool, User, S0))).
 
-sort_prefs_raw(N, Pool, S0 = #?MODULE{meta = M}) ->
+sort_prefs_raw(N, Pool, User, S0 = #?MODULE{meta = M}) ->
     SortFun = fun(A, B) ->
         {R, _Why} = pref_compare(N, A, B),
         R
@@ -1566,4 +1615,4 @@ sort_prefs_raw(N, Pool, S0 = #?MODULE{meta = M}) ->
     lists:map(fun (Ann = #{ip := Ip}) ->
         #{Ip := HM} = M,
         HM#{annotation => Ann}
-    end, lists:sort(SortFun, annotate_prefs(N, Pool, S0))).
+    end, lists:sort(SortFun, annotate_prefs(N, Pool, User, S0))).

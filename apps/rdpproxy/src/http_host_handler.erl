@@ -145,18 +145,20 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
         _ ->
             UpdateChanges2
     end,
-    Status = case session_ra:get_host(Ip) of
+    {Status, LastTransition} = case session_ra:get_host(Ip) of
         {ok, Meta0} ->
-            session_ra:update_host(UpdateChanges3);
+            #{report_state := RS} = Meta0,
+            {session_ra:update_host(UpdateChanges3), RS};
         {error, not_found} ->
             case session_ra:create_host(UpdateChanges3) of
                 ok ->
                     ok = session_ra:enable_host(Ip),
                     {ok, Meta0} = session_ra:get_host(Ip),
-                    ok;
+                    #{report_state := RS} = Meta0,
+                    {ok, RS};
                 Other ->
                     Meta0 = #{},
-                    Other
+                    {Other, {busy, 0}}
             end
     end,
     case Status of
@@ -169,7 +171,8 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
             end,
             NewSessions = case {Input, Meta0} of
                 {#{sessions := ISessions}, #{session_history := SHist}} ->
-                    new_sessions(ISessions, queue:to_list(SHist));
+                    new_sessions(ISessions, LastTransition,
+                        queue:to_list(SHist));
                 _ -> []
             end,
             lists:foreach(fun (InpSess) ->
@@ -196,7 +199,7 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
             {false, Req2, S}
     end.
 
-new_sessions(Inputs, PoolRecords) ->
+new_sessions(Inputs, LastTransition, PoolRecords) ->
     lists:sort(fun (InpA, InpB) ->
         #{start := StartA, user := UserA} = InpA,
         #{start := StartB, user := UserB} = InpB,
@@ -208,20 +211,21 @@ new_sessions(Inputs, PoolRecords) ->
             true -> false
         end
     end, lists:filter(fun (Inp) ->
-        not (match_session(Inp, PoolRecords))
+        not (match_session(Inp, LastTransition, PoolRecords))
     end, Inputs)).
 
-match_session(_, []) -> false;
-match_session(#{start := 0, user := UserI}, PoolRecords) ->
+match_session(_, _, []) -> false;
+match_session(#{start := 0, user := UserI}, {St, TB}, PoolRecords) ->
     PRsWithRepTime = lists:filter(fun
         (#{report_time := true}) -> true;
         (_) -> false
     end, PoolRecords),
     case lists:last(PRsWithRepTime) of
-        #{user := UserI} -> true;
+        #{user := UserI} when (St =:= busy) -> true;
+        #{user := UserI, time := T} when (St =:= available) and (TB < T) -> true;
         _ -> false
     end;
-match_session(Input, [PoolRecord | Rest]) ->
+match_session(Input, LT, [PoolRecord | Rest]) ->
     #{start := StartI, user := UserI} = Input,
     TypeI = case Input of
         #{type := T} -> T;
@@ -233,8 +237,8 @@ match_session(Input, [PoolRecord | Rest]) ->
         _ -> 30
     end,
     if
-        not (UserP =:= UserI) -> match_session(Input, Rest);
-        not (TypeI =:= TypeP) -> match_session(Input, Rest);
-        (abs(StartP - StartI) > MaxDelta) -> match_session(Input, Rest);
+        not (UserP =:= UserI) -> match_session(Input, LT, Rest);
+        not (TypeI =:= TypeP) -> match_session(Input, LT, Rest);
+        (abs(StartP - StartI) > MaxDelta) -> match_session(Input, LT, Rest);
         true -> true
     end.
