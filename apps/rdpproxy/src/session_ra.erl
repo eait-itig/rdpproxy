@@ -1090,7 +1090,7 @@ filter_min_reserved(4, T, Pool, User, Ips0, #?MODULE{meta = M0, hdls = H0, pools
                 #{session_history := SH, report_state := {St, StT}} = HM,
                 WithinRsvdTime = lists:filter(fun (Sess) ->
                     #{time := ST, user := U} = Sess,
-                    not (U =:= User) and ((ST + RT) >= T)
+                    (not (U =:= User)) and ((ST + RT) >= T)
                 end, queue:to_list(SH)),
                 ((St =:= available) and ((StT + HT) < T))
                     or (length(WithinRsvdTime) == 0)
