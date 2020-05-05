@@ -232,13 +232,13 @@ match_session(Input, LT, [PoolRecord | Rest]) ->
         _ -> <<"other">>
     end,
     #{time := StartP, user := UserP, type := TypeP} = PoolRecord,
-    MaxDelta = case PoolRecord of
-        #{report_time := true} -> 600;
-        _ -> 30
+    {MaxDelta, MatchType} = case PoolRecord of
+        #{report_time := true} -> {600, false};
+        _ -> {30, true}
     end,
     if
         not (UserP =:= UserI) -> match_session(Input, LT, Rest);
-        not (TypeI =:= TypeP) -> match_session(Input, LT, Rest);
+        MatchType and (not (TypeI =:= TypeP)) -> match_session(Input, LT, Rest);
         (abs(StartP - StartI) > MaxDelta) -> match_session(Input, LT, Rest);
         true -> true
     end.
