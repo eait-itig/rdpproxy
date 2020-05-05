@@ -46,6 +46,7 @@
 -export([get_all_hosts/0, get_user_handles/1, get_host/1, get_all_handles/0]).
 -export([host_error/2]).
 -export([annotate_prefs/4, sort_prefs/4, pref_compare/3, sort_prefs_raw/4]).
+-export([process_rules/2]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
                 $a,$b,$c,$d,$e,$f,$g,$h,$i,$j,

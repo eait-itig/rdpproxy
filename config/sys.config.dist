@@ -108,7 +108,29 @@
             %%
             %% Helpdesk email, used in some error messages
             %%
-            {helpdesk, <<"helpdesk@eait.uq.edu.au">>}
+            {helpdesk, <<"helpdesk@eait.uq.edu.au">>},
+
+            %%
+            %% ACL to grant access to the administrative options in the "choice"
+            %% screen (explicit host selection, disable fwd creds)
+            %%
+            {admin_acl, [
+                %%
+                %% Allow a specific user by username
+                %%
+                %{allow, user, <<"xxx">>},
+
+                %%
+                %% Allow an AD group (if authing against AD and krb5 is
+                %% configured to obtain a service ticket)
+                %%
+                %{allow, group, {sid,1,5,[21,123545676989,123,123,1]}},
+
+                %%
+                %% Default-deny
+                %%
+                {deny, everybody}
+            ]}
         ]},
         {backend, [
             %%

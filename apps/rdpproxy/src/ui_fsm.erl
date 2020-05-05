@@ -36,6 +36,8 @@
 -include_lib("cairerl/include/cairerl.hrl").
 -include_lib("rdp_ui/include/ui.hrl").
 
+-include_lib("kernel/include/inet.hrl").
+
 -export([start_link/2]).
 -export([startup/2, login/2, no_redir/2, waiting/2, mfa/2, mfa_waiting/2, choose/2, choose_pool/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
@@ -909,7 +911,7 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
         true -> {ui_vlayout, 2 * (H / 3)};
         false -> {ui_hlayout, H}
     end,
-    Events0 = [
+    BaseEvents0 = [
         { [{id, root}],     {set_bgcolor, BgColour} },
         { [{id, root}],     {add_child,
                              #widget{id = hlayout,
@@ -940,7 +942,44 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
         { [{id, instru}],       {init, left, rdpproxy:config([ui, instruction_choose])} },
         { [{id, instru}],       {set_bgcolor, BgColour} }
     ],
-    {Root2, Orders, []} = ui:handle_events(Root, Events0),
+    #?MODULE{uinfo = UInfo} = S,
+    AdminACL = rdpproxy:config([ui, admin_acl], [{deny, everybody}]),
+    BaseEvents1 = case session_ra:process_rules(UInfo, AdminACL) of
+        allow -> BaseEvents0 ++ [
+            { [{id, loginlyt}], {add_child,
+                                #widget{id = itiglyt,
+                                        mod = ui_vlayout,
+                                        size = {400.0, 50.0}}} },
+            { [{id, itiglyt}],  init },
+            { [{id, itiglyt}],  {add_child,
+                                #widget{id = itiglyt2,
+                                        mod = ui_hlayout,
+                                        size = {400.0, 30.0}}} },
+            { [{id, itiglyt2}], init },
+            { [{id, itiglyt2}], {add_child,
+                                #widget{id = hostinp,
+                                        mod = ui_textinput,
+                                        size = {300.0, 28.0}}} },
+            { [{id, itiglyt2}], {add_child,
+                                #widget{id = itigbtn,
+                                        mod = ui_button,
+                                        size = {60.0, 28.0}}} },
+            { [{id, itiglyt}],  {add_child,
+                                #widget{id = credschk,
+                                        mod = ui_checkbox,
+                                        size = {200.0, 14.0}}} },
+
+            { [{id, hostinp}],  {init, <<"hostname or ip">>} },
+            { [{id, itigbtn}],  {init, <<"connect", 0>>} },
+            { [{id, credschk}], {init, left, <<"forward credentials">>} },
+            { [{id, credschk}], {set_bgcolor, BgColour} },
+
+            { [{id, credschk}], {set_checked, true} },
+            { [{id, hostinp}],  focus }
+        ];
+        deny -> BaseEvents0
+    end,
+    {Root2, Orders, []} = ui:handle_events(Root, BaseEvents1),
     send_orders(S, Orders),
 
     #?MODULE{sess = #{user := U}} = S,
@@ -1136,8 +1175,69 @@ choose({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
 choose({ui, {clicked, refreshbtn}}, S = #?MODULE{}) ->
     choose(setup_ui, S);
 
-choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0}) ->
-    Sess1 = Sess0#{ip => Ip, port => 3389},
+choose({ui, {submitted, hostinp}}, S = #?MODULE{}) ->
+    choose({ui, {clicked, itigbtn}}, S);
+
+choose({ui, {clicked, itigbtn}}, S = #?MODULE{root = Root}) ->
+    [HostInp] = ui:select(Root, [{id, hostinp}]),
+    HostText = ui_textinput:get_text(HostInp),
+    {Ip, Hostname} = case inet:parse_address(binary_to_list(HostText)) of
+        {ok, IpInet} ->
+            case session_ra:get_host(HostText) of
+                {ok, #{hostname := HN}} -> {HostText, HN};
+                _ ->
+                    case http_api:rev_lookup(IpInet) of
+                        {ok, RevLookupHN} ->
+                            {HostText, iolist_to_binary([RevLookupHN])};
+                        _ ->
+                            {HostText, HostText}
+                    end
+            end;
+        _ ->
+            {ok, AllHosts} = session_ra:get_all_hosts(),
+            ExactHosts = lists:filter(fun (H) ->
+                case H of
+                    #{hostname := HostText} -> true;
+                    _ -> false
+                end
+            end, AllHosts),
+            PrefixHosts = lists:filter(fun (H) ->
+                #{hostname := HN} = H,
+                case binary:match(HN, [HostText]) of
+                    {0, _} -> true;
+                    _ -> false
+                end
+            end, AllHosts),
+            case {ExactHosts, PrefixHosts} of
+                {[#{ip := Ip0, hostname := HN0} | _], _} -> {Ip0, HN0};
+                {[], [#{ip := Ip0, hostname := HN0}]} -> {Ip0, HN0};
+                _ ->
+                    case inet_res:gethostbyname(binary_to_list(HostText)) of
+                        {ok, #hostent{h_addr_list = [Addr]}} ->
+                            AddrBin = iolist_to_binary([inet:ntoa(Addr)]),
+                            {AddrBin, HostText};
+                        Err ->
+                            lager:debug("failed to lookup ~p: ~p", [
+                                HostText, Err]),
+                            {unknown, HostText}
+                    end
+            end
+    end,
+    case Ip of
+        unknown ->
+            %% TODO: display error message
+            {next_state, choose, S};
+        _ ->
+            choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S)
+    end;
+
+choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0, root = Root}) ->
+    [FwdCredsChkBox] = ui:select(Root, [{id, credschk}]),
+    FwdCreds = ui_checkbox:get_checked(FwdCredsChkBox),
+    Sess1 = case FwdCreds of
+        true -> Sess0#{ip => Ip, port => 3389};
+        false -> Sess0#{ip => Ip, port => 3389, password => <<"">>}
+    end,
     _ = session_ra:create_host(#{
         pool => default,
         ip => Ip,
