@@ -1232,8 +1232,10 @@ choose({ui, {clicked, itigbtn}}, S = #?MODULE{root = Root}) ->
     end;
 
 choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0, root = Root}) ->
-    [FwdCredsChkBox] = ui:select(Root, [{id, credschk}]),
-    FwdCreds = ui_checkbox:get_checked(FwdCredsChkBox),
+    FwdCreds = case ui:select(Root, [{id, credschk}]) of
+        [FwdCredsChkBox] -> ui_checkbox:get_checked(FwdCredsChkBox);
+        [] -> true
+    end,
     Sess1 = case FwdCreds of
         true -> Sess0#{ip => Ip, port => 3389};
         false -> Sess0#{ip => Ip, port => 3389, password => <<"">>}
