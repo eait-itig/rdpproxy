@@ -97,6 +97,37 @@ handle_root_events(State, S = #?MODULE{root = Root}, Events) ->
     send_orders(S, Orders),
     {next_state, State, S#?MODULE{root = Root2}}.
 
+handle_paste(TextInpId, State, S = #?MODULE{frontend = F, root = Root}) ->
+    case rdp_server:get_vchan_pid(F, cliprdr_fsm) of
+        {ok, ClipRdr} ->
+            case cliprdr_fsm:list_formats(ClipRdr) of
+                {ok, Fmts} ->
+                    Fmt = case lists:member(unicode, Fmts) of
+                        true -> unicode;
+                        false -> text
+                    end,
+                    case cliprdr_fsm:paste(ClipRdr, Fmt) of
+                        {ok, Data} ->
+                            [Line | _] = binary:split(Data, [<<"\r">>, <<"\n">>]),
+                            Events = [
+                                { [{id, TextInpId}], {insert_text, Line} }
+                            ],
+                            {Root2, Orders, []} = ui:handle_events(Root, Events),
+                            send_orders(S, Orders),
+                            {next_state, State, S#?MODULE{root = Root2}};
+                        Err ->
+                            lager:debug("paste error: ~p", [Err]),
+                            {next_state, State, S}
+                    end;
+                Err ->
+                    lager:debug("paste requested, failed to list clipboard "
+                        "formats: ~p", [Err]),
+                    {next_state, State, S}
+            end;
+        _ ->
+            {next_state, State, S}
+    end.
+
 bgcolour() ->
     {R, G, B} = rdpproxy:config([ui, bg_colour], {16#49, 16#07, 16#5e}),
     {R / 256, G / 256, B / 256}.
@@ -354,6 +385,9 @@ login({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         _ ->
             {next_state, login, S}
     end;
+
+login({ui, {paste, TextInpId}}, S = #?MODULE{}) ->
+    handle_paste(TextInpId, login, S);
 
 login({ui, {submitted, userinp}}, S = #?MODULE{}) ->
     Event = { [{id, passinp}], focus },
@@ -649,6 +683,9 @@ mfa({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         _ ->
             {next_state, mfa, S}
     end;
+
+mfa({ui, {paste, TextInpId}}, S = #?MODULE{}) ->
+    handle_paste(TextInpId, mfa, S);
 
 mfa({ui, {submitted, {otpinp, DevId}}}, S = #?MODULE{root = Root}) ->
     [Txt] = ui:select(Root, [{id, {otpinp, DevId}}]),
@@ -1166,6 +1203,9 @@ choose({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         _ ->
             {next_state, choose, S}
     end;
+
+choose({ui, {paste, TextInpId}}, S = #?MODULE{}) ->
+    handle_paste(TextInpId, choose, S);
 
 choose({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     lager:debug("user clicked closebtn"),
