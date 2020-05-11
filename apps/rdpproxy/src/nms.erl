@@ -36,18 +36,48 @@
 
 -export([get_user_hosts/2, wol/2, bump_count/3]).
 
+-export_type([client/0, host_info/0]).
+
+-spec start_link() -> {ok, client()} | {error, term()}.
 start_link() ->
     gen_server:start_link(?MODULE, [], []).
 
+-spec stop(client()) -> ok.
 stop(N) ->
     gen_server:call(N, stop).
 
-get_user_hosts(N, Username) ->
-    gen_server:call(N, {get_user_hosts, Username}).
+-opaque client() :: pid().
 
+-type hostname() :: binary().
+-type username() :: binary().
+
+-type host_info_key_building() :: binary().
+    % <<"hostname">> | <<"ip">> | <<"building">> | <<"room">>.
+-type host_info_key_desc() :: binary().
+    % <<"hostname">> | <<"ip">> | <<"desc">>.
+
+-type host_info() :: #{host_info_key_building() => binary()} |
+    #{host_info_key_desc() => binary()}.
+
+-spec get_user_hosts(client(), username()) -> {ok, [host_info()]} | {error, term()}.
+get_user_hosts(N, Username) ->
+    get_user_hosts(N, Username, 3).
+
+get_user_hosts(N, Username, Retries) ->
+    case gen_server:call(N, {get_user_hosts, Username}) of
+        {error, {error, timeout}} ->
+            case Retries of
+                1 -> {error, timeout};
+                _ -> get_user_hosts(N, Username, Retries - 1)
+            end;
+        Else -> Else
+    end.
+
+-spec wol(client(), hostname()) -> {ok, binary()} | {error, term()}.
 wol(N, Hostname) ->
     gen_server:call(N, {wol, Hostname}).
 
+-spec bump_count(client(), username(), binary()) -> {ok, binary()} | {error, term()}.
 bump_count(N, Username, Ip) ->
     gen_server:call(N, {bump_count, Username, Ip}).
 
@@ -97,7 +127,7 @@ do_signed_req(Method, Uri, Params, #?MODULE{gun = Gun, host = Host, signer = Sig
     SReq = http_signature:sign(Signer, Method, Uri, Hdrs1),
     #{headers := Hdrs2} = SReq,
     Req = gun:request(Gun, MethodBin, Uri, maps:to_list(Hdrs2), Body),
-    case gun:await(Gun, Req, 2000) of
+    case gun:await(Gun, Req, 3000) of
         {response, fin, Status, _Headers} ->
             {ok, Status};
         {response, nofin, Status, Headers} ->
