@@ -81,7 +81,8 @@ probe_rx(Pid, MonRef, RetVal) ->
 %% @private
 init([Pid, L, Address, Port]) when is_pid(Pid) ->
     init([Pid, L, Address, Port, #x224_cr{
-        class = 0, dst = 0, src = crypto:rand_uniform(2000,9999)
+        class = 0, dst = 0, src = crypto:rand_uniform(2000,9999),
+        rdp_protocols = [ssl]
         }]);
 
 init([Srv = {P, _}, L, Address, Port]) when is_pid(P) ->
