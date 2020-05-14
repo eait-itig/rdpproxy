@@ -380,6 +380,9 @@ process_rules(UInfo, [Rule | Rest]) ->
     % field, that can be used to automatically assign a pool
     report_roles => [binary()],
 
+    % customise role sorting order for the pool
+    role_priority => #{binary() | default => integer()},
+
     %
     % timing settings for the pool
     %
@@ -510,7 +513,8 @@ init(_Config) ->
         choice => false,
         report_roles => [],
         min_rsvd_time => 900,
-        hdl_expiry_time => 900
+        hdl_expiry_time => 900,
+        role_priority => #{default => 0}
     },
     #?MODULE{pools = #{default => DefaultPool}}.
 
@@ -558,7 +562,8 @@ apply(_Meta, {create_pool, PD0}, S0 = #?MODULE{pools = P0}) ->
                 choice => maps:get(choice, PD0, false),
                 report_roles => maps:get(report_roles, PD0, []),
                 min_rsvd_time => maps:get(min_rsvd_time, PD0, 900),
-                hdl_expiry_time => maps:get(hdl_expiry_time, PD0, 900)
+                hdl_expiry_time => maps:get(hdl_expiry_time, PD0, 900),
+                role_priority => maps:get(role_priority, PD0, #{default => 0})
             },
             P1 = P0#{Pool => PD1},
             S1 = S0#?MODULE{pools = P1},
@@ -569,7 +574,11 @@ apply(_Meta, {update_pool, PCh}, S0 = #?MODULE{pools = P0}) ->
     #{id := Pool} = PCh,
     case P0 of
         #{Pool := PD0} ->
-            PD1 = maps:map(fun (K, V0) ->
+            PD1 = case PD0 of
+                #{role_priority := _} -> PD0;
+                _ -> PD0#{role_priority => #{default => 0}}
+            end,
+            PD2 = maps:map(fun (K, V0) ->
                 case {K, PCh} of
                     {title, #{K := V1}} when is_binary(V1) -> V1;
                     {help_text, #{K := V1}} when is_binary(V1) -> V1;
@@ -579,10 +588,11 @@ apply(_Meta, {update_pool, PCh}, S0 = #?MODULE{pools = P0}) ->
                     {report_roles, #{K := V1}} when is_list(V1) -> V1;
                     {min_rsvd_time, #{K := V1}} when is_integer(V1) -> V1;
                     {hdl_expiry_time, #{K := V1}} when is_integer(V1) -> V1;
+                    {role_priority, #{K := V1}} when is_map(V1) -> V1;
                     _ -> V0
                 end
-            end, PD0),
-            P1 = P0#{Pool => PD1},
+            end, PD1),
+            P1 = P0#{Pool => PD2},
             S1 = S0#?MODULE{pools = P1},
             {S1, ok, []};
         _ ->
@@ -1319,12 +1329,21 @@ user_existing_hosts_single(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0
     is_lab => boolean(),
     resvd_count => integer(),
     latest_resvd_time => time(),
-    n_user_sess => integer()
+    n_user_sess => integer(),
+    role_prio => integer()
     }.
 
 -spec annotate_prefs(Vsn :: integer(), User :: username(), Pool :: atom(), #?MODULE{}) -> [host_decision_info()].
-annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H})
+annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H, pools = P})
             when (N =< 4) ->
+    RolePrioMap = case P of
+        #{Pool := PM} ->
+            case PM of
+                #{role_priority := RPM} -> RPM;
+                _ -> #{default => 0}
+            end;
+        _ -> #{default => 0}
+    end,
     M1 = maps:fold(fun (_Ip, HM, Acc) ->
         case HM of
             #{pool := Pool, enabled := true} -> [HM | Acc];
@@ -1333,6 +1352,11 @@ annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H})
     end, [], M0),
     lists:map(fun (HM) ->
         #{ip := Ip, role := Role, image := Image, idle_from := IdleFrom} = HM,
+
+        RolePrio = case RolePrioMap of
+            #{Role := RPN} -> RPN;
+            #{default := RPN} -> RPN
+        end,
 
         #{error_history := EHist, alloc_history := AHist,
           session_history := SHist} = HM,
@@ -1393,7 +1417,8 @@ annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H})
             is_lab => IsLab,
             resvd_count => ResvdCount,
             latest_resvd_time => LatestResvdTime,
-            n_user_sess => NUserSess
+            n_user_sess => NUserSess,
+            role_prio => RolePrio
         }
     end, M1).
 
@@ -1402,13 +1427,13 @@ pref_compare(N, A, B) when (N =< 4) ->
     #{ip := IpA, role := RoleA, image := ImageA, idle_from := IdleFromA,
         e_latest := ELatestA, sa_latest := SALatestA,
         in_error := InErrorA, report_state := RepStateA,
-        last_report := LastReportA, is_lab := IsLabA,
+        last_report := LastReportA, is_lab := IsLabA, role_prio := RolePrioA,
         resvd_count := ResvdCountA, latest_resvd_time := LatestResvdTimeA,
         rep_state_changed := RepStateChangedA, n_user_sess := NUserSessA} = A,
     #{ip := IpB, role := RoleB, image := ImageB, idle_from := IdleFromB,
         e_latest := ELatestB, sa_latest := SALatestB,
         in_error := InErrorB, report_state := RepStateB,
-        last_report := LastReportB, is_lab := IsLabB,
+        last_report := LastReportB, is_lab := IsLabB, role_prio := RolePrioB,
         resvd_count := ResvdCountB, latest_resvd_time := LatestResvdTimeB,
         rep_state_changed := RepStateChangedB, n_user_sess := NUserSessB} = B,
     % A <= B  => true
@@ -1433,6 +1458,9 @@ pref_compare(N, A, B) when (N =< 4) ->
             (RepStateB =:= busy) -> {true, "B busy"};
         (N >= 3) and (RepStateA =:= busy) and (LastReportB > SALatestB) and
             (RepStateB =:= available) -> {false, "A busy"};
+        % prefer machines with higher role priority if we have that
+        RolePrioA > RolePrioB -> {true, "A role prio"};
+        RolePrioA < RolePrioB -> {false, "B role prio"};
         % prefer machines with role == vlab
         (RoleA =:= <<"vlab">>) and (not (RoleB =:= <<"vlab">>)) ->
             {true, "A vlab"};

@@ -148,7 +148,10 @@ from_json(Req, S = #state{ip = Ip, peer = Peer}) ->
     {Status, LastTransition} = case session_ra:get_host(Ip) of
         {ok, Meta0} ->
             #{report_state := RS} = Meta0,
-            {session_ra:update_host(UpdateChanges3), RS};
+            % If we're updating an existing host, don't change the role
+            % field: the operator should be able to override it
+            UpdateChanges4 = maps:remove(role, UpdateChanges3),
+            {session_ra:update_host(UpdateChanges4), RS};
         {error, not_found} ->
             case session_ra:create_host(UpdateChanges3) of
                 ok ->
