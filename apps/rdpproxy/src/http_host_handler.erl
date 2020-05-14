@@ -90,7 +90,7 @@ content_types_accepted(Req, S = #state{}) ->
     {Types, Req, S}.
 
 to_json(Req, S = #state{ip = undefined, meta = Metas}) ->
-    ReportTimes = [T || #{last_report := T} <- Metas],
+    ReportTimes = [T || #{last_report := T} <- Metas, is_integer(T)],
     Now = erlang:system_time(second),
     LastReport = case ReportTimes of
         [] -> 0;
