@@ -284,7 +284,17 @@ handle_info({ssl, SslSock, Bin}, State, #?MODULE{sock = Sock, sslsock = SslSock}
 handle_info({ssl_closed, SslSock}, _State, #?MODULE{sslsock = SslSock} = Data) ->
     {stop, normal, Data};
 
+handle_info({ssl_error, SslSock, Why}, State, #?MODULE{sslsock = SslSock} = Data) ->
+    lager:debug("backend ssl error in state ~p: ~p", [State, Why]),
+    ssl:close(SslSock),
+    {stop, normal, Data};
+
 handle_info({tcp_closed, Sock}, _State, #?MODULE{sock = Sock} = Data) ->
+    {stop, normal, Data};
+
+handle_info({tcp_error, Sock, Why}, State, #?MODULE{sock = Sock} = Data) ->
+    lager:debug("backend tcp error in state ~p: ~p", [State, Why]),
+    gen_tcp:close(Sock),
     {stop, normal, Data};
 
 handle_info(Msg, State, Data) ->
