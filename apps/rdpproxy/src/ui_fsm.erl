@@ -1036,7 +1036,7 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
             AnyAvail = lists:any(fun (Dev) ->
                 #{handles := HDs, report_state := {St, _When}} = Dev,
                 OtherUserHDs = lists:filter(fun
-                    (#{user := _U}) -> false;
+                    (#{user := U2}) when (U2 =:= U) -> false;
                     (_) -> true
                 end, HDs),
                 case {OtherUserHDs, St} of
@@ -1048,18 +1048,18 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
                 #{ip := Ip, handles := HDs, report_state := {St, _When},
                   role := Role, desc := Desc0} = Dev,
                 OtherUserHDs = lists:filter(fun
-                    (#{user := _U}) -> false;
+                    (#{user := U2}) when (U2 =:= U) -> false;
                     (_) -> true
                 end, HDs),
                 Busy = case {AnyAvail, OtherUserHDs, St} of
                     % Always allow selecting available machines with 0 handles
                     {_, [], available} -> false;
+                    % Also allow selecting "busy" machines without any active
+                    % handles
+                    {_, [], busy} -> false;
                     % Allow selecting machines with active handles if
                     % there are no available machines
-                    {false, _, available} -> false;
-                    % Also allow selecting "busy" machines without any active
-                    % handles if nothing else is available
-                    {false, [], busy} -> false;
+                    {false, _, _} -> false;
                     _ -> true
                 end,
                 RoleBin = if
