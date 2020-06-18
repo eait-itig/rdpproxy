@@ -204,7 +204,7 @@ pool_get([NameStr]) ->
             #{id := Id, title := Title, help_text := HelpText,
               acl := ACL, mode := Mode, report_roles := Roles,
               min_rsvd_time := MinRsvdTime, hdl_expiry_time := HdlExpTime,
-              choice := Choice} = PD,
+              choice := Choice, role_priority := RolePrio} = PD,
             RolesStr = case Roles of
                 [] -> "-";
                 _ -> string:join([unicode:characters_to_list(R, latin1) || R <- Roles], ",")
@@ -221,7 +221,11 @@ pool_get([NameStr]) ->
             io:format("\nACL:\n"),
             lists:foreach(fun (AclEnt) ->
                 io:format("  ~p\n", [AclEnt])
-            end, ACL);
+            end, ACL),
+            io:format("\nROLE PRIORITY:\n"),
+            lists:foreach(fun ({Role, Prio}) ->
+                io:format("  ~s => ~B\n", [Role, Prio])
+            end, maps:to_list(RolePrio));
         Err ->
             io:format("~p\n", [Err])
     end.
@@ -521,9 +525,9 @@ host_list(Args) ->
 
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
-    Fmt = "~16.. s  ~24.. s  ~10.. s  ~14.. s  ~10.. s  ~16.. s  ~15.. s  "
+    Fmt = "~16.. s  ~24.. s  ~10.. s  ~16.. s  ~19.. s  ~10.. s  ~16.. s  ~15.. s  "
         "~10.. s  ~8.. s  ~14.. s  ~11.. s  ~9.. s\n",
-    io:format(Fmt, ["ID", "PEER", "NODE", "STARTED", "USER", "HANDLE",
+    io:format(Fmt, ["ID", "PEER", "NODE", "PID", "STARTED", "USER", "HANDLE",
         "BACKEND", "POOL", "PROTVER", "REMHOST", "RES", "RECONN"]),
     ConnsSorted = lists:sort(fun (CA, CB) ->
         #{started := StartedA, id := IdA} = CA,
@@ -590,6 +594,7 @@ conn_list([]) ->
             Id,
             Peer,
             Node,
+            io_lib:format("~w", [Pid]),
             format_reltime(Started),
             U,
             Hdl,
@@ -680,7 +685,7 @@ conn_user(["-v", User]) ->
 conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
-    Fmt = "~12.. s  ~15.. s  ~14.. s  ~24.. s  ~14.. s  ~14.. s  ~10.. s  ~15.. s  "
+    Fmt = "~12.. s  ~16.. s  ~14.. s  ~24.. s  ~19.. s  ~10.. s  ~10.. s  ~15.. s  "
         "~8.. s  ~14.. s  ~11.. s  ~9.. s\n",
     io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
         "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
@@ -755,7 +760,14 @@ format_reltime(Time) -> format_reltime(Time, true).
 format_reltime(Time, Flavour) ->
     Now = erlang:system_time(second),
     Delta = Now - Time,
-    format_deltatime(Delta, Flavour).
+    if
+        (Delta > 12*3600) ->
+            calendar:system_time_to_rfc3339(Time, [
+                {time_designator, $ },
+                {unit, second}]);
+        true ->
+            format_deltatime(Delta, Flavour)
+    end.
 
 format_deltatime(SDelta, Flavour) ->
     Delta = abs(SDelta),
