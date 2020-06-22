@@ -36,7 +36,7 @@
 -export([start/0]).
 -export([register_conn/2, tick/0]).
 -export([get_user/1, get_all_open/0]).
--export([annotate/2]).
+-export([annotate/2, auth_attempt/2]).
 
 start() ->
     Config = application:get_env(rdpproxy, ra, []),
@@ -80,9 +80,24 @@ annotate(SessIdOrPid, Data) ->
         Else -> Else
     end.
 
+auth_attempt(SessIdOrPid, Data) ->
+    Now = erlang:system_time(second),
+    case ra:process_command(conn_ra, {annotate, Now, SessIdOrPid,
+                                      #{auth_attempts => [Data]}}) of
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
 -define(PAST_CONN_LIMIT, 32).
 -define(USER_PAST_CONN_LIMIT, 16).
 
+-type auth_attempt() :: #{
+    username => binary(),
+    status => success | failure,
+    stage => atom() | {atom(), term()},
+    reason => term(),
+    time => integer()
+    }.
 -type username() :: binary().
 -type conn_id() :: binary().
 -type conn() :: #{
@@ -94,7 +109,8 @@ annotate(SessIdOrPid, Data) ->
     session => session_ra:handle_state_nopw(),
     tsuds => [term()],
     ts_info => #ts_info{},
-    on_user => boolean()
+    on_user => boolean(),
+    auth_attempts => [auth_attempt()]
     }.
 
 -record(?MODULE, {
@@ -147,7 +163,8 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
                 updated => T,
                 peer => Peer,
                 session => Session,
-                on_user => true
+                on_user => true,
+                auth_attempts => []
             },
             C1 = C0#{Id => Conn},
             #{user := User} = Session,
@@ -199,6 +216,9 @@ apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0
                 (updated, _, Acc) -> Acc;
                 (peer, _, Acc) -> Acc;
                 (on_user, _, Acc) -> Acc;
+                (auth_attempts, V, Acc) ->
+                    #{auth_attempts := Attempts0} = Acc,
+                    Acc#{auth_attempts => Attempts0 ++ V};
                 (K, V, Acc) -> Acc#{K => V}
             end, Conn0, Map),
             Conn2 = Conn1#{updated => T},

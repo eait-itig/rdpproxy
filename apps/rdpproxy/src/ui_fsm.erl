@@ -424,6 +424,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
             login(invalid_login, S);
         _ ->
             Creds = #{
+                session => FPid,
                 username => iolist_to_binary([Username]),
                 password => iolist_to_binary([Password])
             },

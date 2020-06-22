@@ -88,6 +88,7 @@ check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
                         {true, false} ->
                             lager:debug("no PAC found in ticket for ~p (~p@~p)",
                                 [User, SPN, Realm]),
+                            record_failure({krb5_pac, Realm}, no_pac),
                             false;
                         _ ->
                             {true, UInfo}
@@ -95,11 +96,14 @@ check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
                 _ ->
                     lager:debug("no key available for ~p@~p etype ~p",
                         [SPN, Realm, EType]),
+                    record_failure({krb5_svc_ticket, Realm},
+                        {no_key_for_etype, EType}),
                     false
             end;
         Other ->
             lager:debug("failed to obtain service ticket for ~p as ~p in ~p: ~p",
                 [SPN, User, Realm, Other]),
+            record_failure({krb5_svc_ticket, Realm}, {krb_failure, Other}),
             false
     end.
 
@@ -115,8 +119,32 @@ merge([{true, #{groups := G0}} | Rest]) ->
         V -> V
     end.
 
-authenticate(#{username := U, password := P}) ->
+record_failure(Stage, Reason) ->
+    case erlang:get(conn_ra_sid) of
+        undefined -> ok;
+        Sid ->
+            Attempt0 = erlang:get(conn_ra_attempt),
+            Attempt1 = Attempt0#{
+                status => failure,
+                stage => Stage,
+                reason => Reason,
+                time => erlang:system_time(second)
+            },
+            conn_ra:auth_attempt(Sid, Attempt1)
+    end.
+
+authenticate(#{username := U, password := P} = A) ->
     Krb5Config = maps:from_list(application:get_env(rdpproxy, krb5, [])),
+
+    BaseAttempt = #{username => U, time => erlang:system_time(second)},
+    case A of
+        #{session := Sid} ->
+            erlang:put(conn_ra_sid, Sid),
+            erlang:put(conn_ra_attempt, BaseAttempt),
+            conn_ra:auth_attempt(Sid, BaseAttempt);
+        _ ->
+            erlang:erase(conn_ra_sid)
+    end,
 
     {ok, CC} = krbcc:start_link(krbcc_ets, #{}),
 
@@ -153,15 +181,28 @@ authenticate(#{username := U, password := P}) ->
                         krb_client:close(CX),
                         XRes
                     end, XRealmConfLists));
-                _ -> {true, #{groups => []}}
+                _ ->
+                    {true, #{groups => []}}
             end,
             merge([Res2, Res3]);
-        _ -> false
+        LoginErr ->
+            record_failure({krb5_login, AuthRealm}, LoginErr),
+            false
     end,
     krb_client:close(C0),
     krbcc:stop(CC),
     case Res of
         {true, Info0} ->
+            case A of
+                #{session := CSid} ->
+                    Attempt = #{
+                        username => U,
+                        status => success,
+                        time => erlang:system_time(second)
+                    },
+                    conn_ra:auth_attempt(CSid, Attempt);
+                _ -> ok
+            end,
             {true, Info0#{user => U}};
         _ ->
             Res
