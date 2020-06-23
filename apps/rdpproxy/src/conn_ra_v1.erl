@@ -283,8 +283,11 @@ init(_Config) ->
     #?MODULE{}.
 
 apply(_Meta, {machine_version, 0, 1}, S0) ->
-    #conn_ra{users = U, watches = W, conns = C, last_time = LT} = S0,
-    S1 = #?MODULE{users = U, watches = W, conns = C, last_time = LT},
+    #conn_ra{users = U, watches = W, conns = C0, last_time = LT} = S0,
+    C1 = maps:map(fun (_K, Conn0) ->
+        Conn0#{on_hour => false}
+    end, C0),
+    S1 = #?MODULE{users = U, watches = W, conns = C1, last_time = LT},
     {S1, ok, []};
 
 apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{hours = H0, conns = C0}) ->
