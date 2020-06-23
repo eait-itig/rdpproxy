@@ -434,7 +434,8 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                     #?MODULE{duoid = DuoId, peer = Peer} = S,
                     Sess0 = #{user => Username, domain => Domain,
                         password => Password},
-                    conn_ra:annotate(FPid, #{session => Sess0#{ip => undefined, password => snip}}),
+                    conn_ra:annotate(FPid, #{
+                        session => Sess0#{ip => undefined, password => snip}}),
                     S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
                     Args = #{
                         <<"username">> => Username,
@@ -442,7 +443,14 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                         <<"trusted_device_token">> => DuoId
                     },
                     EnrollIsAllow = rdpproxy:config([duo, enroll_is_allow], false),
-                    case duo:preauth(Duo, Args) of
+                    Res = duo:preauth(Duo, Args),
+                    case Res of
+                        {ok, #{<<"result">> := R}} ->
+                            conn_ra:annotate(FPid, #{duo_preauth => R});
+                        _ ->
+                            ok
+                    end,
+                    case Res of
                         {ok, #{<<"result">> := <<"enroll">>}} when EnrollIsAllow ->
                             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
                             mfa(allow, S1);
