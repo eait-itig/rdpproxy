@@ -40,7 +40,7 @@ version() -> 2.
 
 -define(PAST_CONN_LIMIT, 32).
 -define(USER_PAST_CONN_LIMIT, 16).
--define(LOG_TIME_UNIT_SEC, 60).
+-define(LOG_TIME_UNIT_SEC, 3600).
 
 -type auth_attempt() :: #{
     username => binary(),
