@@ -305,6 +305,7 @@ incr_hourlive(Hour, Incr, S0 = #?MODULE{hours = H0, hourlives = HL0}) ->
     case H0 of
         #{Hour := #{count := HN0} = Hour0} ->
             HN1 = HN0 + Incr,
+            true = (HN1 >= 0),
             OldHrs0 = gb_trees:get(HN0, HL0),
             HL1 = gb_trees:update(HN0, OldHrs0 -- [Hour], HL0),
             HL2 = case gb_trees:lookup(HN1, HL1) of
@@ -316,6 +317,7 @@ incr_hourlive(Hour, Incr, S0 = #?MODULE{hours = H0, hourlives = HL0}) ->
             H1 = H0#{Hour => Hour0#{count => HN1}},
             S0#?MODULE{hours = H1, hourlives = HL2};
         _ ->
+            true = (Incr >= 0),
             HL1 = case gb_trees:lookup(Incr, HL0) of
                 none ->
                     gb_trees:insert(Incr, [Hour], HL0);
@@ -500,6 +502,8 @@ apply(_Meta, {down, Pid, _Reason},
     S1 = case C0 of
         #{Id := #{on_user := false, on_hour := false}} ->
             S0#?MODULE{conns = maps:remove(Id, C0)};
+        #{Id := Conn0 = #{stopped := _}} ->
+            S0;
         #{Id := Conn0 = #{started := Started, on_hour := true}} ->
             Conn1 = Conn0#{stopped => T},
             C1 = C0#{Id => Conn1},
