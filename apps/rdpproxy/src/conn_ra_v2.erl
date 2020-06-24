@@ -303,7 +303,7 @@ evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
 
 incr_hourlive(Hour, Incr, S0 = #?MODULE{hours = H0, hourlives = HL0}) ->
     case H0 of
-        #{Hour := #{count := HN0, conns := HConns0} = Hour0} ->
+        #{Hour := #{count := HN0} = Hour0} ->
             HN1 = HN0 + Incr,
             OldHrs0 = gb_trees:get(HN0, HL0),
             HL1 = gb_trees:update(HN0, OldHrs0 -- [Hour], HL0),
@@ -371,8 +371,7 @@ apply(_Meta, {machine_version, 1, 2}, S0) ->
     end, S1, maps:to_list(C0)),
     {S2, ok, []};
 
-apply(#{index := Idx}, {tick, T},
-                S0 = #?MODULE{hourlives = HL0, hours = H0, conns = C0}) ->
+apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{hourlives = HL0}) ->
     CurHour = T div ?LOG_TIME_UNIT_SEC,
     S1 = case gb_trees:smallest(HL0) of
         {0, []} -> S0;
@@ -496,8 +495,7 @@ apply(_Meta, {down, Pid, noconnection}, S0 = #?MODULE{}) ->
     {S0, ok, [{monitor, node, node(Pid)}]};
 
 apply(_Meta, {down, Pid, _Reason},
-        S0 = #?MODULE{watches = W0, conns = C0, last_time = T, hours = H0,
-                      hourlives = HL0}) ->
+        S0 = #?MODULE{watches = W0, conns = C0, last_time = T}) ->
     #{Pid := Id} = W0,
     S1 = case C0 of
         #{Id := #{on_user := false, on_hour := false}} ->
