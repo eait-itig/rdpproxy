@@ -39,9 +39,10 @@
 -export([annotate/2, auth_attempt/2]).
 -export([version/0, which_module/1]).
 
-version() -> 1.
+version() -> 2.
 which_module(0) -> conn_ra;
-which_module(1) -> conn_ra_v1.
+which_module(1) -> conn_ra_v1;
+which_module(2) -> conn_ra_v2.
 
 start() ->
     Config = application:get_env(rdpproxy, ra, []),
