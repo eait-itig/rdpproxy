@@ -110,7 +110,8 @@ handle_event(Event, Srv, S = #?MODULE{subs = Subs}) ->
 handle_raw_data(Data, _Srv, S = #?MODULE{intercept = false, backend = B}) ->
     gen_fsm:send_event(B, {frontend_data, Data}),
     {ok, S};
-handle_raw_data(Bin, _Srv, S = #?MODULE{intercept = true, backend = B}) ->
+handle_raw_data(Bin, _Srv,
+            S = #?MODULE{intercept = true, backend = B, connid = ConnId}) ->
     %debug_print_data(Bin),
     case rdpp:decode_server(Bin) of
         %
@@ -141,8 +142,10 @@ handle_raw_data(Bin, _Srv, S = #?MODULE{intercept = true, backend = B}) ->
                     lager:warning("sessid mismatch (ours = ~p, they sent = ~p), "
                         "will not rewrite ts_info (no auto-login)",
                         [SessId, TheirSessId]),
+                    conn_ra:annotate(ConnId, #{forwarded_creds => false}),
                     S#?MODULE{matched_sessid = false};
                 true ->
+                    conn_ra:annotate(ConnId, #{forwarded_creds => true}),
                     S#?MODULE{matched_sessid = true}
             end,
 

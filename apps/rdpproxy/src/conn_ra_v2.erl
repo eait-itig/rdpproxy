@@ -212,6 +212,7 @@ conn_to_json(C) ->
     #{id := Id, frontend_pid := Pid, started := Started, stopped := Stopped,
       peer := {PeerIp, PeerPort}, session := Sess} = C,
     [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
+    Duration = Stopped - Started,
     J0 = #{
         <<"id">> => Id,
         <<"pid">> => iolist_to_binary(io_lib:format("~w", [Pid])),
@@ -224,7 +225,8 @@ conn_to_json(C) ->
             calendar:system_time_to_rfc3339(Started)),
         <<"stopped">> => iolist_to_binary(
             calendar:system_time_to_rfc3339(Stopped)),
-        <<"session">> => session_to_json(Sess)
+        <<"session">> => session_to_json(Sess),
+        <<"duration">> => Duration
     },
     J1 = case C of
         #{tsuds := Tsuds} -> J0#{<<"tsuds">> => tsuds_to_json(Tsuds)};
@@ -271,7 +273,11 @@ conn_to_json(C) ->
             J4#{<<"auth_attempts">> => ATJ};
         _ -> J4
     end,
-    [jsx:encode(J5), $\n].
+    J6 = case C of
+        #{forwarded_creds := FC} -> J5#{<<"forwarded_creds">> => FC};
+        _ -> J5
+    end,
+    [jsx:encode(J6), $\n].
 
 evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
     #{Hour := #{count := 0, conns := ConnKeys}} = H0,
@@ -502,7 +508,7 @@ apply(_Meta, {down, Pid, _Reason},
     S1 = case C0 of
         #{Id := #{on_user := false, on_hour := false}} ->
             S0#?MODULE{conns = maps:remove(Id, C0)};
-        #{Id := Conn0 = #{stopped := _}} ->
+        #{Id := #{stopped := _}} ->
             S0;
         #{Id := Conn0 = #{started := Started, on_hour := true}} ->
             Conn1 = Conn0#{stopped => T},
