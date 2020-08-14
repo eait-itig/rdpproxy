@@ -146,7 +146,7 @@ get_msg(Name, #?MODULE{sess = #{user := U}}) ->
 get_msg(Name, #?MODULE{}) ->
     Msg0 = rdpproxy:config([ui, Name]),
     Msg1 = binary:replace(Msg0, [<<"%HELPDESK%">>],
-        rdpproxy:config(ui, helpdesk), [global]),
+        rdpproxy:config([ui, helpdesk]), [global]),
     MsgLines = length(binary:matches(Msg1, [<<"\n">>])) + 1,
     {Msg1, MsgLines}.
 
