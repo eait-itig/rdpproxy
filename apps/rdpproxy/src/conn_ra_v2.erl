@@ -504,27 +504,32 @@ apply(_Meta, {down, Pid, noconnection}, S0 = #?MODULE{}) ->
 
 apply(_Meta, {down, Pid, _Reason},
         S0 = #?MODULE{watches = W0, conns = C0, last_time = T}) ->
-    #{Pid := Id} = W0,
-    S1 = case C0 of
-        #{Id := #{on_user := false, on_hour := false}} ->
-            S0#?MODULE{conns = maps:remove(Id, C0)};
-        #{Id := #{stopped := _}} ->
-            S0;
-        #{Id := Conn0 = #{started := Started, on_hour := true}} ->
-            Conn1 = Conn0#{stopped => T},
-            C1 = C0#{Id => Conn1},
-            Hour = Started div ?LOG_TIME_UNIT_SEC,
-            incr_hourlive(Hour, -1, S0#?MODULE{conns = C1});
-        #{Id := Conn0} ->
-            Conn1 = Conn0#{stopped => T},
-            C1 = C0#{Id => Conn1},
-            S0#?MODULE{conns = C1};
+    case W0 of
+        #{Pid := Id} ->
+            S1 = case C0 of
+                #{Id := #{on_user := false, on_hour := false}} ->
+                    S0#?MODULE{conns = maps:remove(Id, C0)};
+                #{Id := #{stopped := _}} ->
+                    S0;
+                #{Id := Conn0 = #{started := Started, on_hour := true}} ->
+                    Conn1 = Conn0#{stopped => T},
+                    C1 = C0#{Id => Conn1},
+                    Hour = Started div ?LOG_TIME_UNIT_SEC,
+                    incr_hourlive(Hour, -1, S0#?MODULE{conns = C1});
+                #{Id := Conn0} ->
+                    Conn1 = Conn0#{stopped => T},
+                    C1 = C0#{Id => Conn1},
+                    S0#?MODULE{conns = C1};
+                _ ->
+                    S0
+            end,
+            W1 = maps:remove(Pid, W0),
+            S2 = S1#?MODULE{watches = W1},
+            {S2, ok, []};
         _ ->
-            S0
-    end,
-    W1 = maps:remove(Pid, W0),
-    S2 = S1#?MODULE{watches = W1},
-    {S2, ok, []};
+            lager:error("conn_ra got down msg for non-watched pid: ~p", [Pid]),
+            {S0, ok, []}
+    end;
 
 apply(_Meta, {nodeup, Node}, S0 = #?MODULE{watches = W0}) ->
     Effects = maps:fold(fun
