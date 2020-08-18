@@ -56,7 +56,8 @@
     handle_list/1,
     handle_help/1,
     host_update/1,
-    dump_state/1
+    dump_sessions/1,
+    dump_conns/1
     ]).
 
 -export([print_prefs/1]).
@@ -751,8 +752,13 @@ conn_user([User]) ->
         io:format(Fmt, Fields)
     end, Conns).
 
-dump_state([]) ->
+dump_sessions([]) ->
     {ok, {_, SBin}, _} = ra:leader_query(session_ra,
+        fun (S) -> erlang:term_to_binary(S) end),
+    io:format("~s\n", [base64:encode(SBin)]).
+
+dump_conns([]) ->
+    {ok, {_, SBin}, _} = ra:leader_query(conn_ra,
         fun (S) -> erlang:term_to_binary(S) end),
     io:format("~s\n", [base64:encode(SBin)]).
 
