@@ -353,7 +353,23 @@ login(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
     true -> []
     end,
 
-    {Root3, Orders2, []} = ui:handle_events(Root2, Events2),
+    Tsuds = rdp_server:get_tsuds(F),
+    #tsud_core{kbd_layout = KL} = lists:keyfind(tsud_core, 1, Tsuds),
+    Events3 = case KL of
+        1033 -> Events2;
+        _ ->
+            Events2 ++ [
+                { [{id, loginlyt}], {add_child,
+                                     #widget{id = kbdwarn,
+                                             mod = ui_label,
+                                             size = {400.0, 15.0}}} },
+                { [{id, kbdwarn}], {init, center, <<"Warning: keyboard layout "
+                    "not supported; using English/US">>} },
+                { [{id, kbdwarn}], {set_bgcolor, BgColour} }
+            ]
+    end,
+
+    {Root3, Orders2, []} = ui:handle_events(Root2, Events3),
     send_orders(S, Orders2),
 
     {next_state, login, S#?MODULE{root = Root3}};
