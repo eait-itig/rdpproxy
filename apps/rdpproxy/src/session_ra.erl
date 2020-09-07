@@ -47,6 +47,7 @@
 -export([host_error/2]).
 -export([annotate_prefs/4, sort_prefs/4, pref_compare/3, sort_prefs_raw/4]).
 -export([process_rules/2]).
+-export([register_metrics/0]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
                 $a,$b,$c,$d,$e,$f,$g,$h,$i,$j,
@@ -67,6 +68,41 @@ gen_key(N) ->
     A = ?ALPHA,
     [element(crypto:rand_uniform(1, size(A)+1), A) | gen_key(N - 1)].
 gen_key() -> list_to_binary(gen_key(16)).
+
+register_metrics() ->
+    prometheus_gauge:new([
+        {name, rdpproxy_hosts_known},
+        {labels, [pool, role]},
+        {help, "Count of hosts known"}]),
+    prometheus_gauge:new([
+        {name, rdpproxy_hosts_disabled},
+        {labels, [pool, role]},
+        {help, "Count of disabled hosts"}]),
+    prometheus_gauge:new([
+        {name, rdpproxy_hosts_errored},
+        {labels, [pool, role]},
+        {help, "Count of errored hosts"}]),
+    prometheus_gauge:new([
+        {name, rdpproxy_hosts_busy},
+        {labels, [pool, role]},
+        {help, "Count of busy/reserved hosts"}]),
+    prometheus_gauge:new([
+        {name, rdpproxy_handles_open},
+        {labels, [pool, role]},
+        {help, "Count of open reservation handles"}]),
+    prometheus_counter:new([
+        {name, rdpproxy_handles_created},
+        {labels, [pool, user]},
+        {help, "Reservation handles opened"}]),
+    prometheus_counter:new([
+        {name, rdpproxy_handles_expired},
+        {labels, [pool, user]},
+        {help, "Reservation handles expired"}]),
+    prometheus_counter:new([
+        {name, rdpproxy_status_reports},
+        {labels, [pool]},
+        {help, "Processed host status reports"}]),
+    ok.
 
 -type ra_error() :: {error, term()} | {timeout, ra:server_id()}.
 
@@ -503,6 +539,68 @@ process_rules(UInfo, [Rule | Rest]) ->
     last_time = 0 :: time()
     }).
 
+update_metrics(S = #?MODULE{pools = Pools, hdls = Hdls, meta = Meta}) ->
+    Hosts = maps:values(Meta),
+    lists:foreach(fun ({Pool, _PoolConfig}) ->
+        Backends = [H || H = #{pool := P} <- Hosts, P =:= Pool],
+        BackendRoles = lists:foldl(fun (#{role := R}, Acc) ->
+            maps:update_with(R, fun (V) -> V + 1 end, 1, Acc)
+        end, #{}, Backends),
+        lists:foreach(fun ({Role, Count}) ->
+            prometheus_gauge:set(rdpproxy_hosts_known,
+                [Pool, Role], Count)
+        end, maps:to_list(BackendRoles)),
+
+        Disabled = [H || H = #{pool := P, enabled := false} <- Hosts, P =:= Pool],
+        DisabledRoles = lists:foldl(fun (#{role := R}, Acc) ->
+            maps:update_with(R, fun (V) -> V + 1 end, 1, Acc)
+        end, #{}, Disabled),
+        lists:foreach(fun ({Role, Count}) ->
+            prometheus_gauge:set(rdpproxy_hosts_disabled,
+                [Pool, Role], Count)
+        end, maps:to_list(DisabledRoles)),
+
+        Annotes = annotate_prefs(?SORT_VSN, Pool, <<"_nobody">>, S),
+
+        Errors = [A || #{in_error := true} = A <- Annotes],
+        ErrorRoles = lists:foldl(fun (#{role := R}, Acc) ->
+            maps:update_with(R, fun (V) -> V + 1 end, 1, Acc)
+        end, #{}, Errors),
+        lists:foreach(fun ({Role, Count}) ->
+            prometheus_gauge:set(rdpproxy_hosts_errored,
+                [Pool, Role], Count)
+        end, maps:to_list(ErrorRoles)),
+
+        Busy = lists:filter(fun
+            (#{report_state := RepState, resvd_count := ResvdCount}) ->
+                if
+                    (ResvdCount > 0) -> true;
+                    (RepState =:= busy) -> true;
+                    true -> false
+                end
+        end, Annotes),
+        BusyRoles = lists:foldl(fun (#{role := R}, Acc) ->
+            maps:update_with(R, fun (V) -> V + 1 end, 1, Acc)
+        end, #{}, Busy),
+        lists:foreach(fun ({Role, Count}) ->
+            prometheus_gauge:set(rdpproxy_hosts_busy,
+                [Pool, Role], Count)
+        end, maps:to_list(BusyRoles)),
+
+        HandleRoles = lists:foldl(fun ({_, #{ip := Ip}}, Acc) ->
+            case Meta of
+                #{Ip := #{pool := Pool, role := R}} ->
+                    maps:update_with(R, fun (V) -> V + 1 end, 1, Acc);
+                _ ->
+                    Acc
+            end
+        end, #{}, maps:to_list(Hdls)),
+        lists:foreach(fun ({Role, Count}) ->
+            prometheus_gauge:set(rdpproxy_handles_open,
+                [Pool, Role], Count)
+        end, maps:to_list(HandleRoles))
+    end, maps:to_list(Pools)).
+
 init(_Config) ->
     DefaultPool = #{
         id => default,
@@ -521,6 +619,7 @@ init(_Config) ->
 apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{}) ->
     S1 = expire_hdls(T, S0),
     S2 = S1#?MODULE{last_time = T},
+    update_metrics(S2),
     {S2, ok, [{release_cursor, Idx, S2}]};
 
 apply(_Meta, get_all_pools, S0 = #?MODULE{pools = P0}) ->
@@ -903,12 +1002,14 @@ apply(_Meta, {add_session, _T, Ip, SessMap}, S0 = #?MODULE{meta = M0}) ->
 
 apply(_Meta, {status_report, T, Ip, State}, S0 = #?MODULE{meta = M0}) ->
     case M0 of
-        #{Ip := HM0 = #{report_state := {State, _}}} ->
+        #{Ip := HM0 = #{report_state := {State, _}, pool := P}} ->
+            prometheus_counter:inc(rdpproxy_status_reports, [P]),
             HM1 = HM0#{last_report => T},
             M1 = M0#{Ip => HM1},
             S1 = S0#?MODULE{meta = M1},
             {S1, ok, []};
-        #{Ip := HM0} ->
+        #{Ip := HM0 = #{pool := P}} ->
+            prometheus_counter:inc(rdpproxy_status_reports, [P]),
             HM1 = HM0#{report_state => {State, T}, last_report => T},
             M1 = M0#{Ip => HM1},
             S1 = S0#?MODULE{meta = M1},
@@ -962,13 +1063,14 @@ expire_hdls(T, S0 = #?MODULE{hdlexp = HT0}) ->
 kill_handle(Hdl, S0 = #?MODULE{hdls = H0, meta = M0}) ->
     % No need to remove from the expiry tree (we're only called in expire_hdls)
     % Remove the record of the handle itself
-    #{Hdl := #{ip := Ip}} = H0,
+    #{Hdl := #{ip := Ip, user := U}} = H0,
     H1 = maps:remove(Hdl, H0),
     % Also remove the handle from the hosts handles list
-    #{Ip := HM0 = #{handles := HH0}} = M0,
+    #{Ip := HM0 = #{handles := HH0, pool := P}} = M0,
     HH1 = HH0 -- [Hdl],
     HM1 = HM0#{handles => HH1},
     M1 = M0#{Ip => HM1},
+    prometheus_counter:inc(rdpproxy_handles_expired, [P, U]),
     S0#?MODULE{hdls = H1, meta = M1}.
 
 detach_handle(Hdl, T, S0 = #?MODULE{hdls = H0, meta = M0, pools = P0,
@@ -1046,6 +1148,7 @@ begin_handle(Hdl, T, User, Ip, Pid, S0 = #?MODULE{}) ->
     },
     H1 = H0#{Hdl => HD},
     S2 = S1#?MODULE{hdls = H1, meta = M1, users = U1, watches = W1},
+    prometheus_counter:inc(rdpproxy_handles_created, [P, User]),
     {S2, HD, Effects}.
 
 -spec filter_min_reserved(integer(), time(), atom(), username(), [ipstr()], #?MODULE{}) -> [ipstr()].

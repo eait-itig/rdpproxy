@@ -35,6 +35,29 @@
 
 -export([preauth/2, auth/2, auth_status/2]).
 
+-export([register_metrics/0]).
+
+register_metrics() ->
+    prometheus_histogram:new([
+        {name, duo_request_duration_milliseconds},
+        {buckets, [20, 50, 100, 500, 1000, 5000]},
+        {labels, [method, path, status]},
+        {duration_unit, false},
+        {help, "Time spent waiting for Duo requests"} ]),
+    prometheus_counter:new([
+        {name, duo_request_errors},
+        {labels, [method, path]},
+        {help, "Errors from duo API"}]),
+    prometheus_counter:new([
+        {name, duo_preauth_result},
+        {labels, [result, user]},
+        {help, "The result field from Duo preauth replies"}]),
+    prometheus_counter:new([
+        {name, duo_auth_method},
+        {labels, [method, user]},
+        {help, "Duo auth methods attempted"}]),
+    ok.
+
 start_link() ->
     gen_server:start_link(?MODULE, [], []).
 
@@ -102,29 +125,62 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
         get -> Hdrs0;
         _ -> [{<<"content-type">>, <<"application/x-www-form-urlencoded">>} | Hdrs0]
     end,
+    T0 = erlang:system_time(microsecond),
     Req = gun:request(Gun, MethodBin, Uri, Hdrs1, Body),
     case gun:await(Gun, Req, 1000) of
         {response, fin, Status, _Headers} ->
+            T1 = erlang:system_time(microsecond),
+            Delta = (T1 - T0) / 1000,
+            prometheus_histogram:observe(duo_request_duration_milliseconds,
+                [Method, Path, Status], round(Delta)),
+            if
+                (Status >= 500) ->
+                    prometheus_counter:inc(duo_request_errors, [Method, Path]);
+                true -> ok
+            end,
             {ok, Status};
         {response, nofin, Status, Headers} ->
             RHdrs = maps:from_list(Headers),
             {ok, Body0} = gun:await_body(Gun, Req),
+            T1 = erlang:system_time(microsecond),
+            Delta = (T1 - T0) / 1000,
+            prometheus_histogram:observe(duo_request_duration_milliseconds,
+                [Method, Path, Status], round(Delta)),
+            if
+                (Status >= 500) ->
+                    prometheus_counter:inc(duo_request_errors, [Method, Path]);
+                true -> ok
+            end,
             Body1 = case RHdrs of
                 #{<<"content-type">> := <<"application/json">>} ->
                     jsx:decode(Body0, [return_maps]);
                 _ -> Body0
             end,
             {ok, Status, Body1};
-        Else -> Else
+        Else ->
+            prometheus_counter:inc(duo_request_errors, [Method, Path]),
+            Else
     end.
 
 handle_call({preauth, Args}, _From, S = #?MODULE{}) ->
+    #{<<"username">> := U} = Args,
     case do_signed_req(post, <<"/auth/v2/preauth">>, Args, S) of
-        {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
+        {ok, 200, #{<<"response">> := Resp}} ->
+            case Resp of
+                #{<<"result">> := Res} ->
+                    prometheus_counter:inc(duo_preauth_result, [Res, U]);
+                _ -> ok
+            end,
+            {reply, {ok, Resp}, S};
         Else -> {reply, {error, Else}, S}
     end;
 
 handle_call({auth, Args}, _From, S = #?MODULE{}) ->
+    case Args of
+        #{<<"username">> := U, <<"factor">> := F} ->
+            prometheus_counter:inc(duo_auth_method, [F, U]);
+        _ -> ok
+    end,
     case do_signed_req(post, <<"/auth/v2/auth">>, Args, S) of
         {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
         Else -> {reply, {error, Else}, S}

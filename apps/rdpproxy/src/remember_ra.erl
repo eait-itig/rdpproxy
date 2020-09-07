@@ -33,6 +33,7 @@
 -export([init/1, apply/3]).
 -export([tick/0, check/1, remember/1, remember/2]).
 -export([start/0]).
+-export([register_metrics/0]).
 
 -export_types([duoid/0, username/0]).
 
@@ -41,6 +42,12 @@ start() ->
     Nodes = proplists:get_value(nodes, Config, [node() | nodes()]),
     Servers = [{?MODULE, N} || N <- Nodes],
     ra:start_or_restart_cluster(?MODULE_STRING, {module, ?MODULE, #{}}, Servers).
+
+register_metrics() ->
+    prometheus_gauge:new([
+        {name, duo_remember_cache_count},
+        {help, "Count of entries in the duo 'remember me' cache"}]),
+    ok.
 
 -spec tick() -> ok.
 tick() ->
@@ -86,6 +93,7 @@ init(_Config) ->
 
 apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{}) ->
     S1 = expire_keys(T, S0),
+    prometheus_gauge:set(duo_remember_cache_count, maps:size(S1#?MODULE.keys)),
     {S1, ok, [{release_cursor, Idx, S1}]};
 
 apply(_Meta, {check, Key}, S0 = #?MODULE{keys = K0}) ->

@@ -42,6 +42,25 @@
     terminate/2
     ]).
 
+-export([register_metrics/0]).
+
+register_metrics() ->
+    prometheus_counter:new([
+        {name, rdp_frontend_connections_total},
+        {labels, [listener]},
+        {help, "Total RDP connections accepted"}]),
+    prometheus_counter:new([
+        {name, rdp_frontend_connections_forwarded},
+        {labels, [listener, peer, user, backend]},
+        {help, "Total connections forwarded to a backend"}]),
+    prometheus_histogram:new([
+        {name, rdp_frontend_connection_duration_seconds},
+        {labels, [listener]},
+        {buckets, [2, 10, 60, 240, 900, 1800, 3600, 7200, 86400]},
+        {duration_unit, false},
+        {help, "Duration of frontend RDP connections"}]),
+    ok.
+
 -record(?MODULE, {
     peer :: term(),
     listener :: atom(),
@@ -50,13 +69,18 @@
     backend :: pid() | undefined,
     intercept = true :: boolean(),
     matched_sessid = false :: boolean(),
-    connid :: binary() | undefined
+    connid :: binary() | undefined,
+    t0 :: integer()
     }).
 
 init(Peer) ->
-    {ok, #?MODULE{peer = Peer, listener = default}}.
+    T0 = erlang:system_time(second),
+    prometheus_counter:inc(rdp_frontend_connections_total, [default]),
+    {ok, #?MODULE{peer = Peer, t0 = T0, listener = default}}.
 init(Peer, Listener) ->
-    {ok, #?MODULE{peer = Peer, listener = Listener}}.
+    prometheus_counter:inc(rdp_frontend_connections_total, [Listener]),
+    T0 = erlang:system_time(second),
+    {ok, #?MODULE{peer = Peer, t0 = T0, listener = Listener}}.
 
 retry_start_backend(0, _, _, _, _, LastErr) -> LastErr;
 retry_start_backend(N, Srv, L, HostBin, Port, _) ->
@@ -74,8 +98,12 @@ handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
     lager:debug("connect ~p to listener ~p, protocols ~p", [P, L, Protocols]),
     case session_ra:claim_handle(Cookie) of
         {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
-            lager:debug("~p: presented cookie ~p (~p), forwarding to ~p",
-                [S#?MODULE.peer, Cookie, User, HostBin]),
+            {PeerIp, PeerPort} = P,
+            PeerStr = iolist_to_binary(inet:ntoa(PeerIp)),
+            lager:debug("~p:~p: presented cookie ~p (~p), forwarding to ~p",
+                [PeerStr, PeerPort, Cookie, User, HostBin]),
+            prometheus_counter:inc(rdp_frontend_connections_forwarded,
+                [L, PeerStr, User, HostBin]),
             {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer, Sess),
             {ok, Backend} = retry_start_backend(Srv, L, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),
@@ -305,5 +333,9 @@ debug_print_data(Bin) ->
             ok
     end.
 
-terminate(_Reason, #?MODULE{}) ->
+terminate(_Reason, #?MODULE{listener = L, t0 = T0}) ->
+    T1 = erlang:system_time(second),
+    Dur = T1 - T0,
+    prometheus_histogram:observe(rdp_frontend_connection_duration_seconds,
+        [L], Dur),
     ok.

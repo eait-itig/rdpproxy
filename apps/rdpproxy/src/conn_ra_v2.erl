@@ -36,7 +36,27 @@
 -export([init/1, apply/3, state_enter/2]).
 -export([version/0]).
 
+-export([register_metrics/0]).
+
 version() -> 2.
+
+register_metrics() ->
+    prometheus_gauge:new([
+        {name, rdp_connections_open},
+        {help, "Count of RDP connections open"}]),
+    prometheus_counter:new([
+        {name, rdp_connection_logs_written},
+        {help, "Count of hourly connection logs written out"}]),
+    prometheus_counter:new([
+        {name, rdp_connection_records_written},
+        {help, "Count of hourly connection log records written out"}]),
+    prometheus_gauge:new([
+        {name, rdp_connection_logs_open},
+        {help, "Number of hourly connection logs open and not yet written"}]),
+    prometheus_counter:new([
+        {name, rdp_connection_annotations},
+        {help, "Annotation operations processed"}]),
+    ok.
 
 -define(PAST_CONN_LIMIT, 32).
 -define(USER_PAST_CONN_LIMIT, 16).
@@ -304,11 +324,14 @@ evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
             [{time_designator, $_}])]),
     Json = iolist_to_binary(lists:map(fun (Key) ->
         #{Key := Conn} = C0,
+        prometheus_counter:inc(rdp_connection_records_written),
         conn_to_json(Conn)
     end, lists:reverse(ConnKeys))),
     lager:debug("writing connection log ~s (~B conns)",
         [FName, length(ConnKeys)]),
     file:write_file(FName, Json),
+
+    prometheus_counter:inc(rdp_connection_logs_written),
 
     S0#?MODULE{hours = H1, hourlives = HL1, conns = C1}.
 
@@ -393,6 +416,7 @@ apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{hourlives = HL0}) ->
                 fun (Hour) -> CurHour > Hour end, Hours),
             lists:foldl(fun evict_hour/2, S0, FinishedHours)
     end,
+    prometheus_gauge:set(rdp_connection_logs_open, maps:size(S1#?MODULE.hours)),
     S2 = S1#?MODULE{last_time = T},
     {S2, ok, [{release_cursor, Idx, S2}]};
 
@@ -465,6 +489,7 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
             end,
             U1 = U0#{User => UQ2},
             W1 = W0#{Pid => Id},
+            prometheus_gauge:set(rdp_connections_open, maps:size(W1)),
             S1 = incr_hourlive(Hour, 1, S0),
             #?MODULE{hours = H0} = S1,
             #{Hour := Hour0 = #{conns := HConns0}} = H0,
@@ -474,6 +499,7 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
     end;
 
 apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0}) ->
+    prometheus_counter:inc(rdp_connection_annotations),
     Id = if
         is_pid(IdOrPid) ->
             case W0 of
@@ -529,6 +555,7 @@ apply(_Meta, {down, Pid, _Reason},
                     S0
             end,
             W1 = maps:remove(Pid, W0),
+            prometheus_gauge:set(rdp_connections_open, maps:size(W1)),
             S2 = S1#?MODULE{watches = W1},
             {S2, ok, []};
         _ ->

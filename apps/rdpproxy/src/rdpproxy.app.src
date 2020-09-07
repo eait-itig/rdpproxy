@@ -19,6 +19,7 @@
                   kerlberos,
                   rdp_proto,
                   rdp_ui,
+                  prometheus,
                   cowboy
                  ]},
   {mod, { rdpproxy, []}},

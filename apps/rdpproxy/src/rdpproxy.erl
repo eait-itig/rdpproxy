@@ -78,12 +78,13 @@ stop(_State) ->
 %% @private
 init(_Args) ->
     {ok, _Pid} = http_api:start(),
+    {ok, _MetricsPid} = metrics_http:start(),
 
     _ = (catch conn_ra:start()),
     _ = (catch session_ra:start()),
     _ = (catch remember_ra:start()),
     {ok, _} = timer:apply_interval(5000, conn_ra, tick, []),
-    {ok, _} = timer:apply_interval(10000, session_ra, tick, []),
+    {ok, _} = timer:apply_interval(15000, session_ra, tick, []),
     {ok, _} = timer:apply_interval(30000, remember_ra, tick, []),
 
     Listeners = rdpproxy:config(frontend, []),

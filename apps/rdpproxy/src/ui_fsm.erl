@@ -43,6 +43,33 @@
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 -export([handle_event/3, handle_sync_event/4]).
 
+-export([register_metrics/0]).
+
+register_metrics() ->
+    prometheus_counter:new([
+        {name, rdp_connections_client_os_build},
+        {labels, [os, build]},
+        {help, "Count of RDP connections by OS and build number"}]),
+    prometheus_summary:new([
+        {name, rdp_connection_ping_milliseconds},
+        {labels, [user, peer]},
+        {duration_unit, false},
+        {help, "RTT latency measurements"}]),
+    prometheus_summary:new([
+        {name, rdpproxy_waiting_time_milliseconds},
+        {labels, [user]},
+        {duration_unit, false},
+        {help, "Time spent on the 'waiting for a backend' screen"}]),
+    prometheus_counter:new([
+        {name, rdpproxy_wait_aborts},
+        {labels, [user]},
+        {help, "Users who gave up and disconnected during the wait"}]),
+    prometheus_counter:new([
+        {name, auth_failure},
+        {labels, [user]},
+        {help, "Auth failures"}]),
+    ok.
+
 -spec start_link(Frontend :: rdp_server:server(), Listener :: atom()) -> {ok, pid()} | {error, term()}.
 start_link(Frontend, L) ->
     gen_fsm:start_link(?MODULE, [Frontend, L], []).
@@ -67,7 +94,8 @@ start_link(Frontend, L) ->
     duodevs :: undefined | [map()],
     duoid :: undefined | binary(),
     duotx :: undefined | binary(),
-    duoremember = false :: boolean()}).
+    duoremember = false :: boolean(),
+    waitstart :: undefined | integer()}).
 
 %% @private
 init([Frontend, L]) ->
@@ -89,7 +117,7 @@ send_orders(#?MODULE{frontend = F, format = Fmt}, Orders) ->
         rdp_server:send_update(F, U)
     end, Updates).
 
-do_ping_annotate(F = {FPid, _}) ->
+do_ping_annotate(#?MODULE{frontend = F = {FPid, _}, sess = Sess}) ->
     AvgPing = case rdp_server:get_pings(F) of
         {ok, Pings} when length(Pings) > 0 ->
             {Sum, Count} = lists:foldl(fun (P, {Su, C}) -> {Su + P, C + 1} end,
@@ -97,6 +125,15 @@ do_ping_annotate(F = {FPid, _}) ->
             Sum / Count;
         _ ->
             unknown
+    end,
+    case {AvgPing, Sess} of
+        {unknown, _} -> ok;
+        {_, #{user := U}} ->
+            {PeerIp, _PeerPort} = rdp_server:get_peer(F),
+            PeerIpStr = iolist_to_binary(inet:ntoa(PeerIp)),
+            prometheus_summary:observe(rdp_connection_ping_milliseconds,
+                [U, PeerIpStr], AvgPing);
+        _ -> ok
     end,
     conn_ra:annotate(FPid, #{avg_ping => AvgPing}).
 
@@ -177,6 +214,11 @@ startup(timeout, S = #?MODULE{frontend = F, listener = L}) ->
     TsudCore = lists:keyfind(tsud_core, 1, Tsuds),
     #tsud_net{channels = Chans} = lists:keyfind(tsud_net, 1, Tsuds),
     ChanNames = [Name || #tsud_net_channel{name = Name} <- Chans],
+
+    [OSType, OSSubType] = GeneralCap#ts_cap_general.os,
+    OS = iolist_to_binary(io_lib:format("~p/~p", [OSType, OSSubType])),
+    prometheus_counter:inc(rdp_connections_client_os_build,
+        [OS, TsudCore#tsud_core.client_build]),
 
     ClientFp = crypto:hash(sha256, [
         term_to_binary(PeerIp),
@@ -426,7 +468,7 @@ login({ui, {submitted, passinp}}, S = #?MODULE{}) ->
 login({ui, {clicked, loginbtn}}, S = #?MODULE{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend = F = {FPid,_}}) ->
+login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend = {FPid,_}}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, L, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
@@ -439,7 +481,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
         [U] -> {DefaultDomain, U}
     end,
 
-    do_ping_annotate(F),
+    do_ping_annotate(S),
 
     [PasswordTxt] = ui:select(Root, [{id, passinp}]),
     Password = ui_textinput:get_text(PasswordTxt),
@@ -503,6 +545,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                     end;
                 false ->
                     lager:debug("auth for ~p failed", [Username]),
+                    prometheus_counter:inc(auth_failure, [Username]),
                     login(invalid_login, S)
             end
     end;
@@ -825,8 +868,8 @@ mfa({submit_otp, _DevId, Code}, S = #?MODULE{duo = Duo, root = Root, peer = Peer
             mfa(allow, S1)
     end;
 
-mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, frontend = F, duoid = DuoId}) ->
-    do_ping_annotate(F),
+mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
+    do_ping_annotate(S),
     Mode = rdpproxy:config([frontend, L, mode], pool),
     case S of
         #?MODULE{duoremember = true} ->
@@ -1247,11 +1290,13 @@ choose({ui, {paste, TextInpId}}, S = #?MODULE{}) ->
     handle_paste(TextInpId, choose, S);
 
 choose({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
+    do_ping_annotate(S),
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S};
 
 choose({ui, {clicked, refreshbtn}}, S = #?MODULE{}) ->
+    do_ping_annotate(S),
     choose(setup_ui, S);
 
 choose({ui, {submitted, hostinp}}, S = #?MODULE{}) ->
@@ -1451,10 +1496,12 @@ choose_pool({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
 
 choose_pool({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     lager:debug("user clicked closebtn"),
+    do_ping_annotate(S),
     rdp_server:close(F),
     {stop, normal, S};
 
 choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
+    do_ping_annotate(S),
     case session_ra:get_pool(Id) of
         {ok, #{choice := false}} ->
             waiting(setup_ui, S#?MODULE{pool = Id});
@@ -1466,12 +1513,14 @@ choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
     end.
 
 waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt, listener = L}) ->
+    do_ping_annotate(S),
     BgColour = bgcolour(),
     {Root, _, []} = ui:new({float(W), float(H)}, Fmt),
     {TopMod, LH} = case (H > W) of
         true -> {ui_vlayout, 200};
         false -> {ui_hlayout, H}
     end,
+    T0 = erlang:system_time(millisecond),
     Mode = rdpproxy:config([frontend, L, mode], pool),
     Text = case Mode of
         pool ->       <<"Looking for an available computer to\n"
@@ -1522,7 +1571,8 @@ waiting(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt, listener = L}) ->
     #?MODULE{pool = Pool, sess = Sess} = S,
     {ok, AllocPid} = host_alloc_fsm:start(Pool, Sess),
     MRef = erlang:monitor(process, AllocPid),
-    {next_state, waiting, S#?MODULE{root = Root2, allocpid = AllocPid, allocmref = MRef}};
+    {next_state, waiting, S#?MODULE{root = Root2, allocpid = AllocPid,
+        allocmref = MRef, waitstart = T0}};
 
 waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root}) ->
     case Evt of
@@ -1530,6 +1580,11 @@ waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root
             Event = { [{contains, P}], Evt },
             handle_root_events(waiting, S, [Event]);
         #ts_inpevt_key{code = esc, action = down} ->
+            T1 = erlang:system_time(millisecond),
+            #?MODULE{waitstart = T0, sess = #{user := U}} = S,
+            prometheus_summary:observe(rdpproxy_waiting_time_milliseconds,
+                [U], T1 - T0),
+            prometheus_counter:inc(rdpproxy_wait_aborts, [U]),
             lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
@@ -1554,6 +1609,10 @@ waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root
 
 waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, _}, allocpid = AllocPid, listener = L}) ->
     #{handle := Cookie, ip := Ip, user := U, sessid := SessId} = Sess,
+    T1 = erlang:system_time(millisecond),
+    #?MODULE{waitstart = T0} = S,
+    prometheus_summary:observe(rdpproxy_waiting_time_milliseconds,
+        [U], T1 - T0),
     erlang:demonitor(S#?MODULE.allocmref),
     #?MODULE{nms = Nms} = S,
     case Nms of
@@ -1565,12 +1624,13 @@ waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, 
             end
     end,
     conn_ra:annotate(FPid, #{session => Sess#{password => snip}}),
-    do_ping_annotate(F),
+    do_ping_annotate(S),
     rdp_server:send_redirect(F, Cookie, SessId,
         rdpproxy:config([frontend, L, hostname], <<"localhost">>)),
     {stop, normal, S};
 
 waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #?MODULE{allocpid = AllocPid}) ->
+    do_ping_annotate(S),
     LightRed = {1.0, 0.8, 0.8},
     {Msg, MsgLines} = get_msg(err_ssl, S),
     Events = [
@@ -1585,6 +1645,7 @@ waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #?MODULE{allocpid = Allo
     handle_root_events(waiting, S, Events);
 
 waiting({alloc_persistent_error, AllocPid, down}, S = #?MODULE{allocpid = AllocPid}) ->
+    do_ping_annotate(S),
     LightRed = {1.0, 0.8, 0.8},
     {Msg, MsgLines} = get_msg(err_unreach, S),
     Events = [
@@ -1602,6 +1663,7 @@ waiting({alloc_persistent_error, AllocPid, down}, S = #?MODULE{allocpid = AllocP
     handle_root_events(waiting, S, Events);
 
 waiting({alloc_persistent_error, AllocPid, refused}, S = #?MODULE{allocpid = AllocPid}) ->
+    do_ping_annotate(S),
     LightRed = {1.0, 0.8, 0.8},
     {Msg, MsgLines} = get_msg(err_refused, S),
     Events = [
@@ -1621,6 +1683,12 @@ waiting({'DOWN', MRef, process, _, _}, S = #?MODULE{allocmref = MRef, pool = P, 
     {next_state, waiting, S#?MODULE{allocpid = AllocPid, allocmref = NewMRef}};
 
 waiting({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
+    T1 = erlang:system_time(millisecond),
+    do_ping_annotate(S),
+    #?MODULE{waitstart = T0, sess = #{user := U}} = S,
+    prometheus_summary:observe(rdpproxy_waiting_time_milliseconds,
+        [U], T1 - T0),
+    prometheus_counter:inc(rdpproxy_wait_aborts, [U]),
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.
