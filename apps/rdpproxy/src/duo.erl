@@ -58,11 +58,11 @@ register_metrics() ->
         {help, "Duo auth methods attempted"}]),
     prometheus_counter:new([
         {name, duo_preauth_results_total},
-        {labels, [result, user]},
+        {labels, [result]},
         {help, "The result field from Duo preauth replies"}]),
     prometheus_counter:new([
         {name, duo_auth_methods_total},
-        {labels, [method, user]},
+        {labels, [method]},
         {help, "Duo auth methods attempted"}]),
     ok.
 
