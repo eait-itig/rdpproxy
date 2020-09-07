@@ -47,7 +47,7 @@
 
 register_metrics() ->
     prometheus_counter:new([
-        {name, rdp_connections_client_os_build},
+        {name, rdp_connections_client_os_build_total},
         {labels, [os, build]},
         {help, "Count of RDP connections by OS and build number"}]),
     prometheus_summary:new([
@@ -57,16 +57,16 @@ register_metrics() ->
         {help, "RTT latency measurements"}]),
     prometheus_summary:new([
         {name, rdpproxy_waiting_time_milliseconds},
-        {labels, [user]},
+        {labels, []},
         {duration_unit, false},
         {help, "Time spent on the 'waiting for a backend' screen"}]),
     prometheus_counter:new([
-        {name, rdpproxy_wait_aborts},
-        {labels, [user]},
+        {name, rdpproxy_wait_aborts_total},
+        {labels, []},
         {help, "Users who gave up and disconnected during the wait"}]),
     prometheus_counter:new([
-        {name, auth_failure},
-        {labels, [user]},
+        {name, auth_failures_total},
+        {labels, []},
         {help, "Auth failures"}]),
     ok.
 
@@ -217,7 +217,7 @@ startup(timeout, S = #?MODULE{frontend = F, listener = L}) ->
 
     [OSType, OSSubType] = GeneralCap#ts_cap_general.os,
     OS = iolist_to_binary(io_lib:format("~p/~p", [OSType, OSSubType])),
-    prometheus_counter:inc(rdp_connections_client_os_build,
+    prometheus_counter:inc(rdp_connections_client_os_build_total,
         [OS, TsudCore#tsud_core.client_build]),
 
     ClientFp = crypto:hash(sha256, [
@@ -545,7 +545,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                     end;
                 false ->
                     lager:debug("auth for ~p failed", [Username]),
-                    prometheus_counter:inc(auth_failure, [Username]),
+                    prometheus_counter:inc(auth_failures_total),
                     login(invalid_login, S)
             end
     end;
@@ -1583,8 +1583,8 @@ waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root
             T1 = erlang:system_time(millisecond),
             #?MODULE{waitstart = T0, sess = #{user := U}} = S,
             prometheus_summary:observe(rdpproxy_waiting_time_milliseconds,
-                [U], T1 - T0),
-            prometheus_counter:inc(rdpproxy_wait_aborts, [U]),
+                T1 - T0),
+            prometheus_counter:inc(rdpproxy_wait_aborts_total),
             lager:debug("user hit escape"),
             rdp_server:close(F),
             {stop, normal, S};
@@ -1611,8 +1611,7 @@ waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, 
     #{handle := Cookie, ip := Ip, user := U, sessid := SessId} = Sess,
     T1 = erlang:system_time(millisecond),
     #?MODULE{waitstart = T0} = S,
-    prometheus_summary:observe(rdpproxy_waiting_time_milliseconds,
-        [U], T1 - T0),
+    prometheus_summary:observe(rdpproxy_waiting_time_milliseconds, T1 - T0),
     erlang:demonitor(S#?MODULE.allocmref),
     #?MODULE{nms = Nms} = S,
     case Nms of
@@ -1686,9 +1685,8 @@ waiting({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     T1 = erlang:system_time(millisecond),
     do_ping_annotate(S),
     #?MODULE{waitstart = T0, sess = #{user := U}} = S,
-    prometheus_summary:observe(rdpproxy_waiting_time_milliseconds,
-        [U], T1 - T0),
-    prometheus_counter:inc(rdpproxy_wait_aborts, [U]),
+    prometheus_summary:observe(rdpproxy_waiting_time_milliseconds, T1 - T0),
+    prometheus_counter:inc(rdpproxy_wait_aborts_total),
     lager:debug("user clicked closebtn"),
     rdp_server:close(F),
     {stop, normal, S}.

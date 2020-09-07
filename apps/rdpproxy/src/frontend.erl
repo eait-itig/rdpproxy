@@ -51,7 +51,7 @@ register_metrics() ->
         {help, "Total RDP connections accepted"}]),
     prometheus_counter:new([
         {name, rdp_frontend_connections_forwarded},
-        {labels, [listener, peer, user, backend]},
+        {labels, [listener]},
         {help, "Total connections forwarded to a backend"}]),
     prometheus_histogram:new([
         {name, rdp_frontend_connection_duration_seconds},
@@ -102,8 +102,7 @@ handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
             PeerStr = iolist_to_binary(inet:ntoa(PeerIp)),
             lager:debug("~p:~p: presented cookie ~p (~p), forwarding to ~p",
                 [PeerStr, PeerPort, Cookie, User, HostBin]),
-            prometheus_counter:inc(rdp_frontend_connections_forwarded,
-                [L, PeerStr, User, HostBin]),
+            prometheus_counter:inc(rdp_frontend_connections_forwarded, [L]),
             {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer, Sess),
             {ok, Backend} = retry_start_backend(Srv, L, binary_to_list(HostBin), Port),
             ok = rdp_server:watch_child(Srv, Backend),

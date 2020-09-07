@@ -45,7 +45,7 @@ start() ->
 
 register_metrics() ->
     prometheus_gauge:new([
-        {name, duo_remember_cache_count},
+        {name, duo_remember_cache_entries},
         {help, "Count of entries in the duo 'remember me' cache"}]),
     ok.
 
@@ -93,7 +93,7 @@ init(_Config) ->
 
 apply(#{index := Idx}, {tick, T}, S0 = #?MODULE{}) ->
     S1 = expire_keys(T, S0),
-    prometheus_gauge:set(duo_remember_cache_count, maps:size(S1#?MODULE.keys)),
+    prometheus_gauge:set(duo_remember_cache_entries, maps:size(S1#?MODULE.keys)),
     {S1, ok, [{release_cursor, Idx, S1}]};
 
 apply(_Meta, {check, Key}, S0 = #?MODULE{keys = K0}) ->

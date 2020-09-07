@@ -44,11 +44,13 @@ register_metrics() ->
         {labels, [listener, peer]},
         {help, "Outgoing RDP connections made to backend machines"}]),
     prometheus_counter:new([
-        {name, rdp_backend_probes},
-        {labels, [peer]},
+        {name, rdp_backend_probes_total},
         {help, "Probes issued to backends to check their status"}]),
     prometheus_counter:new([
-        {name, rdp_backend_probe_errors},
+        {name, rdp_backend_probe_errors_total},
+        {help, "Errors while running backend:probe/2"}]),
+    prometheus_counter:new([
+        {name, rdp_backend_probe_errors_per_backend_total},
         {labels, [peer]},
         {help, "Errors while running backend:probe/2"}]),
     prometheus_histogram:new([
@@ -65,7 +67,7 @@ start_link(Frontend, L, Address, Port) ->
 
 probe(Address, Port) ->
     % Just use the first listener in the config
-    prometheus_counter:inc(rdp_backend_probes, [Address]),
+    prometheus_counter:inc(rdp_backend_probes_total, []),
     T0 = erlang:system_time(microsecond),
     [{L, _} | _] = rdpproxy:config(frontend, []),
     case (catch gen_fsm:start(?MODULE, [self(), L, Address, Port], [{timeout, 7000}])) of
@@ -86,10 +88,14 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
             gen_fsm:send_event(Pid, close),
             probe_rx(Pid, Peer, T0, MonRef, ok);
         {'DOWN', MonRef, process, Pid, no_ssl} ->
-            prometheus_counter:inc(rdp_backend_probe_errors, [Peer]),
+            prometheus_counter:inc(rdp_backend_probe_errors_per_backend_total,
+                [Peer]),
+            prometheus_counter:inc(rdp_backend_probe_errors_total),
             {error, no_ssl};
         {'DOWN', MonRef, process, Pid, _} ->
-            prometheus_counter:inc(rdp_backend_probe_errors, [Peer]),
+            prometheus_counter:inc(rdp_backend_probe_errors_per_backend_total,
+                [Peer]),
+            prometheus_counter:inc(rdp_backend_probe_errors_total),
             RetVal
     after 10000 ->
         exit(Pid, kill),

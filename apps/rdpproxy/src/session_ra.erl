@@ -91,15 +91,15 @@ register_metrics() ->
         {labels, [pool, role]},
         {help, "Count of open reservation handles"}]),
     prometheus_counter:new([
-        {name, rdpproxy_handles_created},
-        {labels, [pool, user]},
+        {name, rdpproxy_handles_created_total},
+        {labels, [pool]},
         {help, "Reservation handles opened"}]),
     prometheus_counter:new([
-        {name, rdpproxy_handles_expired},
-        {labels, [pool, user]},
+        {name, rdpproxy_handles_expired_total},
+        {labels, [pool]},
         {help, "Reservation handles expired"}]),
     prometheus_counter:new([
-        {name, rdpproxy_status_reports},
+        {name, rdpproxy_status_reports_total},
         {labels, [pool]},
         {help, "Processed host status reports"}]),
     ok.
@@ -1070,7 +1070,7 @@ kill_handle(Hdl, S0 = #?MODULE{hdls = H0, meta = M0}) ->
     HH1 = HH0 -- [Hdl],
     HM1 = HM0#{handles => HH1},
     M1 = M0#{Ip => HM1},
-    prometheus_counter:inc(rdpproxy_handles_expired, [P, U]),
+    prometheus_counter:inc(rdpproxy_handles_expired_total, [P]),
     S0#?MODULE{hdls = H1, meta = M1}.
 
 detach_handle(Hdl, T, S0 = #?MODULE{hdls = H0, meta = M0, pools = P0,
@@ -1148,7 +1148,7 @@ begin_handle(Hdl, T, User, Ip, Pid, S0 = #?MODULE{}) ->
     },
     H1 = H0#{Hdl => HD},
     S2 = S1#?MODULE{hdls = H1, meta = M1, users = U1, watches = W1},
-    prometheus_counter:inc(rdpproxy_handles_created, [P, User]),
+    prometheus_counter:inc(rdpproxy_handles_created_total, [P]),
     {S2, HD, Effects}.
 
 -spec filter_min_reserved(integer(), time(), atom(), username(), [ipstr()], #?MODULE{}) -> [ipstr()].

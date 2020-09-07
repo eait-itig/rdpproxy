@@ -45,15 +45,23 @@ register_metrics() ->
         {duration_unit, false},
         {help, "Time spent waiting for Duo requests"} ]),
     prometheus_counter:new([
-        {name, duo_request_errors},
+        {name, duo_request_errors_total},
         {labels, [method, path]},
         {help, "Errors from duo API"}]),
     prometheus_counter:new([
-        {name, duo_preauth_result},
+        {name, duo_preauth_results_per_user_total},
         {labels, [result, user]},
         {help, "The result field from Duo preauth replies"}]),
     prometheus_counter:new([
-        {name, duo_auth_method},
+        {name, duo_auth_methods_per_user_total},
+        {labels, [method, user]},
+        {help, "Duo auth methods attempted"}]),
+    prometheus_counter:new([
+        {name, duo_preauth_results_total},
+        {labels, [result, user]},
+        {help, "The result field from Duo preauth replies"}]),
+    prometheus_counter:new([
+        {name, duo_auth_methods_total},
         {labels, [method, user]},
         {help, "Duo auth methods attempted"}]),
     ok.
@@ -168,7 +176,9 @@ handle_call({preauth, Args}, _From, S = #?MODULE{}) ->
         {ok, 200, #{<<"response">> := Resp}} ->
             case Resp of
                 #{<<"result">> := Res} ->
-                    prometheus_counter:inc(duo_preauth_result, [Res, U]);
+                    prometheus_counter:inc(duo_preauth_results_per_user_total,
+                        [Res, U]),
+                    prometheus_counter:inc(duo_preauth_results_total, [Res]);
                 _ -> ok
             end,
             {reply, {ok, Resp}, S};
@@ -178,7 +188,8 @@ handle_call({preauth, Args}, _From, S = #?MODULE{}) ->
 handle_call({auth, Args}, _From, S = #?MODULE{}) ->
     case Args of
         #{<<"username">> := U, <<"factor">> := F} ->
-            prometheus_counter:inc(duo_auth_method, [F, U]);
+            prometheus_counter:inc(duo_auth_method_per_user_total, [F, U]),
+            prometheus_counter:inc(duo_auth_method_total, [F]);
         _ -> ok
     end,
     case do_signed_req(post, <<"/auth/v2/auth">>, Args, S) of
