@@ -45,16 +45,16 @@ register_metrics() ->
         {name, rdp_connections_open},
         {help, "Count of RDP connections open"}]),
     prometheus_counter:new([
-        {name, rdp_connection_logs_written},
+        {name, rdp_connection_logs_written_total},
         {help, "Count of hourly connection logs written out"}]),
     prometheus_counter:new([
-        {name, rdp_connection_records_written},
+        {name, rdp_connection_records_written_total},
         {help, "Count of hourly connection log records written out"}]),
     prometheus_gauge:new([
         {name, rdp_connection_logs_open},
         {help, "Number of hourly connection logs open and not yet written"}]),
     prometheus_counter:new([
-        {name, rdp_connection_annotations},
+        {name, rdp_connection_annotations_total},
         {help, "Annotation operations processed"}]),
     ok.
 
@@ -324,14 +324,14 @@ evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
             [{time_designator, $_}])]),
     Json = iolist_to_binary(lists:map(fun (Key) ->
         #{Key := Conn} = C0,
-        prometheus_counter:inc(rdp_connection_records_written),
+        prometheus_counter:inc(rdp_connection_records_written_total),
         conn_to_json(Conn)
     end, lists:reverse(ConnKeys))),
     lager:debug("writing connection log ~s (~B conns)",
         [FName, length(ConnKeys)]),
     file:write_file(FName, Json),
 
-    prometheus_counter:inc(rdp_connection_logs_written),
+    prometheus_counter:inc(rdp_connection_logs_written_total),
 
     S0#?MODULE{hours = H1, hourlives = HL1, conns = C1}.
 
@@ -499,7 +499,6 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
     end;
 
 apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0}) ->
-    prometheus_counter:inc(rdp_connection_annotations),
     Id = if
         is_pid(IdOrPid) ->
             case W0 of

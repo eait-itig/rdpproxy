@@ -1003,13 +1003,13 @@ apply(_Meta, {add_session, _T, Ip, SessMap}, S0 = #?MODULE{meta = M0}) ->
 apply(_Meta, {status_report, T, Ip, State}, S0 = #?MODULE{meta = M0}) ->
     case M0 of
         #{Ip := HM0 = #{report_state := {State, _}, pool := P}} ->
-            prometheus_counter:inc(rdpproxy_status_reports, [P]),
+            prometheus_counter:inc(rdpproxy_status_reports_total, [P]),
             HM1 = HM0#{last_report => T},
             M1 = M0#{Ip => HM1},
             S1 = S0#?MODULE{meta = M1},
             {S1, ok, []};
         #{Ip := HM0 = #{pool := P}} ->
-            prometheus_counter:inc(rdpproxy_status_reports, [P]),
+            prometheus_counter:inc(rdpproxy_status_reports_total, [P]),
             HM1 = HM0#{report_state => {State, T}, last_report => T},
             M1 = M0#{Ip => HM1},
             S1 = S0#?MODULE{meta = M1},

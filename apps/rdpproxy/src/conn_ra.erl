@@ -80,6 +80,7 @@ get_all_open() ->
     end.
 
 annotate(SessIdOrPid, Data) ->
+    prometheus_counter:inc(rdp_connection_annotations_total),
     Now = erlang:system_time(second),
     case ra:process_command(conn_ra, {annotate, Now, SessIdOrPid, Data}) of
         {ok, Ret, _Leader} -> Ret;
