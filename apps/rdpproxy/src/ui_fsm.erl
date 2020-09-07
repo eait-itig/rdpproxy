@@ -89,6 +89,17 @@ send_orders(#?MODULE{frontend = F, format = Fmt}, Orders) ->
         rdp_server:send_update(F, U)
     end, Updates).
 
+do_ping_annotate(F = {FPid, _}) ->
+    AvgPing = case rdp_server:get_pings(F) of
+        {ok, Pings} when length(Pings) > 0 ->
+            {Sum, Count} = lists:foldl(fun (P, {Su, C}) -> {Su + P, C + 1} end,
+                {0, 0}, Pings),
+            Sum / Count;
+        _ ->
+            unknown
+    end,
+    conn_ra:annotate(FPid, #{avg_ping => AvgPing}).
+
 handle_root_events(State, S = #?MODULE{root = Root}, Events) ->
     {Root2, Orders, UiEvts} = ui:handle_events(Root, Events),
     lists:foreach(fun(UiEvt) ->
@@ -415,7 +426,7 @@ login({ui, {submitted, passinp}}, S = #?MODULE{}) ->
 login({ui, {clicked, loginbtn}}, S = #?MODULE{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend = {FPid,_}}) ->
+login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend = F = {FPid,_}}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, L, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
@@ -427,6 +438,8 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
         end;
         [U] -> {DefaultDomain, U}
     end,
+
+    do_ping_annotate(F),
 
     [PasswordTxt] = ui:select(Root, [{id, passinp}]),
     Password = ui_textinput:get_text(PasswordTxt),
@@ -812,7 +825,8 @@ mfa({submit_otp, _DevId, Code}, S = #?MODULE{duo = Duo, root = Root, peer = Peer
             mfa(allow, S1)
     end;
 
-mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
+mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, frontend = F, duoid = DuoId}) ->
+    do_ping_annotate(F),
     Mode = rdpproxy:config([frontend, L, mode], pool),
     case S of
         #?MODULE{duoremember = true} ->
@@ -1551,6 +1565,7 @@ waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, 
             end
     end,
     conn_ra:annotate(FPid, #{session => Sess#{password => snip}}),
+    do_ping_annotate(F),
     rdp_server:send_redirect(F, Cookie, SessId,
         rdpproxy:config([frontend, L, hostname], <<"localhost">>)),
     {stop, normal, S};

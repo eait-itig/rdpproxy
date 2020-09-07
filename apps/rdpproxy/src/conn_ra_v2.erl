@@ -277,7 +277,12 @@ conn_to_json(C) ->
         #{forwarded_creds := FC} -> J5#{<<"forwarded_creds">> => FC};
         _ -> J5
     end,
-    [jsx:encode(J6), $\n].
+    J7 = case C of
+        #{avg_ping := unknown} -> J6;
+        #{avg_ping := N} -> J6#{<<"avg_ping">> => N};
+        _ -> J6
+    end,
+    [jsx:encode(J7), $\n].
 
 evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
     #{Hour := #{count := 0, conns := ConnKeys}} = H0,
