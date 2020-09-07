@@ -49,6 +49,6 @@ start() ->
 init(Req0, State) ->
     Data = prometheus_text_format:format(),
     Req1 = cowboy_req:reply(200,
-        #{<<"content-type">> => <<"application/openmetrics-text">>},
+        #{<<"content-type">> => <<"text/plain; version=0.0.4; charset=utf-8">>},
         Data, Req0),
     {ok, Req1, State}.
