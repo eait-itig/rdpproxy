@@ -143,7 +143,8 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
                 [Method, Path, Status], round(Delta)),
             if
                 (Status >= 500) ->
-                    prometheus_counter:inc(duo_request_errors, [Method, Path]);
+                    prometheus_counter:inc(duo_request_errors_total,
+                        [Method, Path]);
                 true -> ok
             end,
             {ok, Status};
@@ -156,7 +157,8 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
                 [Method, Path, Status], round(Delta)),
             if
                 (Status >= 500) ->
-                    prometheus_counter:inc(duo_request_errors, [Method, Path]);
+                    prometheus_counter:inc(duo_request_errors_total,
+                        [Method, Path]);
                 true -> ok
             end,
             Body1 = case RHdrs of
@@ -166,7 +168,7 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
             end,
             {ok, Status, Body1};
         Else ->
-            prometheus_counter:inc(duo_request_errors, [Method, Path]),
+            prometheus_counter:inc(duo_request_errors_total, [Method, Path]),
             Else
     end.
 
