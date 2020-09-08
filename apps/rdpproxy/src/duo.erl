@@ -188,8 +188,8 @@ handle_call({preauth, Args}, _From, S = #?MODULE{}) ->
 handle_call({auth, Args}, _From, S = #?MODULE{}) ->
     case Args of
         #{<<"username">> := U, <<"factor">> := F} ->
-            prometheus_counter:inc(duo_auth_method_per_user_total, [F, U]),
-            prometheus_counter:inc(duo_auth_method_total, [F]);
+            prometheus_counter:inc(duo_auth_methods_per_user_total, [F, U]),
+            prometheus_counter:inc(duo_auth_methods_total, [F]);
         _ -> ok
     end,
     case do_signed_req(post, <<"/auth/v2/auth">>, Args, S) of
