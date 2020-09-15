@@ -57,7 +57,8 @@
     handle_help/1,
     host_update/1,
     dump_sessions/1,
-    dump_conns/1
+    dump_conns/1,
+    pool_reprobe/1
     ]).
 
 -export([print_prefs/1]).
@@ -761,6 +762,42 @@ dump_conns([]) ->
     {ok, {_, SBin}, _} = ra:leader_query(conn_ra,
         fun (S) -> erlang:term_to_binary(S) end),
     io:format("~s\n", [base64:encode(SBin)]).
+
+port_recv_exit_status(Port) ->
+    receive
+        {Port, {data, _}} -> port_recv_exit_status(Port);
+        {Port, {exit_status, N}} -> N
+    end.
+
+pool_reprobe([PoolName]) ->
+    PoolAtom = list_to_atom(PoolName),
+    {ok, {_, S}, _} = ra:leader_query(session_ra, fun (S) -> S end),
+    Annotes = session_ra:annotate_prefs(4, PoolAtom, <<"_nobody">>, S),
+    Errors = [A || #{in_error := true} = A <- Annotes],
+    lists:foreach(fun (#{ip := Ip}) ->
+        Cmd = iolist_to_binary(["ping -W 1 -q -c 1 ", Ip]),
+        P = erlang:open_port({spawn, Cmd}, [exit_status]),
+        case port_recv_exit_status(P) of
+            0 ->
+                {ok, Hdl, HD0} = session_ra:reserve_ip(<<"_admin_cli">>, Ip),
+                #{port := Port} = HD0,
+                case backend:probe(binary_to_list(Ip), Port) of
+                    ok ->
+                        HD1 = HD0#{password => <<"_admin_cli">>},
+                        {ok, _HD1} = session_ra:allocate(Hdl, HD1),
+                        io:format("~s: probe returned ok (handle ~s)\n", [Ip,
+                            Hdl]);
+                    {error, Reason} ->
+                        io:format("~s: probe error: ~p\n", [Ip, Reason]),
+                        session_ra:alloc_error(Hdl, Reason);
+                    Other ->
+                        io:format("~s: probe error: ~p\n", [Ip, Other]),
+                        session_ra:alloc_error(Hdl, Other)
+                end;
+            _ ->
+                io:format("~s: not responding to ping\n", [Ip])
+        end
+    end, Errors).
 
 format_reltime(Time) -> format_reltime(Time, true).
 format_reltime(Time, Flavour) ->
