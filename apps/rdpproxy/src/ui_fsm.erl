@@ -45,6 +45,8 @@
 
 -export([register_metrics/0]).
 
+-define(devpgsize, 6).
+
 register_metrics() ->
     prometheus_counter:new([
         {name, rdp_connections_client_os_build_total},
@@ -95,7 +97,11 @@ start_link(Frontend, L) ->
     duoid :: undefined | binary(),
     duotx :: undefined | binary(),
     duoremember = false :: boolean(),
-    waitstart :: undefined | integer()}).
+    waitstart :: undefined | integer(),
+    devs :: undefined | [#{}],
+    devoffset :: undefined | integer(),
+    pools :: undefined | [#{}],
+    pooloffset :: undefined | integer()}).
 
 %% @private
 init([Frontend, L]) ->
@@ -1104,6 +1110,9 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     #?MODULE{sess = #{user := U}} = S,
 
     Devs0 = case S of
+        #?MODULE{devs = OldDevs} when is_list(OldDevs) ->
+            OldDevs;
+
         #?MODULE{nms = undefined, pool = Pool} ->
             {ok, Prefs} = session_ra:get_prefs(Pool, U),
             Devs = lists:map(fun (Ip) ->
@@ -1178,7 +1187,12 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
                     []
             end
     end,
-    Devs1 = lists:sublist(Devs0, 6),
+    {Off, Max, Devs1} = case S of
+        #?MODULE{devoffset = undefined} ->
+            {1, length(Devs0), lists:sublist(Devs0, ?devpgsize)};
+        #?MODULE{devoffset = N} ->
+            {N, length(Devs0), lists:sublist(Devs0, N, ?devpgsize)}
+    end,
     lager:debug("giving ~p choice menu: ~p", [U, [Ip || #{ip := Ip} <- Devs1]]),
 
     Events1 = lists:foldl(fun (Dev, Acc) ->
@@ -1246,17 +1260,40 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
             ];
         _ -> Events1
     end,
+    PageLblMsg = iolist_to_binary(io_lib:format("~B / ~B", [
+        1 + (Off div ?devpgsize), (Max + ?devpgsize - 1) div ?devpgsize])),
     Events3 = Events2 ++ [
         { [{id, loginlyt}],     {add_child,
+                                 #widget{id = pglyt,
+                                         mod = ui_hlayout,
+                                         size = {400.0, 40.0}}} },
+        { [{id, pglyt}],        init },
+        { [{id, pglyt}],        {add_child,
                                  #widget{id = refreshbtn,
                                          mod = ui_button,
                                          size = {120.0, 36.0}}} },
-        { [{id, refreshbtn}],     {init, <<"Refresh list", 0>>} }
+        { [{id, refreshbtn}],   {init, <<"Refresh list", 0>>} },
+        { [{id, pglyt}],        {add_child,
+                                 #widget{id = pagelbl,
+                                         mod = ui_label,
+                                         size = {40.0, 15.0}}} },
+        { [{id, pagelbl}],      {init, center, PageLblMsg} },
+        { [{id, pagelbl}],      {set_bgcolor, BgColour} },
+        { [{id, pglyt}],        {add_child,
+                                 #widget{id = prevpagebtn,
+                                         mod = ui_button,
+                                         size = {32.0, 36.0}}} },
+        { [{id, prevpagebtn}],  {init, <<"<", 0>>} },
+        { [{id, pglyt}],        {add_child,
+                                 #widget{id = nextpagebtn,
+                                         mod = ui_button,
+                                         size = {32.0, 36.0}}} },
+        { [{id, nextpagebtn}],  {init, <<">", 0>>} }
     ],
     {Root3, Orders2, []} = ui:handle_events(Root2, Events3),
     send_orders(S, Orders2),
 
-    {next_state, choose, S#?MODULE{root = Root3}};
+    {next_state, choose, S#?MODULE{root = Root3, devs = Devs0}};
 
 choose({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
     case Evt of
@@ -1297,7 +1334,26 @@ choose({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
 
 choose({ui, {clicked, refreshbtn}}, S = #?MODULE{}) ->
     do_ping_annotate(S),
-    choose(setup_ui, S);
+    choose(setup_ui, S#?MODULE{devs = undefined, devoffset = undefined});
+
+choose({ui, {clicked, nextpagebtn}}, S = #?MODULE{devoffset = Off0, devs = Ds}) ->
+    Off1 = case {Off0, length(Ds)} of
+        {undefined, N} when N >= ?devpgsize -> ?devpgsize + 1;
+        {_, N} when N >= (Off0 + ?devpgsize) -> Off0 + ?devpgsize;
+        _ -> Off0
+    end,
+    do_ping_annotate(S),
+    choose(setup_ui, S#?MODULE{devoffset = Off1});
+
+choose({ui, {clicked, prevpagebtn}}, S = #?MODULE{devoffset = Off0, devs = Ds}) ->
+    Off1 = case Off0 of
+        undefined -> undefined;
+        N when N > ?devpgsize -> Off0 - ?devpgsize;
+        N when N =< ?devpgsize -> 1;
+        _ -> Off0
+    end,
+    do_ping_annotate(S),
+    choose(setup_ui, S#?MODULE{devoffset = Off1});
 
 choose({ui, {submitted, hostinp}}, S = #?MODULE{}) ->
     choose({ui, {clicked, itigbtn}}, S);
@@ -1421,8 +1477,19 @@ choose_pool(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     send_orders(S, Orders),
 
     #?MODULE{uinfo = UInfo = #{user := U}} = S,
-    {ok, Pools0} = session_ra:get_pools_for(UInfo),
-    Pools1 = lists:sublist(Pools0, 6),
+    Pools0 = case S of
+        #?MODULE{pools = undefined} ->
+            {ok, Ps} = session_ra:get_pools_for(UInfo),
+            Ps;
+        #?MODULE{pools = Ps} ->
+            Ps
+    end,
+    {Off, Max, Pools1} = case S of
+        #?MODULE{pooloffset = undefined} ->
+            {1, length(Pools0), lists:sublist(Pools0, ?devpgsize)};
+        #?MODULE{pooloffset = N} ->
+            {N, length(Pools0), lists:sublist(Pools0, N, ?devpgsize)}
+    end,
     lager:debug("giving ~p pool choice menu: ~p", [U, Pools1]),
 
     Events1 = lists:foldl(fun (PD, Acc) ->
@@ -1461,10 +1528,35 @@ choose_pool(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
                 { [{id, {choosebtn, Id}}],  {init, <<"Connect", 0>>} }
         ]
     end, [], Pools1),
-    {Root3, Orders2, []} = ui:handle_events(Root2, Events1),
+    PageLblMsg = iolist_to_binary(io_lib:format("~B / ~B", [
+        1 + (Off div ?devpgsize), (Max + ?devpgsize - 1) div ?devpgsize])),
+    Events2 = Events1 ++ [
+        { [{id, loginlyt}],     {add_child,
+                                 #widget{id = pglyt,
+                                         mod = ui_hlayout,
+                                         size = {400.0, 40.0}}} },
+        { [{id, pglyt}],        init },
+        { [{id, pglyt}],        {add_child,
+                                 #widget{id = pagelbl,
+                                         mod = ui_label,
+                                         size = {40.0, 15.0}}} },
+        { [{id, pagelbl}],      {init, center, PageLblMsg} },
+        { [{id, pagelbl}],      {set_bgcolor, BgColour} },
+        { [{id, pglyt}],        {add_child,
+                                 #widget{id = prevpagebtn,
+                                         mod = ui_button,
+                                         size = {32.0, 36.0}}} },
+        { [{id, prevpagebtn}],  {init, <<"<", 0>>} },
+        { [{id, pglyt}],        {add_child,
+                                 #widget{id = nextpagebtn,
+                                         mod = ui_button,
+                                         size = {32.0, 36.0}}} },
+        { [{id, nextpagebtn}],  {init, <<">", 0>>} }
+    ],
+    {Root3, Orders2, []} = ui:handle_events(Root2, Events2),
     send_orders(S, Orders2),
 
-    {next_state, choose_pool, S#?MODULE{root = Root3}};
+    {next_state, choose_pool, S#?MODULE{root = Root3, pools = Pools0}};
 
 choose_pool({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
     case Evt of
@@ -1499,6 +1591,25 @@ choose_pool({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
     do_ping_annotate(S),
     rdp_server:close(F),
     {stop, normal, S};
+
+choose_pool({ui, {clicked, nextpagebtn}}, S = #?MODULE{pooloffset = Off0, pools = Ds}) ->
+    Off1 = case {Off0, length(Ds)} of
+        {undefined, N} when N >= ?devpgsize -> ?devpgsize + 1;
+        {_, N} when N >= (Off0 + ?devpgsize) -> Off0 + ?devpgsize;
+        _ -> Off0
+    end,
+    do_ping_annotate(S),
+    choose_pool(setup_ui, S#?MODULE{pooloffset = Off1});
+
+choose_pool({ui, {clicked, prevpagebtn}}, S = #?MODULE{pooloffset = Off0, pools = Ds}) ->
+    Off1 = case Off0 of
+        undefined -> undefined;
+        N when N > ?devpgsize -> Off0 - ?devpgsize;
+        N when N =< ?devpgsize -> 1;
+        _ -> Off0
+    end,
+    do_ping_annotate(S),
+    choose_pool(setup_ui, S#?MODULE{pooloffset = Off1});
 
 choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
     do_ping_annotate(S),

@@ -41,7 +41,7 @@ start_ui(Frontend, L) ->
 
 init([]) ->
     {ok, {
-        #{strategy => simple_one_for_one, intensity => 60, period => 60},
+        #{strategy => simple_one_for_one, intensity => 5, period => 10},
         [
             #{id => undefined,
               start => {ui_fsm, start_link, []},
