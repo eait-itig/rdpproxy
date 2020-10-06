@@ -92,10 +92,11 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
                 [Peer]),
             prometheus_counter:inc(rdp_backend_probe_errors_total),
             {error, no_ssl};
-        {'DOWN', MonRef, process, Pid, _} ->
+        {'DOWN', MonRef, process, Pid, Reason} ->
             prometheus_counter:inc(rdp_backend_probe_errors_per_backend_total,
                 [Peer]),
             prometheus_counter:inc(rdp_backend_probe_errors_total),
+            lager:debug("probe backend ~p down: ~p", [Pid, Reason]),
             RetVal
     after 10000 ->
         exit(Pid, kill),
