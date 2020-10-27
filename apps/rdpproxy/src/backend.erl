@@ -116,7 +116,8 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
     server :: rdp_server:server() | pid(),
     origcr :: #x224_cr{},
     sharechan :: undefined | integer(),
-    logon = false :: boolean()
+    logon = false :: boolean(),
+    t0 :: integer()
     }).
 
 %% @private
@@ -142,9 +143,10 @@ init([Srv, L, Address, Port, OrigCr]) ->
             {ok, CrData} = x224:encode(Cr),
             {ok, Packet} = tpkt:encode(CrData),
             ok = gen_tcp:send(Sock, Packet),
+            T0 = erlang:system_time(millisecond),
             {ok, initiation, #?MODULE{
                 addr = Address, port = Port, server = Srv, listener = L,
-                sock = Sock, usref = Us, origcr = OrigCr}};
+                sock = Sock, usref = Us, origcr = OrigCr, t0 = T0}};
 
         {error, Reason} ->
             case Srv of
@@ -423,12 +425,27 @@ terminate(Reason, proxy_watch_demand, D = #?MODULE{addr = Address}) ->
     lager:debug("backend conn closed without a ts_demand"),
     session_ra:host_error(iolist_to_binary([Address]), no_ts_demand),
     terminate(Reason, other, D);
-terminate(Reason, proxy_watch_logon, D = #?MODULE{addr = Address, logon = false}) ->
+terminate(Reason, proxy_watch_logon, D = #?MODULE{addr = Address, logon = false, t0 = T0}) ->
     lager:debug("backend conn closed without a good logon"),
-    session_ra:host_error(iolist_to_binary([Address]), no_logon),
+    T1 = erlang:system_time(millisecond),
+    Delta = T1 - T0,
+    if
+        (Delta > 3000) ->
+            session_ra:host_error(iolist_to_binary([Address]), no_logon);
+        true ->
+            ok
+    end,
     terminate(Reason, other, D);
-terminate(Reason, proxy, D = #?MODULE{addr = Address, logon = false}) ->
+terminate(Reason, proxy, D = #?MODULE{addr = Address, logon = false, t0 = T0}) ->
     lager:debug("backend conn closed without a good logon"),
+    T1 = erlang:system_time(millisecond),
+    Delta = T1 - T0,
+    if
+        (Delta > 3000) ->
+            session_ra:host_error(iolist_to_binary([Address]), no_logon);
+        true ->
+            ok
+    end,
     session_ra:host_error(iolist_to_binary([Address]), no_logon),
     terminate(Reason, other, D);
 terminate(_Reason, _State, #?MODULE{sslsock = none, sock = Sock}) ->
