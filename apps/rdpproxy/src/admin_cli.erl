@@ -528,9 +528,9 @@ host_list(Args) ->
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
     Fmt = "~16.. s  ~24.. s  ~10.. s  ~16.. s  ~19.. s  ~10.. s  ~16.. s  ~15.. s  "
-        "~10.. s  ~8.. s  ~14.. s  ~11.. s  ~9.. s\n",
+        "~10.. s  ~8.. s  ~14.. s  ~11.. s  ~9.. s  ~5.. s\n",
     io:format(Fmt, ["ID", "PEER", "NODE", "PID", "STARTED", "USER", "HANDLE",
-        "BACKEND", "POOL", "PROTVER", "REMHOST", "RES", "RECONN"]),
+        "BACKEND", "POOL", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS"]),
     ConnsSorted = lists:sort(fun (CA, CB) ->
         #{started := StartedA, id := IdA} = CA,
         #{started := StartedB, id := IdB} = CB,
@@ -592,6 +592,13 @@ conn_list([]) ->
                 Res = "",
                 Reconn = ""
         end,
+        TSess = case Conn of
+            #{ts_session_id := SId, ts_session_status := _} ->
+                io_lib:format("+~B", [SId]);
+            #{ts_session_id := SId} ->
+                io_lib:format("~B", [SId]);
+            _ -> ""
+        end,
         Fields = [
             Id,
             Peer,
@@ -605,11 +612,19 @@ conn_list([]) ->
             ProtVer,
             Client,
             Res,
-            Reconn
+            Reconn,
+            TSess
         ],
         io:format(Fmt, Fields)
     end, ConnsSorted),
     io:format("count: ~B\n", [length(Conns)]).
+
+conn_user(["-j", User]) ->
+    UserBin = unicode:characters_to_binary(User, utf8),
+    {ok, Conns} = conn_ra:get_user(UserBin),
+    lists:foreach(fun (Conn) ->
+        io:format("~s\n", [conn_ra_v2:conn_to_json(Conn)])
+    end, Conns);
 
 conn_user(["-v", User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
@@ -688,9 +703,9 @@ conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
     Fmt = "~12.. s  ~16.. s  ~14.. s  ~24.. s  ~19.. s  ~10.. s  ~10.. s  ~15.. s  "
-        "~8.. s  ~14.. s  ~11.. s  ~9.. s\n",
+        "~8.. s  ~14.. s  ~11.. s  ~9.. s  ~5.. s\n",
     io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
-        "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN"]),
+        "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, frontend_pid := Pid, started := Started,
           peer := {Ip, Port}, session := #{user := U, ip := Backend}} = Conn,
@@ -736,6 +751,13 @@ conn_user([User]) ->
             #{stopped := Stopped} -> format_deltatime(Stopped - Started, false);
             _ -> ""
         end,
+        TSess = case Conn of
+            #{ts_session_id := SId, ts_session_status := _} ->
+                io_lib:format("+~B", [SId]);
+            #{ts_session_id := SId} ->
+                io_lib:format("~B", [SId]);
+            _ -> ""
+        end,
         Fields = [
             Id,
             io_lib:format("~w", [Pid]),
@@ -748,7 +770,8 @@ conn_user([User]) ->
             ProtVer,
             RemHost,
             Res,
-            Reconn
+            Reconn,
+            TSess
         ],
         io:format(Fmt, Fields)
     end, Conns).

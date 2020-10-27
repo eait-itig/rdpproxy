@@ -38,6 +38,8 @@
 
 -export([register_metrics/0]).
 
+-export([conn_to_json/1]).
+
 version() -> 2.
 
 register_metrics() ->
