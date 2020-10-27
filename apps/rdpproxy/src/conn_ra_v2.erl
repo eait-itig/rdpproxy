@@ -302,7 +302,19 @@ conn_to_json(C) ->
         #{avg_ping := N} -> J6#{<<"avg_ping">> => N};
         _ -> J6
     end,
-    [jsx:encode(J7), $\n].
+    J8 = case C of
+        #{ts_session_id := SessId} -> J7#{<<"backend_session_id">> => SessId};
+        _ -> J7
+    end,
+    J9 = case C of
+        #{ts_session_status := BSt} ->
+            J8#{
+                <<"backend_session_status">> => iolist_to_binary(
+                    io_lib:format("~p", [BSt]))
+            };
+        _ -> J8
+    end,
+    [jsx:encode(J9), $\n].
 
 evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
     #{Hour := #{count := 0, conns := ConnKeys}} = H0,

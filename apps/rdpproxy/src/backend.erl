@@ -33,7 +33,8 @@
 -include_lib("rdp_proto/include/rdp_server.hrl").
 
 -export([start_link/4, probe/2]).
--export([initiation/2, proxy_intercept/2, proxy/2]).
+-export([initiation/2, proxy_intercept/2, proxy_watch_demand/2,
+    proxy_watch_logon/2, proxy/2]).
 -export([init/1, handle_info/3, terminate/3, code_change/4]).
 
 -export([register_metrics/0]).
@@ -113,7 +114,9 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
     usref=0 :: integer(),
     unused,
     server :: rdp_server:server() | pid(),
-    origcr :: #x224_cr{}
+    origcr :: #x224_cr{},
+    sharechan :: undefined | integer(),
+    logon = false :: boolean()
     }).
 
 %% @private
@@ -146,7 +149,8 @@ init([Srv, L, Address, Port, OrigCr]) ->
         {error, Reason} ->
             case Srv of
                 P when is_pid(P) -> ok;
-                {P, _} when is_pid(P) -> session_ra:host_error(Address, Reason)
+                {P, _} when is_pid(P) ->
+                    session_ra:host_error(iolist_to_binary([Address]), Reason)
             end,
             {stop, Reason}
     end.
@@ -155,7 +159,8 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error 
         #?MODULE{addr = Address, usref = UsRef, server = Srv} = Data) ->
     case Srv of
         P when is_pid(P) -> ok;
-        {P, _} when is_pid(P) -> session_ra:host_error(Address, no_ssl)
+        {P, _} when is_pid(P) ->
+            session_ra:host_error(iolist_to_binary([Address]), no_ssl)
     end,
     {stop, no_ssl, Data};
 
@@ -186,7 +191,8 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
         gen_tcp:close(Sock),
         case Srv of
             P when is_pid(P) -> ok;
-            {P, _} when is_pid(P) -> session_ra:host_error(Address, no_ssl)
+            {P, _} when is_pid(P) ->
+                session_ra:host_error(iolist_to_binary([Address]), no_ssl)
         end,
         {stop, no_ssl, Data}
     end.
@@ -213,7 +219,7 @@ proxy_intercept({data, Bin}, #?MODULE{server = Srv, origcr = OrigCr} = Data) ->
             {ok, OutDtData} = x224:encode(#x224_dt{data = OutCrData}),
             {ok, OutPkt} = tpkt:encode(OutDtData),
             rdp_server:send_raw(Srv, <<OutPkt/binary, Rem/binary>>),
-            {next_state, proxy, Data};
+            {next_state, proxy_watch_demand, Data};
         _ ->
             rdp_server:send_raw(Srv, Bin),
             {next_state, proxy_intercept, Data}
@@ -227,8 +233,74 @@ proxy_intercept({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} =
     end,
     {next_state, proxy_intercept, Data};
 
-proxy_intercept(close, Data) ->
-    {stop, normal, Data}.
+proxy_intercept(close, D = #?MODULE{}) ->
+    {stop, normal, D}.
+
+proxy_watch_demand({data, Bin}, #?MODULE{server = Srv} = Data0) ->
+    case (catch rdpp:decode_client(Bin)) of
+        {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
+            case (catch rdpp:decode_sharecontrol(RdpData)) of
+                {ok, #ts_demand{sourcedesc = <<"RDP",0>>}} ->
+                    lager:debug("backend sent ts_demand, share channel = ~p",
+                        [Chan]),
+                    Data1 = Data0#?MODULE{sharechan = Chan},
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, proxy_watch_logon, Data1};
+                _ ->
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, proxy_watch_demand, Data0}
+            end;
+        _ ->
+            rdp_server:send_raw(Srv, Bin),
+            {next_state, proxy_watch_demand, Data0}
+    end;
+
+proxy_watch_demand({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
+    if SslSock =:= none ->
+        ok = gen_tcp:send(Sock, Bin);
+    true ->
+        ok = ssl:send(SslSock, Bin)
+    end,
+    {next_state, proxy_watch_demand, Data};
+
+proxy_watch_demand(close, D = #?MODULE{}) ->
+    {stop, normal, D}.
+
+proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan} = Data) ->
+    case (catch rdpp:decode_client(Bin)) of
+        {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
+            case (catch rdpp:decode_sharecontrol(RdpData)) of
+                {ok, #ts_sharedata{data = #ts_session_info_error{status = Status}}} ->
+                    {FPid, _} = Srv,
+                    lager:debug("backend session status: ~p", [Status]),
+                    conn_ra:annotate(FPid, #{ts_session_status => Status}),
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, proxy_watch_logon, Data};
+                {ok, #ts_sharedata{data = #ts_session_info_logon{sessionid = N}}} ->
+                    {FPid, _} = Srv,
+                    lager:debug("backend session id: ~p", [N]),
+                    conn_ra:annotate(FPid, #{ts_session_id => N}),
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, proxy, Data#?MODULE{logon = true}};
+                _ ->
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, proxy_watch_logon, Data}
+            end;
+        _ ->
+            rdp_server:send_raw(Srv, Bin),
+            {next_state, proxy_watch_logon, Data}
+    end;
+
+proxy_watch_logon({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
+    if SslSock =:= none ->
+        ok = gen_tcp:send(Sock, Bin);
+    true ->
+        ok = ssl:send(SslSock, Bin)
+    end,
+    {next_state, proxy_watch_logon, Data};
+
+proxy_watch_logon(close, D = #?MODULE{}) ->
+    {stop, normal, D}.
 
 proxy({data, Bin}, #?MODULE{server = Srv} = Data) ->
     rdp_server:send_raw(Srv, Bin),
@@ -242,23 +314,27 @@ proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
     end,
     {next_state, proxy, Data};
 
-proxy(close, Data) ->
-    {stop, normal, Data}.
+proxy(close, D = #?MODULE{}) ->
+    {stop, normal, D}.
 
 debug_print_data(<<>>) -> ok;
 debug_print_data(Bin) ->
-    case rdpp:decode_connseq(Bin) of
-        {ok, {fp_pdu, _Pdu}, Rem} ->
-            %error_logger:info_report(["backend rx fastpath:\n", fastpath:pretty_print(Pdu)]);
+    case rdpp:decode_client(Bin) of
+        {ok, {fp_pdu, Pdu}, Rem} ->
+            lager:info("backend rx fastpath: ~s", [fastpath:pretty_print(Pdu)]),
             debug_print_data(Rem);
         {ok, {x224_pdu, Pdu}, Rem} ->
             lager:info("backend rx x224: ~s", [x224:pretty_print(Pdu)]),
             debug_print_data(Rem);
-        {ok, {mcs_pdu, Pdu = #mcs_srv_data{data = RdpData, channel = _Chan}}, Rem} ->
+        {ok, {mcs_pdu, Pdu = #mcs_srv_data{data = RdpData}}, Rem} ->
             case rdpp:decode_basic(RdpData) of
                 {ok, Rec} ->
-                    {ok, RdpData} = rdpp:encode_basic(Rec),
-                    lager:info("backend rx rdp_basic: ~s", [rdpp:pretty_print(Rec)]);
+                    case rdpp:encode_basic(Rec) of
+                        {ok, RdpData} ->
+                            lager:info("backend rx rdp_basic: ~s", [rdpp:pretty_print(Rec)]);
+                        {ok, _OtherData} ->
+                            lager:info("backend rx rdp_basic (NOT MATCH): ~s", [rdpp:pretty_print(Rec)])
+                    end;
                 _ ->
                     case rdpp:decode_sharecontrol(RdpData) of
                         {ok, #ts_demand{} = Rec} ->
@@ -273,8 +349,9 @@ debug_print_data(Bin) ->
                             lager:info("backend rx rdp_sharecontrol: ~s", [rdpp:pretty_print(Rec)]);
                         {ok, Rec} ->
                             lager:info("backend rx rdp_sharecontrol: ~s", [rdpp:pretty_print(Rec)]);
-                        _ ->
-                            lager:info("backend rx mcs: ~s", [mcsgcc:pretty_print(Pdu)])
+                        Err ->
+                            lager:info("backend sharecontrol decode: ~p", [Err]),
+                            lager:info("backend rx mcsdata: ~s", [mcsgcc:pretty_print(Pdu)])
                     end
             end,
             debug_print_data(Rem);
@@ -314,22 +391,23 @@ handle_info({tcp, Sock, Bin}, State, #?MODULE{sslsock = SslSock, sock = Sock} = 
     end;
 
 handle_info({ssl, SslSock, Bin}, State, #?MODULE{sslsock = SslSock} = Data)
-        when (State =:= proxy) orelse (State =:= proxy_intercept) ->
+        when (State =:= proxy) orelse (State =:= proxy_intercept) orelse
+             (State =:= proxy_watch_demand) orelse (State =:= proxy_watch_logon) ->
     %debug_print_data(Bin),
     ?MODULE:State({data, Bin}, Data);
 handle_info({ssl, SslSock, Bin}, State, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
     handle_info({tcp, Sock, Bin}, State, Data);
 
-handle_info({ssl_closed, SslSock}, _State, #?MODULE{sslsock = SslSock} = Data) ->
-    {stop, normal, Data};
+handle_info({ssl_closed, SslSock}, State, #?MODULE{sslsock = SslSock} = Data) ->
+    ?MODULE:State(close, Data);
 
 handle_info({ssl_error, SslSock, Why}, State, #?MODULE{sslsock = SslSock} = Data) ->
     lager:debug("backend ssl error in state ~p: ~p", [State, Why]),
     ssl:close(SslSock),
     {stop, normal, Data};
 
-handle_info({tcp_closed, Sock}, _State, #?MODULE{sock = Sock} = Data) ->
-    {stop, normal, Data};
+handle_info({tcp_closed, Sock}, State, #?MODULE{sock = Sock} = Data) ->
+    ?MODULE:State(close, Data);
 
 handle_info({tcp_error, Sock, Why}, State, #?MODULE{sock = Sock} = Data) ->
     lager:debug("backend tcp error in state ~p: ~p", [State, Why]),
@@ -341,6 +419,18 @@ handle_info(Msg, State, Data) ->
     {next_state, State, Data}.
 
 %% @private
+terminate(Reason, proxy_watch_demand, D = #?MODULE{addr = Address}) ->
+    lager:debug("backend conn closed without a ts_demand"),
+    session_ra:host_error(iolist_to_binary([Address]), no_ts_demand),
+    terminate(Reason, other, D);
+terminate(Reason, proxy_watch_logon, D = #?MODULE{addr = Address, logon = false}) ->
+    lager:debug("backend conn closed without a good logon"),
+    session_ra:host_error(iolist_to_binary([Address]), no_logon),
+    terminate(Reason, other, D);
+terminate(Reason, proxy, D = #?MODULE{addr = Address, logon = false}) ->
+    lager:debug("backend conn closed without a good logon"),
+    session_ra:host_error(iolist_to_binary([Address]), no_logon),
+    terminate(Reason, other, D);
 terminate(_Reason, _State, #?MODULE{sslsock = none, sock = Sock}) ->
     gen_tcp:close(Sock);
 terminate(_Reason, _State, #?MODULE{sslsock = SslSock, sock = Sock}) ->
