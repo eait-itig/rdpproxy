@@ -623,7 +623,11 @@ conn_user(["-j", User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
     lists:foreach(fun (Conn) ->
-        io:format("~s\n", [conn_ra_v2:conn_to_json(Conn)])
+        Conn1 = case Conn of
+            #{stopped := _} -> Conn;
+            _ -> Conn#{stopped => erlang:system_time(second)}
+        end,
+        io:format("~s", [conn_ra_v2:conn_to_json(Conn1)])
     end, Conns);
 
 conn_user(["-v", User]) ->
