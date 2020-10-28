@@ -268,7 +268,15 @@ proxy_watch_demand({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock
 proxy_watch_demand(close, D = #?MODULE{}) ->
     {stop, normal, D}.
 
-proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan} = Data) ->
+proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan, t0 = T0} = Data) ->
+    T1 = erlang:system_time(millisecond),
+    Delta = T1 - T0,
+    % If it's been 5 minutes and there hasn't been a logon event, stop parsing
+    % the traffic (probably the client disabled it or it was an auto-reconnect)
+    ReturnState = if
+        (Delta > 300000) -> proxy;
+        true -> proxy_watch_logon
+    end,
     case (catch rdpp:decode_client(Bin)) of
         {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
             case (catch rdpp:decode_sharecontrol(RdpData)) of
@@ -277,7 +285,7 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan} = Data) 
                     lager:debug("backend session status: ~p", [Status]),
                     conn_ra:annotate(FPid, #{ts_session_status => Status}),
                     rdp_server:send_raw(Srv, Bin),
-                    {next_state, proxy_watch_logon, Data};
+                    {next_state, ReturnState, Data};
                 {ok, #ts_sharedata{data = #ts_session_info_logon{sessionid = N}}} ->
                     {FPid, _} = Srv,
                     lager:debug("backend session id: ~p", [N]),
@@ -286,11 +294,11 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan} = Data) 
                     {next_state, proxy, Data#?MODULE{logon = true}};
                 _ ->
                     rdp_server:send_raw(Srv, Bin),
-                    {next_state, proxy_watch_logon, Data}
+                    {next_state, ReturnState, Data}
             end;
         _ ->
             rdp_server:send_raw(Srv, Bin),
-            {next_state, proxy_watch_logon, Data}
+            {next_state, ReturnState, Data}
     end;
 
 proxy_watch_logon({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
