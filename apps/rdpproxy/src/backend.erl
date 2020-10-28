@@ -430,7 +430,7 @@ terminate(Reason, proxy_watch_logon, D = #?MODULE{addr = Address, logon = false,
     T1 = erlang:system_time(millisecond),
     Delta = T1 - T0,
     if
-        (Delta > 3000) ->
+        (Delta > 3000) andalso (Delta < 300000) ->
             session_ra:host_error(iolist_to_binary([Address]), no_logon);
         true ->
             ok
@@ -441,7 +441,7 @@ terminate(Reason, proxy, D = #?MODULE{addr = Address, logon = false, t0 = T0}) -
     T1 = erlang:system_time(millisecond),
     Delta = T1 - T0,
     if
-        (Delta > 3000) ->
+        (Delta > 3000) andalso (Delta < 300000) ->
             session_ra:host_error(iolist_to_binary([Address]), no_logon);
         true ->
             ok
