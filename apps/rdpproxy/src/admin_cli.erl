@@ -593,11 +593,16 @@ conn_list([]) ->
                 Reconn = ""
         end,
         TSess = case Conn of
+            #{ts_session_id := undefined, ts_session_status := _} ->
+                "+X";
             #{ts_session_id := SId, ts_session_status := _} ->
                 io_lib:format("+~B", [SId]);
+            #{ts_session_id := undefined} ->
+                "X";
             #{ts_session_id := SId} ->
                 io_lib:format("~B", [SId]);
-            _ -> ""
+            _ ->
+                ""
         end,
         Fields = [
             Id,
@@ -756,11 +761,16 @@ conn_user([User]) ->
             _ -> ""
         end,
         TSess = case Conn of
+            #{ts_session_id := undefined, ts_session_status := _} ->
+                "+X";
             #{ts_session_id := SId, ts_session_status := _} ->
                 io_lib:format("+~B", [SId]);
+            #{ts_session_id := undefined} ->
+                "X";
             #{ts_session_id := SId} ->
                 io_lib:format("~B", [SId]);
-            _ -> ""
+            _ ->
+                ""
         end,
         Fields = [
             Id,
