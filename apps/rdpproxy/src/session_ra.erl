@@ -701,7 +701,11 @@ apply(_Meta, {update_pool, PCh}, S0 = #?MODULE{pools = P0}) ->
                 #{role_priority := _} -> PD0;
                 _ -> PD0#{role_priority => #{default => 0}}
             end,
-            PD2 = maps:map(fun (K, V0) ->
+            PD2 = case PD1 of
+                #{priority := _} -> PD1;
+                _ -> PD1#{priority => 0}
+            end,
+            PD3 = maps:map(fun (K, V0) ->
                 case {K, PCh} of
                     {title, #{K := V1}} when is_binary(V1) -> V1;
                     {help_text, #{K := V1}} when is_binary(V1) -> V1;
@@ -715,8 +719,8 @@ apply(_Meta, {update_pool, PCh}, S0 = #?MODULE{pools = P0}) ->
                     {priority, #{K := V1}} when is_integer(V1) -> V1;
                     _ -> V0
                 end
-            end, PD1),
-            P1 = P0#{Pool => PD2},
+            end, PD2),
+            P1 = P0#{Pool => PD3},
             S1 = S0#?MODULE{pools = P1},
             {S1, ok, []};
         _ ->
