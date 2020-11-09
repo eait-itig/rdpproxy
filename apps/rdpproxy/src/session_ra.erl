@@ -406,6 +406,7 @@ process_rules(UInfo, [Rule | Rest]) ->
     title => binary(),
     help_text => binary(),
     acl => [acl_entry()],
+    priority => integer(),
 
     % can machines in this pool host more than one RDP session?
     mode => single_user | multi_user,
@@ -612,7 +613,8 @@ init(_Config) ->
         report_roles => [],
         min_rsvd_time => 900,
         hdl_expiry_time => 900,
-        role_priority => #{default => 0}
+        role_priority => #{default => 0},
+        priority => 0
     },
     #?MODULE{pools = #{default => DefaultPool}}.
 
@@ -644,7 +646,28 @@ apply(_Meta, {get_pools_for, UInfo}, S0 = #?MODULE{pools = P0}) ->
             deny -> false
         end
     end, maps:values(P0)),
-    {S0, {ok, Pools}, []};
+    SortedPools = lists:sort(fun (A, B) ->
+        #{title := TitleA, id := IdA} = A,
+        #{title := TitleB, id := IdB} = B,
+        PriorityA = case A of
+            #{priority := AN} -> AN;
+            _ -> 0
+        end,
+        PriorityB = case B of
+            #{priority := BN} -> BN;
+            _ -> 0
+        end,
+        if
+            (PriorityA > PriorityB) -> true;
+            (PriorityA < PriorityB) -> false;
+            (TitleA < TitleB) -> true;
+            (TitleA > TitleB) -> false;
+            (IdA < IdB) -> true;
+            (IdA > IdB) -> false;
+            true -> true
+        end
+    end, Pools),
+    {S0, {ok, SortedPools}, []};
 
 apply(_Meta, {create_pool, PD0}, S0 = #?MODULE{pools = P0}) ->
     #{id := Pool} = PD0,
@@ -662,7 +685,8 @@ apply(_Meta, {create_pool, PD0}, S0 = #?MODULE{pools = P0}) ->
                 report_roles => maps:get(report_roles, PD0, []),
                 min_rsvd_time => maps:get(min_rsvd_time, PD0, 900),
                 hdl_expiry_time => maps:get(hdl_expiry_time, PD0, 900),
-                role_priority => maps:get(role_priority, PD0, #{default => 0})
+                role_priority => maps:get(role_priority, PD0, #{default => 0}),
+                priority => maps:get(priority, PD0, 0)
             },
             P1 = P0#{Pool => PD1},
             S1 = S0#?MODULE{pools = P1},
@@ -688,6 +712,7 @@ apply(_Meta, {update_pool, PCh}, S0 = #?MODULE{pools = P0}) ->
                     {min_rsvd_time, #{K := V1}} when is_integer(V1) -> V1;
                     {hdl_expiry_time, #{K := V1}} when is_integer(V1) -> V1;
                     {role_priority, #{K := V1}} when is_map(V1) -> V1;
+                    {priority, #{K := V1}} when is_integer(V1) -> V1;
                     _ -> V0
                 end
             end, PD1),
