@@ -1341,7 +1341,8 @@ user_existing_hosts_multi(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}
     end, ToGive).
 
 -spec user_existing_hosts_single(username(), pool(), #?MODULE{}) -> [ipstr()].
-user_existing_hosts_single(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}) ->
+user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
+                                                    users = U0, hdls = H0}) ->
     % First, look at all recent reservations which belong to this user.
     % If we have any, keep track of the last handle we had each host (so
     % we can see if it was an error or a good alloc)
@@ -1387,29 +1388,63 @@ user_existing_hosts_single(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0
             _ -> Acc
         end
     end, LastHMs, M0),
-    % Finally, check all of the hosts we found above for being enabled and not
-    % carrying any other reservations.
-    ToGive = maps:fold(fun
-        (Ip, {none, #{state := ok}}, Acc) ->
+    % Remove all machines which are disabled or in the wrong pool.
+    WithoutDisabled = maps:filter(fun
+        (Ip, {_Hdl, #{state := ok}}) ->
             case M0 of
-                #{Ip := #{pool := Pool, enabled := true, handles := [Hdl|_]}} ->
+                #{Ip := #{pool := Pool, enabled := true}} -> true;
+                _ -> false
+            end;
+        (_Ip, _) -> false
+    end, WithSess),
+    % Remove machines which have other reservations on them
+    WithoutOtherResvd = maps:filter(fun
+        (Ip, {none, #{state := ok}}) ->
+            case M0 of
+                #{Ip := #{handles := [Hdl|_]}} ->
                     case H0 of
-                        #{Hdl := #{user := User}} -> [Ip | Acc];
-                        #{Hdl := #{}} -> Acc;
-                        _ -> [Ip | Acc]
+                        #{Hdl := #{user := User}} -> true;
+                        #{Hdl := #{}} -> false;
+                        _ -> true
                     end;
-                #{Ip := #{pool := Pool, enabled := true}} ->
-                    [Ip | Acc];
-                _ -> Acc
+                #{Ip := #{}} -> true;
+                _ -> false
             end;
-        (Ip, {Hdl, #{state := ok}}, Acc) ->
+        (Ip, {Hdl, #{state := ok}}) ->
             case M0 of
-                #{Ip := #{pool := Pool, enabled := true, handles := [Hdl|_]}} ->
-                    [Ip | Acc];
-                _ -> Acc
+                #{Ip := #{handles := [Hdl|_]}} -> true;
+                _ -> false
             end;
-        (_Ip, _, Acc) -> Acc
-    end, [], WithSess),
+        (_Ip, _) -> false
+    end, WithoutDisabled),
+    % Remove machines which are in error state and have had >=2 errors in the
+    % last 3 hours
+    WithoutErrors = maps:filter(fun
+        (Ip, {_Hdl, #{state := ok}}) ->
+            #{Ip := A} = M0,
+            #{alloc_history := AHist, error_history := EHist} = A,
+            ALatest = case queue:out_r(AHist) of
+                {{value, #{time := ALAT}}, _} -> ALAT;
+                _ -> 0
+            end,
+            ELatest = case queue:out_r(EHist) of
+                {{value, #{time := ELAT}}, _} -> ELAT;
+                _ -> 0
+            end,
+            InError = (ELatest > ALatest),
+
+            CutOff = Now - 3600*3,
+            RecentErrors = lists:filter(fun
+                (#{time := T}) when T >= CutOff -> true;
+                (_) -> false
+            end, queue:to_list(EHist)),
+            if
+                InError and (length(RecentErrors) >= 2) -> false;
+                true -> true
+            end;
+        (_Ip, _) -> false
+    end, WithoutOtherResvd),
+    ToGive = maps:keys(WithoutErrors),
     lists:sort(fun (IpA, IpB) ->
         #{IpA := A, IpB := B} = M0,
         #{alloc_history := AHistA,
