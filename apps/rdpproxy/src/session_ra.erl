@@ -1417,7 +1417,7 @@ user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
             end;
         (_Ip, _) -> false
     end, WithoutDisabled),
-    % Remove machines which are in error state and have had >=2 errors in the
+    % Remove machines which are in error state and have had errors in the
     % last 3 hours
     WithoutErrors = maps:filter(fun
         (Ip, {_Hdl, #{state := ok}}) ->
@@ -1439,7 +1439,7 @@ user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
                 (_) -> false
             end, queue:to_list(EHist)),
             if
-                InError and (length(RecentErrors) >= 2) -> false;
+                InError and (length(RecentErrors) >= 1) -> false;
                 true -> true
             end;
         (_Ip, _) -> false
