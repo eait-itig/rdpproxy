@@ -818,7 +818,7 @@ dump_conns([]) ->
 
 dump_conns(["-j"]) ->
     {ok, {_, ConnMap}, _} = ra:leader_query(conn_ra,
-        fun (S) -> element(3, S) end),
+        fun (S) -> element(4, S) end),
     lists:foreach(fun (Conn) ->
         Conn1 = case Conn of
             #{stopped := _} -> Conn;
