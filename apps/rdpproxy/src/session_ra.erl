@@ -1075,9 +1075,13 @@ apply(_Meta, {down, Pid, noconnection}, S0 = #?MODULE{}) ->
 
 apply(_Meta, {down, Pid, _Reason}, S0 = #?MODULE{watches = W0, last_time = T}) ->
     % Find the handle state
-    #{Pid := Hdl} = W0,
-    S1 = detach_handle(Hdl, T, S0),
-    {S1, ok, []};
+    case W0 of
+        #{Pid := Hdl} ->
+            S1 = detach_handle(Hdl, T, S0),
+            {S1, ok, []};
+        _ ->
+            {S0, ok, []}
+    end;
 
 apply(_Meta, {nodeup, Node}, S0 = #?MODULE{watches = W0}) ->
     Effects = maps:fold(fun
