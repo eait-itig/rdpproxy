@@ -96,8 +96,12 @@ retry_start_backend(Srv, L, HostBin, Port) ->
 
 handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
     lager:debug("connect ~p to listener ~p, protocols ~p", [P, L, Protocols]),
+    % HostBin = <<"130.102.79.25">>,
+    % User = <<"test">>,
+    % Port = 3389,
+    % Sess = #{ip => <<"130.102.79.25">>, port => 3389, user => <<"test">>},
     case session_ra:claim_handle(Cookie) of
-        {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
+       {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
             {PeerIp, PeerPort} = P,
             PeerStr = iolist_to_binary(inet:ntoa(PeerIp)),
             lager:debug("~p:~p: presented cookie ~p (~p), forwarding to ~p",

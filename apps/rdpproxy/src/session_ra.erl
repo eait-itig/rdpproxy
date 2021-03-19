@@ -38,7 +38,8 @@
 -export([gen_key/0]).
 -export([get_all_pools/0, get_pool/1, create_pool/1, update_pool/1]).
 -export([claim_handle/1, get_handle/1]).
--export([create_host/1, update_host/1, enable_host/1, disable_host/1]).
+-export([create_host/1, update_host/1, enable_host/1, disable_host/1,
+    delete_host/1]).
 -export([reserve/2, reserve_ip/2, allocate/2]).
 -export([alloc_error/2]).
 -export([add_session/2, status_report/2]).
@@ -244,6 +245,14 @@ enable_host(Ip) ->
 disable_host(Ip) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {disable_host, T, Ip}) of
+        {ok, Res, _Leader} -> Res;
+        Else -> Else
+    end.
+
+-spec delete_host(ipstr()) -> ok | {error, host_enabled} | {error, host_has_handles} | {error, not_found} | ra_error().
+delete_host(Ip) ->
+    T = erlang:system_time(second),
+    case ra:process_command(?MODULE, {delete_host, T, Ip}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
@@ -881,6 +890,20 @@ apply(_Meta, {disable_host, T, Ip}, S0 = #?MODULE{meta = M0}) ->
         #{Ip := HM0 = #{enabled := true}} ->
             HM1 = HM0#{enabled => false, last_update => T},
             M1 = M0#{Ip => HM1},
+            S1 = S0#?MODULE{meta = M1},
+            {S1, ok, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
+apply(_Meta, {delete_host, _T, Ip}, S0 = #?MODULE{meta = M0}) ->
+    case M0 of
+        #{Ip := #{enabled := true}} ->
+            {S0, {error, host_enabled}, []};
+        #{Ip := #{handles := [_ | _]}} ->
+            {S0, {error, host_has_handles}, []};
+        #{Ip := #{}} ->
+            M1 = maps:remove(Ip, M0),
             S1 = S0#?MODULE{meta = M1},
             {S1, ok, []};
         _ ->

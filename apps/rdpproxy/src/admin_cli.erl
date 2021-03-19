@@ -44,6 +44,7 @@
     host_create/1,
     host_get/1,
     host_list/1,
+    host_delete/1,
     host_test/1,
     host_update/1,
     host_enable/1,
@@ -55,7 +56,6 @@
     handle_get/1,
     handle_list/1,
     handle_help/1,
-    host_update/1,
     dump_sessions/1,
     dump_conns/1,
     pool_reprobe/1
@@ -82,6 +82,7 @@ help([]) ->
               "                      host update <ip> <map>\n"
               "                      host enable <ip>\n"
               "                      host disable <ip>\n"
+              "                      host delete <ip>\n"
               "                      host test <ip>\n"
               "                      alloc host <pool> <user>\n"
               "\n"
@@ -352,6 +353,11 @@ host_disable([Ip]) ->
     Ret = session_ra:disable_host(IpBin),
     io:format("~p\n", [Ret]).
 
+host_delete([Ip]) ->
+    IpBin = unicode:characters_to_binary(Ip, latin1),
+    Ret = session_ra:delete_host(IpBin),
+    io:format("~p\n", [Ret]).
+
 host_get([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
     case session_ra:get_host(IpBin) of
@@ -524,6 +530,16 @@ host_list(Args) ->
         ],
         io:format(Fmt, Fields)
     end, Hosts2).
+
+conn_list(["-j"]) ->
+    {ok, Conns} = conn_ra:get_all_open(),
+    lists:foreach(fun (Conn) ->
+        Conn1 = case Conn of
+            #{stopped := _} -> Conn;
+            _ -> Conn#{stopped => erlang:system_time(second)}
+        end,
+        io:format("~s", [conn_ra_v2:conn_to_json(Conn1)])
+    end, Conns);
 
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
@@ -798,7 +814,18 @@ dump_sessions([]) ->
 dump_conns([]) ->
     {ok, {_, SBin}, _} = ra:leader_query(conn_ra,
         fun (S) -> erlang:term_to_binary(S) end),
-    io:format("~s\n", [base64:encode(SBin)]).
+    io:format("~s\n", [base64:encode(SBin)]);
+
+dump_conns(["-j"]) ->
+    {ok, {_, ConnMap}, _} = ra:leader_query(conn_ra,
+        fun (S) -> element(3, S) end),
+    lists:foreach(fun (Conn) ->
+        Conn1 = case Conn of
+            #{stopped := _} -> Conn;
+            _ -> Conn#{stopped => erlang:system_time(second)}
+        end,
+        io:format("~s", [conn_ra_v2:conn_to_json(Conn1)])
+    end, maps:values(ConnMap)).
 
 port_recv_exit_status(Port) ->
     receive
