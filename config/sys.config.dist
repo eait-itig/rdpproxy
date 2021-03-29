@@ -130,6 +130,14 @@
                 %% Default-deny
                 %%
                 {deny, everybody}
+            ]},
+
+            %%
+            %% ACL to grant access to the NMS menu in pool mode
+            %%
+            {pool_nms_acl, [
+                %% See examples in admin_acl above
+                {deny, everybody}
             ]}
         ]},
         {backend, [

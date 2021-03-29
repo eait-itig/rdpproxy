@@ -1484,11 +1484,20 @@ choose_pool(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
         #?MODULE{pools = Ps} ->
             Ps
     end,
-    {Off, Max, Pools1} = case S of
+    NMSAcl = rdpproxy:config([ui, pool_nms_acl], [{deny, everybody}]),
+    Pools1 = case session_ra:process_rules(UInfo, NMSAcl) of
+        allow ->
+            [#{id => '_nms_pool', title => <<"NMS">>,
+               help_text => <<"Choose from personally assigned\nhosts in NMS.">>}
+             | Pools0];
+        deny ->
+            Pools0
+    end,
+    {Off, Max, Pools2} = case S of
         #?MODULE{pooloffset = undefined} ->
-            {1, length(Pools0), lists:sublist(Pools0, ?devpgsize)};
+            {1, length(Pools1), lists:sublist(Pools1, ?devpgsize)};
         #?MODULE{pooloffset = N} ->
-            {N, length(Pools0), lists:sublist(Pools0, N, ?devpgsize)}
+            {N, length(Pools1), lists:sublist(Pools1, N, ?devpgsize)}
     end,
     lager:debug("giving ~p pool choice menu: ~p", [U, Pools1]),
 
@@ -1527,7 +1536,7 @@ choose_pool(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
                                                      size = {120.0, 28.0}}} },
                 { [{id, {choosebtn, Id}}],  {init, <<"Connect", 0>>} }
         ]
-    end, [], Pools1),
+    end, [], Pools2),
     PageLblMsg = iolist_to_binary(io_lib:format("~B / ~B", [
         1 + (Off div ?devpgsize), (Max + ?devpgsize - 1) div ?devpgsize])),
     Events2 = Events1 ++ [
@@ -1610,6 +1619,11 @@ choose_pool({ui, {clicked, prevpagebtn}}, S = #?MODULE{pooloffset = Off0, pools 
     end,
     do_ping_annotate(S),
     choose_pool(setup_ui, S#?MODULE{pooloffset = Off1});
+
+choose_pool({ui, {clicked, {choosebtn, '_nms_pool'}}}, S = #?MODULE{}) ->
+    do_ping_annotate(S),
+    {ok, Nms} = nms:start_link(),
+    choose(setup_ui, S#?MODULE{nms = Nms});
 
 choose_pool({ui, {clicked, {choosebtn, Id}}}, S = #?MODULE{}) ->
     do_ping_annotate(S),
