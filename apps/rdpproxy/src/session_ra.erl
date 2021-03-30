@@ -200,7 +200,7 @@ claim_handle(Hdl) ->
             {ok, Data#{password => Pw}};
         {ok, {conflict, OtherPid}, _Leader} ->
             exit(OtherPid, kill),
-            timer:sleep(10),
+            timer:sleep(500),
             claim_handle(Hdl);
         {ok, Res, _Leader} -> Res;
         Else -> Else
