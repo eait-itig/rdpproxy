@@ -475,6 +475,8 @@ handle_info(Msg, State, Data) ->
     lager:info("got ~p", [Msg]),
     {next_state, State, Data}.
 
+check_pktq_errors(#?MODULE{pktq = undefined}) ->
+    unknown;
 check_pktq_errors(#?MODULE{server = Srv, sharechan = Chan, pktq = Q, addr = Address}) ->
     Results = lists:usort(lists:map(fun (Bin) ->
         case (catch rdpp:decode_client(Bin)) of
@@ -550,6 +552,9 @@ terminate(Reason, proxy, D = #?MODULE{addr = Address, logon = false, t0 = T0}) -
             session_ra:host_error(iolist_to_binary([Address]), no_logon),
             terminate(Reason, other, D)
     end;
+terminate(Reason, proxy, D = #?MODULE{logon = true}) ->
+    check_pktq_errors(D),
+    terminate(Reason, other, D);
 terminate(_Reason, _State, #?MODULE{sslsock = none, sock = Sock}) ->
     gen_tcp:close(Sock);
 terminate(_Reason, _State, #?MODULE{sslsock = SslSock, sock = Sock}) ->
