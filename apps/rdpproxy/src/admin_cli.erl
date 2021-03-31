@@ -611,14 +611,20 @@ conn_list([]) ->
         TSess = case Conn of
             #{ts_error_info := {error, Why}} ->
                 io_lib:format("~p!", [Why]);
-            #{ts_session_id := undefined, ts_session_status := _} ->
-                "+X";
-            #{ts_session_id := SId, ts_session_status := _} ->
+            #{ts_session_id := SId, ts_session_status := _} when is_integer(SId) ->
                 io_lib:format("+~B", [SId]);
+            #{ts_session_id := SId} when is_integer(SId) ->
+                io_lib:format("~B", [SId]);
+            #{ts_error_info := {logoff, _}} ->
+                "?X";
+            #{ts_error_info := {disconnect, _}} ->
+                "?X";
+            #{ts_error_info := no_error} ->
+                "?X";
             #{ts_session_id := undefined} ->
                 "X";
-            #{ts_session_id := SId} ->
-                io_lib:format("~B", [SId]);
+            #{ts_session_id := undefined, ts_session_status := _} ->
+                "+X";
             _ ->
                 ""
         end,
@@ -779,14 +785,22 @@ conn_user([User]) ->
             _ -> ""
         end,
         TSess = case Conn of
-            #{ts_session_id := undefined, ts_session_status := _} ->
-                "+X";
-            #{ts_session_id := SId, ts_session_status := _} ->
+            #{ts_error_info := {error, Why}} ->
+                io_lib:format("~p!", [Why]);
+            #{ts_session_id := SId, ts_session_status := _} when is_integer(SId) ->
                 io_lib:format("+~B", [SId]);
+            #{ts_session_id := SId} when is_integer(SId) ->
+                io_lib:format("~B", [SId]);
+            #{ts_error_info := {logoff, _}} ->
+                "?X";
+            #{ts_error_info := {disconnect, _}} ->
+                "?X";
+            #{ts_error_info := no_error} ->
+                "?X";
             #{ts_session_id := undefined} ->
                 "X";
-            #{ts_session_id := SId} ->
-                io_lib:format("~B", [SId]);
+            #{ts_session_id := undefined, ts_session_status := _} ->
+                "+X";
             _ ->
                 ""
         end,

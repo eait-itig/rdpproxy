@@ -302,12 +302,27 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan, t0 = T0}
                     {next_state, proxy, Data#?MODULE{logon = true}};
                 {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
                     {FPid, _} = Srv,
-                    lager:debug("backend error: ~p", [E]),
-                    #?MODULE{addr = Address} = Data,
-                    session_ra:host_error(iolist_to_binary([Address]), E),
-                    conn_ra:annotate(FPid, #{ts_error_info => E}),
-                    rdp_server:send_raw(Srv, Bin),
-                    {next_state, ReturnState, Data};
+                    lager:debug("backend error info: ~p", [E]),
+                    IsError = case E of
+                        {logoff, _} -> false;
+                        {disconnect, _} -> false;
+                        no_error -> false;
+                        _ -> true
+                    end,
+                    if
+                        IsError ->
+                            #?MODULE{addr = Address} = Data,
+                            session_ra:host_error(
+                                iolist_to_binary([Address]), E),
+                            conn_ra:annotate(FPid, #{ts_error_info => E}),
+                            rdp_server:send_raw(Srv, Bin),
+                            {next_state, ReturnState, Data};
+
+                        not IsError ->
+                            conn_ra:annotate(FPid, #{ts_error_info => E}),
+                            rdp_server:send_raw(Srv, Bin),
+                            {next_state, proxy, Data#?MODULE{logon = true}}
+                    end;
                 _ ->
                     rdp_server:send_raw(Srv, Bin),
                     {next_state, ReturnState, Data}
