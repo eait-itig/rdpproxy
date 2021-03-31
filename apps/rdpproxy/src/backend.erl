@@ -39,8 +39,9 @@
 
 -export([register_metrics/0]).
 
-% Keep last N packets to search for disconnect reason
--define(END_PKT_BUF, 16).
+% Keep last N small packets to search for disconnect reason
+-define(END_PKT_BUF, 32).
+-define(END_PKT_MAX_SZ, 256).
 
 register_metrics() ->
     prometheus_counter:new([
@@ -350,6 +351,10 @@ proxy({data, Bin}, #?MODULE{server = Srv, pktq = undefined} = Data) ->
     rdp_server:send_raw(Srv, Bin),
     {next_state, proxy, Data};
 
+proxy({data, Bin}, #?MODULE{server = Srv} = Data) when byte_size(Bin) > ?END_PKT_MAX_SZ ->
+    rdp_server:send_raw(Srv, Bin),
+    {next_state, proxy, Data};
+
 proxy({data, Bin}, #?MODULE{server = Srv, pktq = Q0} = Data0) ->
     rdp_server:send_raw(Srv, Bin),
     Q1 = queue:in(Bin, Q0),
@@ -475,40 +480,56 @@ handle_info(Msg, State, Data) ->
     lager:info("got ~p", [Msg]),
     {next_state, State, Data}.
 
+check_pkt_errors([], #?MODULE{}) -> [];
+check_pkt_errors([<<>> | Rest], D = #?MODULE{}) ->
+    check_pkt_errors(Rest, D);
+check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address, server = Srv}) ->
+    case (catch rdpp:decode_client(Bin)) of
+        {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, Rem} ->
+            case (catch rdpp:decode_sharecontrol(RdpData)) of
+                {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
+                    {FPid, _} = Srv,
+                    lager:debug("backend error info: ~p (~Bb)", [E, byte_size(Bin)]),
+                    conn_ra:annotate(FPid, #{ts_error_info => E}),
+                    IsError = case E of
+                        {logoff, _} -> false;
+                        {disconnect, _} -> false;
+                        no_error -> false;
+                        _ -> true
+                    end,
+                    if
+                        IsError ->
+                            session_ra:host_error(
+                                iolist_to_binary([Address]), E),
+                            [error | check_pkt_errors([Rem | Rest], D)];
+                        not IsError ->
+                            [no_error | check_pkt_errors([Rem | Rest], D)]
+                    end;
+                {ok, #ts_sharedata{data = Rec}} ->
+                    [{sharedata, element(1,Rec)} | check_pkt_errors([Rem | Rest], D)];
+                {ok, Rec} ->
+                    [element(1,Rec) | check_pkt_errors([Rem | Rest], D)];
+                _ ->
+                    [unknown | check_pkt_errors([Rem | Rest], D)]
+            end;
+        {ok, {mcs_pdu, #mcs_srv_data{channel = OtherChan}}, Rem} ->
+            [{other_chan, OtherChan} | check_pkt_errors([Rem | Rest], D)];
+        {ok, _, Rem} ->
+            [unknown | check_pkt_errors([Rem | Rest], D)];
+        _ ->
+            [unknown | check_pkt_errors(Rest, D)]
+    end.
+
 check_pktq_errors(#?MODULE{pktq = undefined}) ->
+    lager:debug("backend closed, no pktq"),
     unknown;
-check_pktq_errors(#?MODULE{server = Srv, sharechan = Chan, pktq = Q, addr = Address}) ->
-    Results = lists:usort(lists:map(fun (Bin) ->
-        case (catch rdpp:decode_client(Bin)) of
-            {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
-                case (catch rdpp:decode_sharecontrol(RdpData)) of
-                    {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
-                        {FPid, _} = Srv,
-                        lager:debug("backend error info: ~p", [E]),
-                        conn_ra:annotate(FPid, #{ts_error_info => E}),
-                        IsError = case E of
-                            {logoff, _} -> false;
-                            {disconnect, _} -> false;
-                            no_error -> false;
-                            _ -> true
-                        end,
-                        if
-                            IsError ->
-                                session_ra:host_error(
-                                    iolist_to_binary([Address]), E),
-                                error;
-                            not IsError ->
-                                no_error
-                        end;
-                    _ ->
-                        unknown
-                end;
-            _ ->
-                unknown
-        end
-    end, queue:to_list(Q))),
+check_pktq_errors(D = #?MODULE{pktq = Q}) ->
+    Results = check_pkt_errors(queue:to_list(Q), D),
+    lager:debug("backend closed with ~B on pktq: ~p",
+        [queue:len(Q), lists:usort(Results)]),
     case lists:member(error, Results) of
-        true -> error;
+        true ->
+            error;
         _ ->
             case lists:member(no_error, Results) of
                 true -> ok;
