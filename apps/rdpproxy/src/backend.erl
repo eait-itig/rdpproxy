@@ -41,7 +41,7 @@
 
 % Keep last N small packets to search for disconnect reason
 -define(END_PKT_BUF, 32).
--define(END_PKT_MAX_SZ, 256).
+-define(END_PKT_MAX_SZ, 128).
 
 register_metrics() ->
     prometheus_counter:new([
@@ -376,13 +376,39 @@ proxy({data, Bin}, #?MODULE{server = Srv, pktq = Q0} = Data0) ->
     Data1 = Data0#?MODULE{pktq = Q2},
     {next_state, proxy, Data1};
 
-proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
+
+proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock, pktq = undefined} = Data) ->
     if SslSock =:= none ->
         ok = gen_tcp:send(Sock, Bin);
     true ->
         ok = ssl:send(SslSock, Bin)
     end,
     {next_state, proxy, Data};
+
+proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) when byte_size(Bin) > ?END_PKT_MAX_SZ ->
+    if SslSock =:= none ->
+        ok = gen_tcp:send(Sock, Bin);
+    true ->
+        ok = ssl:send(SslSock, Bin)
+    end,
+    {next_state, proxy, Data};
+
+proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock, pktq = Q0} = Data0) ->
+    if SslSock =:= none ->
+        ok = gen_tcp:send(Sock, Bin);
+    true ->
+        ok = ssl:send(SslSock, Bin)
+    end,
+    Q1 = queue:in(Bin, Q0),
+    Q2 = case queue:len(Q1) of
+        N when N > ?END_PKT_BUF ->
+            {{value, _}, QQ} = queue:out(Q1),
+            QQ;
+        _ ->
+            Q1
+    end,
+    Data1 = Data0#?MODULE{pktq = Q2},
+    {next_state, proxy, Data1};
 
 proxy(close, D = #?MODULE{}) ->
     {stop, normal, D}.
@@ -495,6 +521,16 @@ check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address}) -
     case (catch rdpp:decode_connseq(Bin)) of
         {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, Rem} ->
             case (catch rdpp:decode_sharecontrol(RdpData)) of
+                {ok, #ts_sharedata{data = #ts_shutdown{}}} ->
+                    #?MODULE{connid = ConnId} = D,
+                    lager:debug("backend ts_shutdown (~Bb)", [byte_size(Bin)]),
+                    conn_ra:annotate(ConnId, #{ts_error_info => {logoff, client}}),
+                    [no_error | check_pkt_errors([Rem | Rest], D)];
+                {ok, #ts_sharedata{data = #ts_shutdown_denied{}}} ->
+                    #?MODULE{connid = ConnId} = D,
+                    lager:debug("backend ts_shutdown_denied (~Bb)", [byte_size(Bin)]),
+                    conn_ra:annotate(ConnId, #{ts_error_info => {disconnect, client}}),
+                    [no_error | check_pkt_errors([Rem | Rest], D)];
                 {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
                     #?MODULE{connid = ConnId} = D,
                     lager:debug("backend error info: ~p (~Bb)", [E, byte_size(Bin)]),
@@ -522,6 +558,14 @@ check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address}) -
             end;
         {ok, {mcs_pdu, #mcs_srv_data{channel = OtherChan}}, Rem} ->
             [{other_chan, OtherChan} | check_pkt_errors([Rem | Rest], D)];
+        {ok, {mcs_pdu, #mcs_dpu{reason = Reason}}, Rem} ->
+            lager:debug("backend mcs_dpu: ~p (~Bb)", [Reason, byte_size(Bin)]),
+            ToAdd = case Reason of
+                'rn-user-requested' -> no_error;
+                'rn-provider-initiated' -> mo_error;
+                _ -> {mcs_dpu, Reason}
+            end,
+            [ToAdd | check_pkt_errors([Rem | Rest], D)];
         {ok, {Type, _}, Rem} ->
             [Type | check_pkt_errors([Rem | Rest], D)];
         _ ->
