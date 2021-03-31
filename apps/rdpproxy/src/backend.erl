@@ -309,20 +309,19 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan, t0 = T0}
                         no_error -> false;
                         _ -> true
                     end,
-                    if
+                    Data1 = if
                         IsError ->
                             #?MODULE{addr = Address} = Data,
                             session_ra:host_error(
                                 iolist_to_binary([Address]), E),
-                            conn_ra:annotate(FPid, #{ts_error_info => E}),
-                            rdp_server:send_raw(Srv, Bin),
-                            {next_state, ReturnState, Data};
+                            Data;
 
                         not IsError ->
-                            conn_ra:annotate(FPid, #{ts_error_info => E}),
-                            rdp_server:send_raw(Srv, Bin),
-                            {next_state, proxy, Data#?MODULE{logon = true}}
-                    end;
+                            Data#?MODULE{logon = true}
+                    end,
+                    conn_ra:annotate(FPid, #{ts_error_info => E}),
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, ReturnState, Data1};
                 _ ->
                     rdp_server:send_raw(Srv, Bin),
                     {next_state, ReturnState, Data}
