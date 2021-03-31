@@ -39,6 +39,9 @@
 
 -export([register_metrics/0]).
 
+% Keep last N packets to search for disconnect reason
+-define(END_PKT_BUF, 16).
+
 register_metrics() ->
     prometheus_counter:new([
         {name, rdp_backend_connections_total},
@@ -112,7 +115,7 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
     sslsock=none :: none | ssl:ssl_socket(),
     themref=0 :: integer(),
     usref=0 :: integer(),
-    unused,
+    pktq :: queue:queue(binary()) | undefined,
     server :: rdp_server:server() | pid(),
     origcr :: #x224_cr{},
     sharechan :: undefined | integer(),
@@ -146,7 +149,8 @@ init([Srv, L, Address, Port, OrigCr]) ->
             T0 = erlang:system_time(millisecond),
             {ok, initiation, #?MODULE{
                 addr = Address, port = Port, server = Srv, listener = L,
-                sock = Sock, usref = Us, origcr = OrigCr, t0 = T0}};
+                sock = Sock, usref = Us, origcr = OrigCr, t0 = T0,
+                pktq = queue:new()}};
 
         {error, Reason} ->
             case Srv of
@@ -342,35 +346,22 @@ proxy_watch_logon({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock}
 proxy_watch_logon(close, D = #?MODULE{}) ->
     {stop, normal, D}.
 
-proxy({data, Bin}, #?MODULE{server = Srv, sharechan = Chan} = Data) ->
+proxy({data, Bin}, #?MODULE{server = Srv, pktq = undefined} = Data) ->
     rdp_server:send_raw(Srv, Bin),
-    case (catch rdpp:decode_client(Bin)) of
-        {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
-            case (catch rdpp:decode_sharecontrol(RdpData)) of
-                {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
-                    {FPid, _} = Srv,
-                    lager:debug("backend error info: ~p", [E]),
-                    IsError = case E of
-                        {logoff, _} -> false;
-                        {disconnect, _} -> false;
-                        no_error -> false;
-                        _ -> true
-                    end,
-                    if
-                        IsError ->
-                            #?MODULE{addr = Address} = Data,
-                            session_ra:host_error(
-                                iolist_to_binary([Address]), E);
-                        not IsError -> ok
-                    end,
-                    conn_ra:annotate(FPid, #{ts_error_info => E});
-                _ ->
-                    ok
-            end;
-        _ ->
-            ok
-    end,
     {next_state, proxy, Data};
+
+proxy({data, Bin}, #?MODULE{server = Srv, pktq = Q0} = Data0) ->
+    rdp_server:send_raw(Srv, Bin),
+    Q1 = queue:in(Bin, Q0),
+    Q2 = case queue:len(Q1) of
+        N when N > ?END_PKT_BUF ->
+            {{value, _}, QQ} = queue:out(Q1),
+            QQ;
+        _ ->
+            Q1
+    end,
+    Data1 = Data0#?MODULE{pktq = Q2},
+    {next_state, proxy, Data1};
 
 proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
     if SslSock =:= none ->
@@ -484,6 +475,45 @@ handle_info(Msg, State, Data) ->
     lager:info("got ~p", [Msg]),
     {next_state, State, Data}.
 
+check_pktq_errors(#?MODULE{server = Srv, sharechan = Chan, pktq = Q, addr = Address}) ->
+    Results = lists:usort(lists:map(fun (Bin) ->
+        case (catch rdpp:decode_client(Bin)) of
+            {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
+                case (catch rdpp:decode_sharecontrol(RdpData)) of
+                    {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
+                        {FPid, _} = Srv,
+                        lager:debug("backend error info: ~p", [E]),
+                        conn_ra:annotate(FPid, #{ts_error_info => E}),
+                        IsError = case E of
+                            {logoff, _} -> false;
+                            {disconnect, _} -> false;
+                            no_error -> false;
+                            _ -> true
+                        end,
+                        if
+                            IsError ->
+                                session_ra:host_error(
+                                    iolist_to_binary([Address]), E),
+                                error;
+                            not IsError ->
+                                no_error
+                        end;
+                    _ ->
+                        unknown
+                end;
+            _ ->
+                unknown
+        end
+    end, queue:to_list(Q))),
+    case lists:member(error, Results) of
+        true -> error;
+        _ ->
+            case lists:member(no_error, Results) of
+                true -> ok;
+                _ -> unknown
+            end
+    end.
+
 %% @private
 terminate(Reason, proxy_watch_demand, D = #?MODULE{addr = Address}) ->
     lager:debug("backend conn closed without a ts_demand"),
@@ -501,17 +531,25 @@ terminate(Reason, proxy_watch_logon, D = #?MODULE{addr = Address, logon = false,
     end,
     terminate(Reason, other, D);
 terminate(Reason, proxy, D = #?MODULE{addr = Address, logon = false, t0 = T0}) ->
-    lager:debug("backend conn closed without a good logon"),
-    T1 = erlang:system_time(millisecond),
-    Delta = T1 - T0,
-    if
-        (Delta > 3000) andalso (Delta < 300000) ->
-            session_ra:host_error(iolist_to_binary([Address]), no_logon);
-        true ->
-            ok
-    end,
-    session_ra:host_error(iolist_to_binary([Address]), no_logon),
-    terminate(Reason, other, D);
+    case check_pktq_errors(D) of
+        ok ->
+            terminate(Reason, other, D);
+        error ->
+            terminate(Reason, other, D);
+        unknown ->
+            lager:debug("backend conn closed without a good logon"),
+            T1 = erlang:system_time(millisecond),
+            Delta = T1 - T0,
+            if
+                (Delta > 3000) andalso (Delta < 300000) ->
+                    session_ra:host_error(iolist_to_binary([Address]),
+                        no_logon);
+                true ->
+                    ok
+            end,
+            session_ra:host_error(iolist_to_binary([Address]), no_logon),
+            terminate(Reason, other, D)
+    end;
 terminate(_Reason, _State, #?MODULE{sslsock = none, sock = Sock}) ->
     gen_tcp:close(Sock);
 terminate(_Reason, _State, #?MODULE{sslsock = SslSock, sock = Sock}) ->
