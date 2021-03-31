@@ -342,8 +342,34 @@ proxy_watch_logon({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock}
 proxy_watch_logon(close, D = #?MODULE{}) ->
     {stop, normal, D}.
 
-proxy({data, Bin}, #?MODULE{server = Srv} = Data) ->
+proxy({data, Bin}, #?MODULE{server = Srv, sharechan = Chan} = Data) ->
     rdp_server:send_raw(Srv, Bin),
+    case (catch rdpp:decode_client(Bin)) of
+        {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, _} ->
+            case (catch rdpp:decode_sharecontrol(RdpData)) of
+                {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
+                    {FPid, _} = Srv,
+                    lager:debug("backend error info: ~p", [E]),
+                    IsError = case E of
+                        {logoff, _} -> false;
+                        {disconnect, _} -> false;
+                        no_error -> false;
+                        _ -> true
+                    end,
+                    if
+                        IsError ->
+                            #?MODULE{addr = Address} = Data,
+                            session_ra:host_error(
+                                iolist_to_binary([Address]), E);
+                        not IsError -> ok
+                    end,
+                    conn_ra:annotate(FPid, #{ts_error_info => E});
+                _ ->
+                    ok
+            end;
+        _ ->
+            ok
+    end,
     {next_state, proxy, Data};
 
 proxy({frontend_data, Bin}, #?MODULE{sock = Sock, sslsock = SslSock} = Data) ->
