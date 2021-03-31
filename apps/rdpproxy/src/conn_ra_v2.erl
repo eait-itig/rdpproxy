@@ -520,6 +520,14 @@ apply(_Meta, {register, Id, Pid, T, Peer, Session},
             {S2, {ok, Id}, [{monitor, process, Pid}]}
     end;
 
+apply(_Meta, {pid_to_conn_id, _T, Pid}, S0 = #?MODULE{watches = W0}) ->
+    case W0 of
+        #{Pid := Id} ->
+            {S0, {ok, Id}, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
 apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0}) ->
     Id = if
         is_pid(IdOrPid) ->

@@ -121,7 +121,8 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
     origcr :: #x224_cr{},
     sharechan :: undefined | integer(),
     logon = false :: boolean(),
-    t0 :: integer()
+    t0 :: integer(),
+    connid :: undefined | binary()
     }).
 
 %% @private
@@ -192,7 +193,14 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
                         {keyfile, "etc/key.pem"}]), Pkt)
         end,
 
-        {next_state, proxy_intercept, Data#?MODULE{sslsock = SslSock, themref = ThemRef}};
+        Data1 = Data#?MODULE{sslsock = SslSock, themref = ThemRef},
+
+        Data2 = case conn_ra:pid_to_conn_id(P) of
+            {ok, ConnId} -> Data1#?MODULE{connid = ConnId};
+            _ -> Data1
+        end,
+
+        {next_state, proxy_intercept, Data2};
     true ->
         lager:debug("upstream server rejected SSL, dying"),
         gen_tcp:close(Sock),
@@ -483,14 +491,14 @@ handle_info(Msg, State, Data) ->
 check_pkt_errors([], #?MODULE{}) -> [];
 check_pkt_errors([<<>> | Rest], D = #?MODULE{}) ->
     check_pkt_errors(Rest, D);
-check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address, server = Srv}) ->
+check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address}) ->
     case (catch rdpp:decode_client(Bin)) of
         {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, Rem} ->
             case (catch rdpp:decode_sharecontrol(RdpData)) of
                 {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
-                    {FPid, _} = Srv,
+                    #?MODULE{connid = ConnId} = D,
                     lager:debug("backend error info: ~p (~Bb)", [E, byte_size(Bin)]),
-                    conn_ra:annotate(FPid, #{ts_error_info => E}),
+                    conn_ra:annotate(ConnId, #{ts_error_info => E}),
                     IsError = case E of
                         {logoff, _} -> false;
                         {disconnect, _} -> false;
@@ -514,8 +522,8 @@ check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address, se
             end;
         {ok, {mcs_pdu, #mcs_srv_data{channel = OtherChan}}, Rem} ->
             [{other_chan, OtherChan} | check_pkt_errors([Rem | Rest], D)];
-        {ok, _, Rem} ->
-            [unknown | check_pkt_errors([Rem | Rest], D)];
+        {ok, {Type, _}, Rem} ->
+            [Type | check_pkt_errors([Rem | Rest], D)];
         _ ->
             [unknown | check_pkt_errors(Rest, D)]
     end.
