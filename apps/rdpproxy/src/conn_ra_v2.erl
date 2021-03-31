@@ -316,7 +316,15 @@ conn_to_json(C) ->
             };
         _ -> J8
     end,
-    [jsx:encode(J9), $\n].
+    J10 = case C of
+        #{ts_error_info := TEI} ->
+            J9#{
+                <<"backend_error">> => iolist_to_binary(
+                    io_lib:format("~p", [TEI]))
+            };
+        _ -> J9
+    end,
+    [jsx:encode(J10), $\n].
 
 evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
     #{Hour := #{count := 0, conns := ConnKeys}} = H0,
