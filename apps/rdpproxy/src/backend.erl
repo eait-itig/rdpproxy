@@ -492,7 +492,7 @@ check_pkt_errors([], #?MODULE{}) -> [];
 check_pkt_errors([<<>> | Rest], D = #?MODULE{}) ->
     check_pkt_errors(Rest, D);
 check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address}) ->
-    case (catch rdpp:decode_client(Bin)) of
+    case (catch rdpp:decode_connseq(Bin)) of
         {ok, {mcs_pdu, #mcs_srv_data{data = RdpData, channel = Chan}}, Rem} ->
             case (catch rdpp:decode_sharecontrol(RdpData)) of
                 {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
