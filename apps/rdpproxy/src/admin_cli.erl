@@ -609,6 +609,8 @@ conn_list([]) ->
                 Reconn = ""
         end,
         TSess = case Conn of
+            #{ts_error_info := {error, Why}} ->
+                io_lib:format("~p!", [Why]);
             #{ts_session_id := undefined, ts_session_status := _} ->
                 "+X";
             #{ts_session_id := SId, ts_session_status := _} ->

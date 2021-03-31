@@ -248,6 +248,14 @@ proxy_watch_demand({data, Bin}, #?MODULE{server = Srv} = Data0) ->
                     Data1 = Data0#?MODULE{sharechan = Chan},
                     rdp_server:send_raw(Srv, Bin),
                     {next_state, proxy_watch_logon, Data1};
+                {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
+                    {FPid, _} = Srv,
+                    lager:debug("backend error: ~p", [E]),
+                    #?MODULE{addr = Address} = Data0,
+                    session_ra:host_error(iolist_to_binary([Address]), E),
+                    conn_ra:annotate(FPid, #{ts_error_info => E}),
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, proxy_watch_demand, Data0};
                 _ ->
                     rdp_server:send_raw(Srv, Bin),
                     {next_state, proxy_watch_demand, Data0}
@@ -292,6 +300,14 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan, t0 = T0}
                     conn_ra:annotate(FPid, #{ts_session_id => N}),
                     rdp_server:send_raw(Srv, Bin),
                     {next_state, proxy, Data#?MODULE{logon = true}};
+                {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
+                    {FPid, _} = Srv,
+                    lager:debug("backend error: ~p", [E]),
+                    #?MODULE{addr = Address} = Data,
+                    session_ra:host_error(iolist_to_binary([Address]), E),
+                    conn_ra:annotate(FPid, #{ts_error_info => E}),
+                    rdp_server:send_raw(Srv, Bin),
+                    {next_state, ReturnState, Data};
                 _ ->
                     rdp_server:send_raw(Srv, Bin),
                     {next_state, ReturnState, Data}
