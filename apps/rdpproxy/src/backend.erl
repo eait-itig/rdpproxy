@@ -210,7 +210,13 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
                 session_ra:host_error(iolist_to_binary([Address]), no_ssl)
         end,
         {stop, no_ssl, Data}
-    end.
+    end;
+
+initiation({pdu, #x224_cc{class = 0, dst = Ref} = Pkt}, #?MODULE{} = Data) ->
+    lager:debug("upstream sent x224 cc with dst = ~p, changing our ref",
+        [Ref]),
+    Data1 = Data#?MODULE{usref = Ref},
+    initiation({pdu, Pkt}, Data1).
 
 proxy_intercept({data, Bin}, #?MODULE{server = Srv, origcr = OrigCr} = Data) ->
     case rdpp:decode_connseq(Bin) of
