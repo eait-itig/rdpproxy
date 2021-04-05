@@ -544,9 +544,9 @@ conn_list(["-j"]) ->
 conn_list([]) ->
     {ok, Conns} = conn_ra:get_all_open(),
     Fmt = "~16.. s  ~24.. s  ~10.. s  ~16.. s  ~19.. s  ~10.. s  ~16.. s  ~15.. s  "
-        "~10.. s  ~8.. s  ~14.. s  ~11.. s  ~9.. s  ~8.. s\n",
+        "~10.. s  ~8.. s  ~14.. s  ~11.. s  ~6.. s  ~5.. s  ~6.. s\n",
     io:format(Fmt, ["ID", "PEER", "NODE", "PID", "STARTED", "USER", "HANDLE",
-        "BACKEND", "POOL", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS"]),
+        "BACKEND", "POOL", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS", "END"]),
     ConnsSorted = lists:sort(fun (CA, CB) ->
         #{started := StartedA, id := IdA} = CA,
         #{started := StartedB, id := IdB} = CB,
@@ -594,13 +594,13 @@ conn_list([]) ->
                 TsInfo = maps:get(ts_info, Conn, #ts_info{}),
                 case TsInfo#ts_info.reconnect_cookie of
                     <<>> ->
-                        Reconn = "no";
+                        Reconn = "-";
                     undefined ->
-                        Reconn = "no";
+                        Reconn = "-";
                     _ when (TsudCluster#tsud_cluster.sessionid =:= none) ->
                         Reconn = "yes";
                     _ ->
-                        Reconn = "yes w/sid"
+                        Reconn = "+yes"
                 end;
             _ ->
                 ProtVer = "",
@@ -609,24 +609,42 @@ conn_list([]) ->
                 Reconn = ""
         end,
         TSess = case Conn of
-            #{ts_error_info := {error, Why}} ->
-                io_lib:format("~p!", [Why]);
             #{ts_session_id := SId, ts_session_status := _} when is_integer(SId) ->
                 io_lib:format("+~B", [SId]);
             #{ts_session_id := SId} when is_integer(SId) ->
                 io_lib:format("~B", [SId]);
-            #{ts_error_info := {logoff, _}} ->
-                "?X";
-            #{ts_error_info := {disconnect, _}} ->
-                "?X";
-            #{ts_error_info := no_error} ->
-                "?X";
-            #{ts_session_id := undefined} ->
-                "X";
-            #{ts_session_id := undefined, ts_session_status := _} ->
-                "+X";
             _ ->
-                ""
+                "-"
+        end,
+        End = case Conn of
+            #{ts_error_info := {error, driver_crash}} ->
+                "ERR:dr";
+            #{ts_error_info := {error, driver_iface}} ->
+                "ERR:dr";
+            #{ts_error_info := {error, driver_timeout}} ->
+                "ERR:dr";
+            #{ts_error_info := {error, _Why}} ->
+                "ERR";
+            #{ts_error_info := {denied, _Why}} ->
+                "DENY";
+            #{ts_error_info := {logoff, normal}} ->
+                "L:ok";
+            #{ts_error_info := {disconnect, normal}} ->
+                "D:ok";
+            #{ts_error_info := {logoff, admin}} ->
+                "L:adm";
+            #{ts_error_info := {disconnect, admin}} ->
+                "D:adm";
+            #{ts_error_info := {logoff, user_on_server}} ->
+                "L:usr";
+            #{ts_error_info := {disconnect, user_on_server}} ->
+                "D:usr";
+            #{ts_error_info := {disconnect, other_conn}} ->
+                "D:repl";
+            #{ts_error_info := {logoff, Why}} when (Why =:= idle) or (Why =:= timelimit) ->
+                "L:time";
+            _ ->
+                "-"
         end,
         Fields = [
             Id,
@@ -642,7 +660,8 @@ conn_list([]) ->
             Client,
             Res,
             Reconn,
-            TSess
+            TSess,
+            End
         ],
         io:format(Fmt, Fields)
     end, ConnsSorted),
@@ -736,9 +755,9 @@ conn_user([User]) ->
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
     Fmt = "~12.. s  ~16.. s  ~14.. s  ~24.. s  ~19.. s  ~10.. s  ~10.. s  ~15.. s  "
-        "~8.. s  ~14.. s  ~11.. s  ~9.. s  ~8.. s\n",
+        "~8.. s  ~14.. s  ~11.. s  ~6.. s  ~5.. s  ~6.. s\n",
     io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
-        "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS"]),
+        "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS", "END"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, frontend_pid := Pid, started := Started,
           peer := {Ip, Port}, session := #{user := U, ip := Backend}} = Conn,
@@ -766,13 +785,13 @@ conn_user([User]) ->
                 TsInfo = maps:get(ts_info, Conn, #ts_info{}),
                 case TsInfo#ts_info.reconnect_cookie of
                     <<>> ->
-                        Reconn = "no";
+                        Reconn = "-";
                     undefined ->
-                        Reconn = "no";
+                        Reconn = "-";
                     _ when (TsudCluster#tsud_cluster.sessionid =:= none) ->
                         Reconn = "yes";
                     _ ->
-                        Reconn = "yes w/sid"
+                        Reconn = "+yes"
                 end;
             _ ->
                 ProtVer = "",
@@ -782,27 +801,45 @@ conn_user([User]) ->
         end,
         Duration = case Conn of
             #{stopped := Stopped} -> format_deltatime(Stopped - Started, false);
-            _ -> ""
+            _ -> "-"
         end,
         TSess = case Conn of
-            #{ts_error_info := {error, Why}} ->
-                io_lib:format("~p!", [Why]);
             #{ts_session_id := SId, ts_session_status := _} when is_integer(SId) ->
                 io_lib:format("+~B", [SId]);
             #{ts_session_id := SId} when is_integer(SId) ->
                 io_lib:format("~B", [SId]);
-            #{ts_error_info := {logoff, _}} ->
-                "?X";
-            #{ts_error_info := {disconnect, _}} ->
-                "?X";
-            #{ts_error_info := no_error} ->
-                "?X";
-            #{ts_session_id := undefined} ->
-                "X";
-            #{ts_session_id := undefined, ts_session_status := _} ->
-                "+X";
             _ ->
-                ""
+                "-"
+        end,
+        End = case Conn of
+            #{ts_error_info := {error, driver_crash}} ->
+                "ERR:dr";
+            #{ts_error_info := {error, driver_iface}} ->
+                "ERR:dr";
+            #{ts_error_info := {error, driver_timeout}} ->
+                "ERR:dr";
+            #{ts_error_info := {error, _Why}} ->
+                "ERR";
+            #{ts_error_info := {denied, _Why}} ->
+                "DENY";
+            #{ts_error_info := {logoff, normal}} ->
+                "L:ok";
+            #{ts_error_info := {disconnect, normal}} ->
+                "D:ok";
+            #{ts_error_info := {logoff, admin}} ->
+                "L:adm";
+            #{ts_error_info := {disconnect, admin}} ->
+                "D:adm";
+            #{ts_error_info := {logoff, user_on_server}} ->
+                "L:usr";
+            #{ts_error_info := {disconnect, user_on_server}} ->
+                "D:usr";
+            #{ts_error_info := {disconnect, other_conn}} ->
+                "D:repl";
+            #{ts_error_info := {logoff, Why}} when (Why =:= idle) or (Why =:= timelimit) ->
+                "L:time";
+            _ ->
+                "-"
         end,
         Fields = [
             Id,
@@ -817,7 +854,8 @@ conn_user([User]) ->
             RemHost,
             Res,
             Reconn,
-            TSess
+            TSess,
+            End
         ],
         io:format(Fmt, Fields)
     end, Conns).
