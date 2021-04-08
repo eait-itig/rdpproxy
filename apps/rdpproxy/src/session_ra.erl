@@ -383,7 +383,7 @@ decrypt(Crypted, MacExtraData) ->
 -type acl_verb() :: allow | require | deny.
 -type weekday() :: monday | tuesday | wednesday | thursday | friday | saturday | sunday | integer().
 -type time_expr() ::
-    {union, [time_expr()]} | {intersection, [time_expr()]} |
+    {union, [time_expr()]} | {intersection, [time_expr()]} | {inverse, time_expr()} |
     {day, weekday()} | {days, weekday(), weekday()} |
     {day_of_month, integer()} | {days_of_month, integer(), integer()} |
     {month, integer()} | {months, integer(), integer()} |
@@ -407,6 +407,11 @@ day_to_int(sunday) -> 7;
 day_to_int(I) when is_integer(I) -> I.
 
 -spec match_timeexp(time(), time_expr()) -> match | no_match.
+match_timeexp(T, {inverse, Kid}) ->
+    case match_timeexp(T, Kid) of
+        match -> no_match;
+        no_match -> match
+    end;
 match_timeexp(_T, {union, []}) -> no_match;
 match_timeexp(T, {union, [Kid | Rest]}) ->
     case match_timeexp(T, Kid) of
