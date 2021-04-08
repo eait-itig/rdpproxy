@@ -47,7 +47,7 @@
 -export([get_all_hosts/0, get_user_handles/1, get_host/1, get_all_handles/0]).
 -export([host_error/2]).
 -export([annotate_prefs/4, sort_prefs/4, pref_compare/3, sort_prefs_raw/4]).
--export([process_rules/2]).
+-export([process_rules/3, match_timeexp/2]).
 -export([register_metrics/0]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
@@ -381,31 +381,110 @@ decrypt(Crypted, MacExtraData) ->
 -type sessid() :: integer().
 
 -type acl_verb() :: allow | require | deny.
+-type weekday() :: monday | tuesday | wednesday | thursday | friday | saturday | sunday | integer().
+-type time_expr() ::
+    {union, [time_expr()]} | {intersection, [time_expr()]} |
+    {day, weekday()} | {days, weekday(), weekday()} |
+    {day_of_month, integer()} | {days_of_month, integer(), integer()} |
+    {month, integer()} | {months, integer(), integer()} |
+    {hours, integer(), integer()}.
 -type acl_entry() ::
     {acl_verb(), everybody} |
     {acl_verb(), user, binary()} |
-    {acl_verb(), group, #sid{}}.
+    {acl_verb(), group, #sid{}} |
+    {acl_verb(), everybody, time_expr()} |
+    {acl_verb(), user, binary(), time_expr()} |
+    {acl_verb(), group, #sid{}, time_expr()}.
 
--spec match_rule(user_info(), acl_entry()) -> match | no_match.
-match_rule(_UInfo, {_, everybody}) -> match;
-match_rule(#{user := U}, {_, user, U}) -> match;
-match_rule(#{user := _U}, {_, user, _}) -> no_match;
-match_rule(#{groups := Gs}, {_, group, G}) ->
+-spec day_to_int(weekday()) -> integer().
+day_to_int(monday) -> 1;
+day_to_int(tuesday) -> 2;
+day_to_int(wednesday) -> 3;
+day_to_int(thursday) -> 4;
+day_to_int(friday) -> 5;
+day_to_int(saturday) -> 6;
+day_to_int(sunday) -> 7;
+day_to_int(I) when is_integer(I) -> I.
+
+-spec match_timeexp(time(), time_expr()) -> match | no_match.
+match_timeexp(_T, {union, []}) -> no_match;
+match_timeexp(T, {union, [Kid | Rest]}) ->
+    case match_timeexp(T, Kid) of
+        match -> match;
+        no_match -> match_timeexp(T, {union, Rest})
+    end;
+match_timeexp(_T, {intersection, []}) -> match;
+match_timeexp(T, {intersection, [Kid | Rest]}) ->
+    case match_timeexp(T, Kid) of
+        match -> match_timeexp(T, {intersection, Rest});
+        no_match -> no_match
+    end;
+match_timeexp(T, {day, Day}) ->
+    match_timeexp(T, {days, Day, Day});
+match_timeexp(T, {days, MinDay, MaxDay}) ->
+    {Date, _Time} = calendar:system_time_to_local_time(T, second),
+    DayOfWeek = calendar:day_of_the_week(Date),
+    MinDayInt = day_to_int(MinDay),
+    MaxDayInt = day_to_int(MaxDay),
+    if
+        (DayOfWeek >= MinDayInt) and (DayOfWeek =< MaxDayInt) -> match;
+        true -> no_match
+    end;
+match_timeexp(T, {day_of_month, Day}) ->
+    match_timeexp(T, {days_of_month, Day, Day});
+match_timeexp(T, {days_of_month, MinDay, MaxDay}) ->
+    {Date, _Time} = calendar:system_time_to_local_time(T, second),
+    {_Year, _Month, DayOfMonth} = Date,
+    if
+        (DayOfMonth >= MinDay) and (DayOfMonth =< MaxDay) -> match;
+        true -> no_match
+    end;
+match_timeexp(T, {month, Month}) ->
+    match_timeexp(T, {months, Month, Month});
+match_timeexp(T, {months, MinMonth, MaxMonth}) ->
+    {Date, _Time} = calendar:system_time_to_local_time(T, second),
+    {_Year, Month, _DayOfMonth} = Date,
+    if
+        (Month >= MinMonth) and (Month < MaxMonth) -> match;
+        true -> no_match
+    end;
+match_timeexp(T, {hours, MinHour, MaxHour}) ->
+    {_Date, Time} = calendar:system_time_to_local_time(T, second),
+    {Hour, _Minute, _Sec} = Time,
+    if
+        (Hour >= MinHour) and (Hour < MaxHour) -> match;
+        true -> no_match
+    end;
+match_timeexp(_T, Exp) ->
+    error({bad_time_exp, Exp}).
+
+-spec match_rule(user_info(), time(), acl_entry()) -> match | no_match.
+match_rule(_UInfo, _T, {_, everybody}) -> match;
+match_rule(_UInfo, T, {_, everybody, TimeExp}) -> match_timeexp(T, TimeExp);
+match_rule(#{user := U}, _T, {_, user, U}) -> match;
+match_rule(#{user := U}, T, {_, user, U, TimeExp}) -> match_timeexp(T, TimeExp);
+match_rule(#{user := _U}, _T, {_, user, _}) -> no_match;
+match_rule(#{groups := Gs}, _T, {_, group, G}) ->
     case lists:member(G, Gs) of
         true -> match;
         _ -> no_match
     end;
-match_rule(_UInfo, {_, group, _}) -> no_match.
+match_rule(#{groups := Gs}, T, {_, group, G, TimeExp}) ->
+    case lists:member(G, Gs) of
+        true -> match_timeexp(T, TimeExp);
+        _ -> no_match
+    end;
+match_rule(_UInfo, _T, {_, group, _}) -> no_match.
 
--spec process_rules(user_info(), [acl_entry()]) -> allow | deny.
-process_rules(_UInfo, []) -> allow;
-process_rules(UInfo, [Rule | Rest]) ->
-    Match = match_rule(UInfo, Rule),
+-spec process_rules(user_info(), time(), [acl_entry()]) -> allow | deny.
+process_rules(_UInfo, _T, []) -> allow;
+process_rules(UInfo, T, [Rule | Rest]) ->
+    Match = match_rule(UInfo, T, Rule),
     case {Match, element(1, Rule)} of
         {match, allow} -> allow;
         {match, deny} -> deny;
         {no_match, require} -> deny;
-        _ -> process_rules(UInfo, Rest)
+        _ -> process_rules(UInfo, T, Rest)
     end.
 
 -type pool_config() :: #{
@@ -647,10 +726,10 @@ apply(_Meta, {get_pool, Pool}, S0 = #?MODULE{pools = P0}) ->
             {S0, {error, not_found}, []}
     end;
 
-apply(_Meta, {get_pools_for, UInfo}, S0 = #?MODULE{pools = P0}) ->
+apply(_Meta, {get_pools_for, UInfo}, S0 = #?MODULE{pools = P0, last_time = T}) ->
     Pools = lists:filter(fun (PD) ->
         #{acl := ACL} = PD,
-        case process_rules(UInfo, ACL) of
+        case process_rules(UInfo, T, ACL) of
             allow -> true;
             deny -> false
         end

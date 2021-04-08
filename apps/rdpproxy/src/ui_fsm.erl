@@ -1069,7 +1069,8 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     ],
     #?MODULE{uinfo = UInfo} = S,
     AdminACL = rdpproxy:config([ui, admin_acl], [{deny, everybody}]),
-    BaseEvents1 = case session_ra:process_rules(UInfo, AdminACL) of
+    Now = erlang:system_time(second),
+    BaseEvents1 = case session_ra:process_rules(UInfo, Now, AdminACL) of
         allow -> BaseEvents0 ++ [
             { [{id, loginlyt}], {add_child,
                                 #widget{id = itiglyt,
@@ -1485,7 +1486,8 @@ choose_pool(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
             Ps
     end,
     NMSAcl = rdpproxy:config([ui, pool_nms_acl], [{deny, everybody}]),
-    Pools1 = case session_ra:process_rules(UInfo, NMSAcl) of
+    Now = erlang:system_time(second),
+    Pools1 = case session_ra:process_rules(UInfo, Now, NMSAcl) of
         allow ->
             [#{id => '_nms_pool', title => <<"NMS">>,
                help_text => <<"Choose from personally assigned\nhosts in NMS.">>}
