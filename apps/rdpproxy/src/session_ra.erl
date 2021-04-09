@@ -384,8 +384,9 @@ decrypt(Crypted, MacExtraData) ->
 -type weekday() :: monday | tuesday | wednesday | thursday | friday | saturday | sunday | integer().
 -type time_expr() ::
     {union, [time_expr()]} | {intersection, [time_expr()]} | {inverse, time_expr()} |
+    {exclusion, time_expr(), time_expr()} |
     {day, weekday()} | {days, weekday(), weekday()} |
-    {date, calendar:date()} |
+    {date, calendar:date()} | {dates, calendar:date(), calendar:date()} |
     {day_of_month, integer()} | {days_of_month, integer(), integer()} |
     {month, integer()} | {months, integer(), integer()} |
     {week_of, calendar:date()} | {weeks_of, calendar:date(), calendar:date()} |
@@ -426,6 +427,15 @@ match_timeexp(T, {intersection, [Kid | Rest]}) ->
         match -> match_timeexp(T, {intersection, Rest});
         no_match -> no_match
     end;
+match_timeexp(T, {exclusion, Kid, NotKid}) ->
+    case match_timeexp(T, Kid) of
+        match ->
+            case match_timeexp(T, NotKid) of
+                match -> no_match;
+                no_match -> match
+            end;
+        no_match -> no_match
+    end;
 match_timeexp(T, {day, Day}) ->
     match_timeexp(T, {days, Day, Day});
 match_timeexp(T, {days, MinDay, MaxDay}) ->
@@ -441,6 +451,12 @@ match_timeexp(T, {date, TestDate}) ->
     {Date, _Time} = calendar:system_time_to_local_time(T, second),
     if
         (Date =:= TestDate) -> match;
+        true -> no_match
+    end;
+match_timeexp(T, {dates, MinDate, MaxDate}) ->
+    {Date, _Time} = calendar:system_time_to_local_time(T, second),
+    if
+        (Date >= MinDate) and (Date =< MaxDate) -> match;
         true -> no_match
     end;
 match_timeexp(T, {day_of_month, Day}) ->
