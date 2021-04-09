@@ -387,6 +387,7 @@ decrypt(Crypted, MacExtraData) ->
     {day, weekday()} | {days, weekday(), weekday()} |
     {day_of_month, integer()} | {days_of_month, integer(), integer()} |
     {month, integer()} | {months, integer(), integer()} |
+    {week_of, calendar:date()} | {weeks_of, calendar:date(), calendar:date()} |
     {hours, integer(), integer()}.
 -type acl_entry() ::
     {acl_verb(), everybody} |
@@ -445,12 +446,23 @@ match_timeexp(T, {days_of_month, MinDay, MaxDay}) ->
         true -> no_match
     end;
 match_timeexp(T, {month, Month}) ->
-    match_timeexp(T, {months, Month, Month});
+    match_timeexp(T, {months, Month, Month + 1});
 match_timeexp(T, {months, MinMonth, MaxMonth}) ->
     {Date, _Time} = calendar:system_time_to_local_time(T, second),
     {_Year, Month, _DayOfMonth} = Date,
     if
         (Month >= MinMonth) and (Month < MaxMonth) -> match;
+        true -> no_match
+    end;
+match_timeexp(T, {week_of, Date}) ->
+    match_timeexp(T, {weeks_of, Date, Date});
+match_timeexp(T, {weeks_of, MinDate, MaxDate}) ->
+    {Date, _Time} = calendar:system_time_to_local_time(T, second),
+    Week = calendar:iso_week_number(Date),
+    MinWeek = calendar:iso_week_number(MinDate),
+    MaxWeek = calendar:iso_week_number(MaxDate),
+    if
+        (Week >= MinWeek) and (Week =< MaxWeek) -> match;
         true -> no_match
     end;
 match_timeexp(T, {hours, MinHour, MaxHour}) ->
