@@ -385,6 +385,7 @@ decrypt(Crypted, MacExtraData) ->
 -type time_expr() ::
     {union, [time_expr()]} | {intersection, [time_expr()]} | {inverse, time_expr()} |
     {day, weekday()} | {days, weekday(), weekday()} |
+    {date, calendar:date()} |
     {day_of_month, integer()} | {days_of_month, integer(), integer()} |
     {month, integer()} | {months, integer(), integer()} |
     {week_of, calendar:date()} | {weeks_of, calendar:date(), calendar:date()} |
@@ -434,6 +435,12 @@ match_timeexp(T, {days, MinDay, MaxDay}) ->
     MaxDayInt = day_to_int(MaxDay),
     if
         (DayOfWeek >= MinDayInt) and (DayOfWeek =< MaxDayInt) -> match;
+        true -> no_match
+    end;
+match_timeexp(T, {date, TestDate}) ->
+    {Date, _Time} = calendar:system_time_to_local_time(T, second),
+    if
+        (Date =:= TestDate) -> match;
         true -> no_match
     end;
 match_timeexp(T, {day_of_month, Day}) ->
