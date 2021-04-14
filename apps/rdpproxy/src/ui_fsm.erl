@@ -1198,6 +1198,7 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
 
     Events1 = lists:foldl(fun (Dev, Acc) ->
         #{hostname := Hostname, ip := Ip, desc := DescText} = Dev,
+        [Hostname1 | _] = binary:split(Hostname, [<<".">>]),
         Acc ++ [
                 { [{id, loginlyt}],     {add_child,
                                          #widget{id = {devlyt, Ip},
@@ -1215,7 +1216,7 @@ choose(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
                                           #widget{id = {devlbl, Ip},
                                                   mod = ui_label,
                                                   size = {220.0, 19.0}}} },
-                { [{id, {devlbl, Ip}}],  {init, left, Hostname} },
+                { [{id, {devlbl, Ip}}],  {init, left, Hostname1} },
                 { [{id, {devlbl, Ip}}],  {set_bgcolor, BgColour} },
                 { [{id, {devlbllyt, Ip}}],  {add_child,
                                           #widget{id = {devtlbl, Ip},
@@ -1426,6 +1427,7 @@ choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0, ro
         ip => Ip,
         port => 3389,
         hostname => Hostname}),
+    _ = session_ra:update_host(#{ip => Ip, hostname => Hostname}),
     lager:debug("user chose host ~p/~p", [Hostname, Ip]),
     case S of
         #?MODULE{nms = undefined} -> ok;

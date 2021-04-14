@@ -30,6 +30,7 @@
 -module(backend).
 -behaviour(gen_fsm).
 
+-include_lib("public_key/include/public_key.hrl").
 -include_lib("rdp_proto/include/rdp_server.hrl").
 
 -export([start_link/4, probe/2]).
@@ -179,9 +180,23 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
 
     if HasSsl ->
         inet:setopts(Sock, [{packet, raw}]),
-        {ok, SslSock} = ssl:connect(Sock,
-            rdpproxy:config([backend, ssl_options], [{verify, verify_none}])),
+        Opts0 = rdpproxy:config([backend, ssl_options], [{verify, verify_none}]),
+        Opts1 = case session_ra:get_host(iolist_to_binary([Address])) of
+            {ok, #{hostname := Name}} ->
+                [{server_name_indication,
+                  binary_to_list(iolist_to_binary([Name]))} | Opts0];
+            _ ->
+                Opts0
+        end,
+        lager:debug("ssl opts = ~p", [Opts1]),
+        {ok, SslSock} = ssl:connect(Sock, Opts1),
         ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
+
+        {ok, Cert} = ssl:peercert(SslSock),
+        #'OTPCertificate'{
+            tbsCertificate = #'OTPTBSCertificate'{subject = Subj, issuer = Issuer}
+        } = public_key:pkix_decode_cert(Cert, otp),
+        lager:debug("~p: cert subject = ~p, issuer = ~p", [Address, Subj, Issuer]),
 
         case Srv of
             P when is_pid(P) ->
