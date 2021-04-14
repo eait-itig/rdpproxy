@@ -123,7 +123,7 @@ send_orders(#?MODULE{frontend = F, format = Fmt}, Orders) ->
         rdp_server:send_update(F, U)
     end, Updates).
 
-do_ping_annotate(#?MODULE{frontend = F = {FPid, _}, sess = Sess}) ->
+do_ping_annotate(#?MODULE{frontend = F = {FPid, _}}) ->
     AvgPing = case rdp_server:get_pings(F) of
         {ok, Pings} when length(Pings) > 0 ->
             {Sum, Count} = lists:foldl(fun (P, {Su, C}) -> {Su + P, C + 1} end,
@@ -132,15 +132,16 @@ do_ping_annotate(#?MODULE{frontend = F = {FPid, _}, sess = Sess}) ->
         _ ->
             unknown
     end,
-    case {AvgPing, Sess} of
-        {unknown, _} -> ok;
-        {_, #{user := U}} ->
+    case AvgPing of
+        unknown -> ok;
+        _ ->
             {PeerIp, _PeerPort} = rdp_server:get_peer(F),
-            {A,B,C,D} = PeerIp,
+            {A,B,_C,_D} = PeerIp,
             PeerIpStr = iolist_to_binary([inet:ntoa({A,B,0,0}), "/16"]),
             prometheus_summary:observe(rdp_connection_ping_milliseconds,
-                [PeerIpStr], AvgPing);
-        _ -> ok
+                [PeerIpStr], AvgPing),
+            prometheus_summary:observe(rdp_connection_ping_milliseconds,
+                [<<"0.0.0.0/0">>], AvgPing)
     end,
     conn_ra:annotate(FPid, #{avg_ping => AvgPing}).
 
