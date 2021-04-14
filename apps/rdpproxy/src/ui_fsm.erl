@@ -54,7 +54,7 @@ register_metrics() ->
         {help, "Count of RDP connections by OS and build number"}]),
     prometheus_summary:new([
         {name, rdp_connection_ping_milliseconds},
-        {labels, [user, peer]},
+        {labels, [peer]},
         {duration_unit, false},
         {help, "RTT latency measurements"}]),
     prometheus_summary:new([
@@ -136,9 +136,10 @@ do_ping_annotate(#?MODULE{frontend = F = {FPid, _}, sess = Sess}) ->
         {unknown, _} -> ok;
         {_, #{user := U}} ->
             {PeerIp, _PeerPort} = rdp_server:get_peer(F),
-            PeerIpStr = iolist_to_binary(inet:ntoa(PeerIp)),
+            {A,B,C,D} = PeerIp,
+            PeerIpStr = iolist_to_binary([inet:ntoa({A,B,0,0}), "/16"]),
             prometheus_summary:observe(rdp_connection_ping_milliseconds,
-                [U, PeerIpStr], AvgPing);
+                [PeerIpStr], AvgPing);
         _ -> ok
     end,
     conn_ra:annotate(FPid, #{avg_ping => AvgPing}).
