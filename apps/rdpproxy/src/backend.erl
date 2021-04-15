@@ -232,7 +232,7 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
                 {next_state, proxy_intercept, Data2};
 
             {error, {tls_alert, Why = {Atom, _}}} when
-                        (Atom =:= unknown_ca) or (Atom =:= bad_certificate) orddict
+                        (Atom =:= unknown_ca) or (Atom =:= bad_certificate) or
                         (Atom =:= unsupported_certificate) ->
                 lager:debug("bad TLS certificate: ~p", [Why]),
                 gen_tcp:close(Sock),
