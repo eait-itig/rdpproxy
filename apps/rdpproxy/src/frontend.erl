@@ -200,10 +200,10 @@ handle_raw_data(Bin, _Srv,
                     lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCore1)]),
                     Tsuds2 = lists:keyreplace(tsud_core, 1, Tsuds1, TsudCore1),
 
-                    TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
+                    TsudsBin1 = iolist_to_binary(lists:map(fun(Tsud) ->
                         {ok, TsudBin} = tsud:encode(Tsud),
-                        <<SoFar/binary, TsudBin/binary>>
-                    end, <<>>, Tsuds2),
+                        TsudBin
+                    end, Tsuds2)),
                     {ok, OutCiData} = mcsgcc:encode_ci(McsCi#mcs_ci{data = TsudsBin1}),
                     {ok, OutDtData} = x224:encode(#x224_dt{data = OutCiData}),
                     {ok, OutPkt} = tpkt:encode(OutDtData),
