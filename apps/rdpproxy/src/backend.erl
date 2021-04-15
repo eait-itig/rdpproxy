@@ -182,6 +182,17 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
         inet:setopts(Sock, [{packet, raw}]),
         Opts0 = rdpproxy:config([backend, ssl_options], [{verify, verify_none}]),
         Opts1 = case session_ra:get_host(iolist_to_binary([Address])) of
+            {ok, #{cert_verify := default, hostname := Name}} ->
+                [{server_name_indication,
+                  binary_to_list(iolist_to_binary([Name]))} | Opts0];
+            {ok, #{cert_verify := verify_peer, hostname := Name}} ->
+                [{server_name_indication,
+                  binary_to_list(iolist_to_binary([Name]))},
+                  {verify, verify_peer} |
+                  lists:keydelete(verify, 1, Opts0)];
+            {ok, #{cert_verify := verify_none}} ->
+                [{verify, verify_none} |
+                  lists:keydelete(verify, 1, Opts0)];
             {ok, #{hostname := Name}} ->
                 [{server_name_indication,
                   binary_to_list(iolist_to_binary([Name]))} | Opts0];

@@ -362,11 +362,15 @@ host_get([Ip]) ->
     IpBin = unicode:characters_to_binary(Ip, latin1),
     case session_ra:get_host(IpBin) of
         {ok, Host} ->
-            #{hostname := Hostname, enabled := Ena, image := Img,
+            #{hostname := Hostname, enabled := Ena, image := Img, pool := Pool,
               role := Role, last_report := LastRep, handles := Hdls,
               report_state := {RepState, RepChanged}} = Host,
             #{error_history := EHist, alloc_history := AHist,
               session_history := SHist} = Host,
+            CertVerify = case Host of
+                #{cert_verify := Override} -> io_lib:format("~p", [Override]);
+                _ -> "default"
+            end,
             LastRepTxt = case LastRep of
                 none -> "-";
                 _ ->
@@ -382,11 +386,13 @@ host_get([Ip]) ->
                 [RepState, format_reltime(RepChanged)]),
             io:format("IP            ~s\n", [Ip]),
             io:format("HOSTNAME      ~s\n", [Hostname]),
+            io:format("POOL          ~s\n", [Pool]),
             io:format("ENABLED       ~p\n", [Ena]),
             io:format("IMAGE         ~s\n", [Img]),
             io:format("ROLE          ~s\n", [Role]),
             io:format("LAST REPORT   ~s\n", [LastRepTxt]),
             io:format("REPORT STATE  ~s\n", [RepStateTxt]),
+            io:format("CERT VERIFY   ~s\n", [CertVerify]),
             io:format("\n"),
             Fmt = "~17.. s  ~16.. s  ~10.. s  ~20.. s  ~20.. s  ~20.. s  ~20.. s\n",
             io:format(Fmt, ["HANDLE", "USER", "STATE", "START", "MIN", "EXPIRY", "PID"]),
@@ -415,8 +421,7 @@ host_get([Ip]) ->
             end, queue:to_list(AHist)),
             io:format("\nRECENT ERRORS\n"),
             lists:foreach(fun (#{time := ET, error := Err}) ->
-                io:format(" * ~s:\n", [format_reltime(ET)]),
-                io:format("    ~p\n", [Err])
+                io:format(" * ~s:  ~p\n", [format_reltime(ET), Err])
             end, queue:to_list(EHist)),
             io:format("\nREPORTED SESSIONS\n"),
             lists:foreach(fun (#{time := ST, user := U, type := T}) ->

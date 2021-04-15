@@ -954,7 +954,8 @@ apply(_Meta, {create_host, T, Map}, S0 = #?MODULE{meta = M0, pools = P0}) ->
                         last_report => none,
                         image => maps:get(image, Map, none),
                         role => maps:get(role, Map, none),
-                        hypervisor => maps:get(hypervisor, Map, unknown)
+                        hypervisor => maps:get(hypervisor, Map, unknown),
+                        cert_verify => default
                     },
                     M1 = M0#{Ip => HM0},
                     S1 = S0#?MODULE{meta = M1},
@@ -968,19 +969,18 @@ apply(_Meta, {update_host, T, CM}, S0 = #?MODULE{meta = M0}) when is_map(CM) ->
     #{ip := Ip} = CM,
     case M0 of
         #{Ip := HM0} ->
-            HM1 = maps:map(fun (K, V0) ->
-                case {K, CM} of
-                    {hostname, #{K := V1}} when is_binary(V1) -> V1;
-                    {port, #{K := V1}} when is_integer(V1) -> V1;
-                    {pool, #{K := V1}} when is_atom(V1) -> V1;
-                    {idle_from, #{K := V1}} when is_integer(V1) -> V1;
-                    {image, #{K := V1}} when is_binary(V1) -> V1;
-                    {role, #{K := V1}} when is_binary(V1) -> V1;
-                    {hypervisor, #{K := V1}} when is_binary(V1) -> V1;
-                    {desc, #{K := V1}} when is_binary(V1) -> V1;
-                    _ -> V0
-                end
-            end, HM0),
+            HM1 = maps:fold(fun
+                (K = hostname, V, Acc) when is_binary(V) -> Acc#{K => V};
+                (K = port, V, Acc) when is_integer(V) -> Acc#{K => V};
+                (K = pool, V, Acc) when is_atom(V) -> Acc#{K => V};
+                (K = idle_from, V, Acc) when is_integer(V) -> Acc#{K => V};
+                (K = image, V, Acc) when is_binary(V) -> Acc#{K => V};
+                (K = role, V, Acc) when is_binary(V) -> Acc#{K => V};
+                (K = hypervisor, V, Acc) when is_binary(V) -> Acc#{K => V};
+                (K = desc, V, Acc) when is_binary(V) -> Acc#{K => V};
+                (K = cert_verify, V, Acc) when is_atom(V) -> Acc#{K => V};
+                (_, _, Acc) -> Acc
+            end, HM0, CM),
             HM2 = HM1#{last_update => T},
             M1 = M0#{Ip => HM2},
             S1 = S0#?MODULE{meta = M1},
