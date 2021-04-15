@@ -93,11 +93,11 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
                 rdp_backend_probe_duration_milliseconds, [Peer], Delta),
             gen_fsm:send_event(Pid, close),
             probe_rx(Pid, Peer, T0, MonRef, ok);
-        {'DOWN', MonRef, process, Pid, no_ssl} ->
+        {'DOWN', MonRef, process, Pid, E} when (E =:= no_ssl) or (E =:= bad_cert) ->
             prometheus_counter:inc(rdp_backend_probe_errors_per_backend_total,
                 [Peer]),
             prometheus_counter:inc(rdp_backend_probe_errors_total),
-            {error, no_ssl};
+            {error, E};
         {'DOWN', MonRef, process, Pid, Reason} ->
             prometheus_counter:inc(rdp_backend_probe_errors_per_backend_total,
                 [Peer]),
@@ -189,33 +189,72 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
                 Opts0
         end,
         lager:debug("ssl opts = ~p", [Opts1]),
-        {ok, SslSock} = ssl:connect(Sock, Opts1),
-        ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
+        case ssl:connect(Sock, Opts1) of
+            {ok, SslSock} ->
+                ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
-        {ok, Cert} = ssl:peercert(SslSock),
-        #'OTPCertificate'{
-            tbsCertificate = #'OTPTBSCertificate'{subject = Subj, issuer = Issuer}
-        } = public_key:pkix_decode_cert(Cert, otp),
-        lager:debug("~p: cert subject = ~p, issuer = ~p", [Address, Subj, Issuer]),
+                {ok, Cert} = ssl:peercert(SslSock),
+                #'OTPCertificate'{
+                    tbsCertificate = #'OTPTBSCertificate'{
+                        subject = Subj, issuer = Issuer}
+                } = public_key:pkix_decode_cert(Cert, otp),
+                lager:debug("~p: cert subject = ~p, issuer = ~p",
+                    [Address, Subj, Issuer]),
 
-        case Srv of
-            P when is_pid(P) ->
-                P ! {backend_ready, self()};
-            {P,_} when is_pid(P) ->
-                rdp_server:start_tls(Srv,
-                    rdpproxy:config([frontend, L, ssl_options], [
-                        {certfile, "etc/cert.pem"},
-                        {keyfile, "etc/key.pem"}]), Pkt)
-        end,
+                case Srv of
+                    P when is_pid(P) ->
+                        P ! {backend_ready, self()};
+                    {P,_} when is_pid(P) ->
+                        rdp_server:start_tls(Srv,
+                            rdpproxy:config([frontend, L, ssl_options], [
+                                {certfile, "etc/cert.pem"},
+                                {keyfile, "etc/key.pem"}]), Pkt)
+                end,
 
-        Data1 = Data#?MODULE{sslsock = SslSock, themref = ThemRef},
+                Data1 = Data#?MODULE{sslsock = SslSock, themref = ThemRef},
 
-        Data2 = case conn_ra:pid_to_conn_id(P) of
-            {ok, ConnId} -> Data1#?MODULE{connid = ConnId};
-            _ -> Data1
-        end,
+                Data2 = case conn_ra:pid_to_conn_id(P) of
+                    {ok, ConnId} -> Data1#?MODULE{connid = ConnId};
+                    _ -> Data1
+                end,
 
-        {next_state, proxy_intercept, Data2};
+                {next_state, proxy_intercept, Data2};
+
+            {error, {tls_alert, {bad_certificate, Why}}} ->
+                lager:debug("bad TLS certificate: ~p", [Why]),
+                gen_tcp:close(Sock),
+                case Srv of
+                    P when is_pid(P) -> ok;
+                    {P, _} when is_pid(P) ->
+                        session_ra:host_error(iolist_to_binary([Address]), bad_cert)
+                end,
+                {stop, bad_cert, Data};
+
+            {error, {tls_alert, {handshake_failure, Why}}} ->
+                lager:debug("tls handshake failure: ~p", [Why]),
+                ErrCode = case string:find(Why, "bad_cert") of
+                    nomatch -> tls_handshake_error;
+                    _ -> bad_cert
+                end,
+                gen_tcp:close(Sock),
+                case Srv of
+                    P when is_pid(P) -> ok;
+                    {P, _} when is_pid(P) ->
+                        session_ra:host_error(iolist_to_binary([Address]), ErrCode)
+                end,
+                {stop, ErrCode, Data};
+
+            {error, Err} ->
+                lager:debug("tls connect failure: ~p", [Err]),
+                gen_tcp:close(Sock),
+                case Srv of
+                    P when is_pid(P) -> ok;
+                    {P, _} when is_pid(P) ->
+                        session_ra:host_error(iolist_to_binary([Address]), tls_error)
+                end,
+                {stop, tls_error, Data}
+        end;
+
     true ->
         lager:debug("upstream server rejected SSL, dying"),
         gen_tcp:close(Sock),

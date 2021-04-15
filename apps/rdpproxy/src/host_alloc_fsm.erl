@@ -86,6 +86,9 @@ probe(timeout, S = #?MODULE{sess = Sess, hdl = Hdl, retries = R0, errs = E0}) ->
         {error, no_ssl} ->
             S#?MODULE.from ! {alloc_persistent_error, self(), no_ssl},
             {error, 2000, no_ssl};
+        {error, bad_cert} ->
+            S#?MODULE.from ! {alloc_persistent_error, self(), bad_cert},
+            {error, 2000, bad_cert};
         {error, econnrefused} ->
             T = if
                 (E1 > 10) -> 10000;

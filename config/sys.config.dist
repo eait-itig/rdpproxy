@@ -104,6 +104,7 @@
             {err_ssl, <<"Host has RDP TLS disabled, contact %HELPDESK%">>},
             {err_unreach, <<"Host appears to be off, trying to wake it up...">>},
             {err_refused, <<"Host not listening for RDP, contact %HELPDESK%">>},
+            {err_cert, <<"Host has an invalid certificate, contact %HELPDESK%">>},
 
             %%
             %% Helpdesk email, used in some error messages
