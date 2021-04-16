@@ -1668,7 +1668,8 @@ annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H, pools = P})
 
         RolePrio = case RolePrioMap of
             #{Role := RPN} -> RPN;
-            #{default := RPN} -> RPN
+            #{default := RPN} -> RPN;
+            _ -> 0
         end,
 
         #{error_history := EHist, alloc_history := AHist,
