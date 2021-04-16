@@ -12,14 +12,5 @@ else
 		shift
 	fi
 	cmd="${cmd}_${subcmd}"
-	if [ "$subcmd" == "update" ]; then
-		arg="[$1"
-		shift
-		for x in "$@"; do
-			arg="${arg},${x}"
-		done
-		arg="${arg}]."
-		exec $dir/rdpproxy rpcterms admin_cli "${cmd}" "${arg}"
-	fi
 fi
 exec $dir/rdpproxy rpc admin_cli "${cmd}" "$@"

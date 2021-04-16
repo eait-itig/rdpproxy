@@ -233,11 +233,63 @@ pool_get([NameStr]) ->
             io:format("~p\n", [Err])
     end.
 
-pool_update([Id, Map]) ->
-    session_ra:update_pool(Map#{id => Id}).
+parse_update_map(List, Schema) ->
+    parse_update_map(#{}, List, Schema).
+parse_update_map(M0, [], _Schema) ->
+    {ok, M0};
+parse_update_map(M0, [Next | Rest], Schema) ->
+    case string:split(Next, "=", leading) of
+        [Key, Value0] ->
+            KeyAtom = list_to_existing_atom(Key),
+            case Schema of
+                #{KeyAtom := integer} ->
+                    Value1 = list_to_integer(Value0),
+                    parse_update_map(M0#{KeyAtom => Value1}, Rest, Schema);
+                #{KeyAtom := binary} ->
+                    Value1 = unicode:characters_to_binary(Value0, utf8),
+                    parse_update_map(M0#{KeyAtom => Value1}, Rest, Schema);
+                #{KeyAtom := atom} ->
+                    Value1 = list_to_atom(Value0),
+                    parse_update_map(M0#{KeyAtom => Value1}, Rest, Schema);
+                _ ->
+                    {error, {unknown_update_key, KeyAtom}}
+            end;
+        _ ->
+            {error, {invalid_map_kv, Next}}
+    end.
 
-host_update([Ip, Map]) ->
-    session_ra:update_host(Map#{ip => Ip}).
+pool_update([Id | Rest]) ->
+    {ok, UpdateMap} = parse_update_map(Rest, #{
+        title => binary,
+        help_text => binary,
+        choice => atom,
+        mode => atom,
+        min_rsvd_time => integer,
+        hdl_expiry_time => integer,
+        priority => integer
+    }),
+    Res = session_ra:update_pool(UpdateMap#{id => Id}),
+    io:format("~p\n", [Res]).
+
+host_update([Ip | Rest]) ->
+    {ok, UpdateMap} = parse_update_map(Rest, #{
+        hostname => binary,
+        port => integer,
+        pool => atom,
+        idle_from => integer,
+        image => binary,
+        role => binary,
+        hypervisor => binary,
+        desc => binary,
+        cert_verify => atom
+    }),
+    case host_find(Ip) of
+        {ok, #{ip := RealIp}} ->
+            Res = session_ra:update_host(UpdateMap#{ip => RealIp}),
+            io:format("~p\n", [Res]);
+        Err ->
+            io:format("~p\n", [Err])
+    end.
 
 alloc_pool([User]) ->
     {ok, Pools} = session_ra:get_pools_for(#{user => User, groups => []}),
@@ -343,28 +395,61 @@ host_create([Pool, Ip, Hostname, Port]) ->
         port => PortNum}),
     io:format("~p\n", [Ret]).
 
+host_find(IpOrName) ->
+    IpBin = unicode:characters_to_binary(IpOrName, latin1),
+    case session_ra:get_host(IpBin) of
+        {ok, H} -> {ok, H};
+        {error, not_found} ->
+            {ok, AllHosts} = session_ra:get_all_hosts(),
+            Matches = lists:filter(fun (#{hostname := N}) ->
+                case N of
+                    IpBin -> true;
+                    <<B:(byte_size(IpBin))/binary, _/binary>>
+                        when B =:= IpBin -> true;
+                    _ -> false
+                end
+            end, AllHosts),
+            case Matches of
+                [H] -> {ok, H};
+                [_ | _] -> {error, ambiguous};
+                _ -> {error, not_found}
+            end;
+        OtherErr -> OtherErr
+    end.
+
 host_enable([Ip]) ->
-    IpBin = unicode:characters_to_binary(Ip, latin1),
-    Ret = session_ra:enable_host(IpBin),
-    io:format("~p\n", [Ret]).
+    case host_find(Ip) of
+        {ok, #{ip := RealIp}} ->
+            Ret = session_ra:enable_host(RealIp),
+            io:format("~p\n", [Ret]);
+        Err ->
+            io:format("~p\n", [Err])
+    end.
 
 host_disable([Ip]) ->
-    IpBin = unicode:characters_to_binary(Ip, latin1),
-    Ret = session_ra:disable_host(IpBin),
-    io:format("~p\n", [Ret]).
+    case host_find(Ip) of
+        {ok, #{ip := RealIp}} ->
+            Ret = session_ra:disable_host(RealIp),
+            io:format("~p\n", [Ret]);
+        Err ->
+            io:format("~p\n", [Err])
+    end.
 
 host_delete([Ip]) ->
-    IpBin = unicode:characters_to_binary(Ip, latin1),
-    Ret = session_ra:delete_host(IpBin),
-    io:format("~p\n", [Ret]).
+    case host_find(Ip) of
+        {ok, #{ip := RealIp}} ->
+            Ret = session_ra:delete_host(RealIp),
+            io:format("~p\n", [Ret]);
+        Err ->
+            io:format("~p\n", [Err])
+    end.
 
 host_get([Ip]) ->
-    IpBin = unicode:characters_to_binary(Ip, latin1),
-    case session_ra:get_host(IpBin) of
+    case host_find(Ip) of
         {ok, Host} ->
-            #{hostname := Hostname, enabled := Ena, image := Img, pool := Pool,
-              role := Role, last_report := LastRep, handles := Hdls,
-              report_state := {RepState, RepChanged}} = Host,
+            #{ip := RealIp, hostname := Hostname, enabled := Ena, image := Img,
+              pool := Pool, role := Role, last_report := LastRep,
+              handles := Hdls, report_state := {RepState, RepChanged}} = Host,
             #{error_history := EHist, alloc_history := AHist,
               session_history := SHist} = Host,
             CertVerify = case Host of
@@ -384,7 +469,7 @@ host_get([Ip]) ->
             end,
             RepStateTxt = io_lib:format("~w (~s)",
                 [RepState, format_reltime(RepChanged)]),
-            io:format("IP            ~s\n", [Ip]),
+            io:format("IP            ~s\n", [RealIp]),
             io:format("HOSTNAME      ~s\n", [Hostname]),
             io:format("POOL          ~s\n", [Pool]),
             io:format("ENABLED       ~p\n", [Ena]),
@@ -432,7 +517,7 @@ host_get([Ip]) ->
     end.
 
 host_test([Ip]) ->
-    IpBin = unicode:characters_to_binary(Ip, latin1),
+    {ok, #{ip := IpBin}} = host_find(Ip),
     {ok, Hdl, HD0} = session_ra:reserve_ip(<<"_admin_cli">>, IpBin),
     #{port := Port} = HD0,
     case backend:probe(binary_to_list(IpBin), Port) of
