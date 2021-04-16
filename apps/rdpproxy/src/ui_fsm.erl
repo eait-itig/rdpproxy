@@ -1397,9 +1397,10 @@ choose({ui, {clicked, itigbtn}}, S = #?MODULE{root = Root}) ->
                 {[], [#{ip := Ip0, hostname := HN0}]} -> {Ip0, HN0};
                 _ ->
                     case inet_res:gethostbyname(binary_to_list(HostText)) of
-                        {ok, #hostent{h_addr_list = [Addr]}} ->
+                        {ok, #hostent{h_name = RealName, h_addr_list = [Addr]}} ->
                             AddrBin = iolist_to_binary([inet:ntoa(Addr)]),
-                            {AddrBin, HostText};
+                            RealNameBin = iolist_to_binary([RealName]),
+                            {AddrBin, RealNameBin};
                         Err ->
                             lager:debug("failed to lookup ~p: ~p", [
                                 HostText, Err]),

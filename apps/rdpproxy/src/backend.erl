@@ -40,6 +40,8 @@
 
 -export([register_metrics/0]).
 
+-export([eait_hostname_check_fun/0]).
+
 % Keep last N small packets to search for disconnect reason
 -define(END_PKT_BUF, 32).
 -define(END_PKT_MAX_SZ, 128).
@@ -66,6 +68,27 @@ register_metrics() ->
         {duration_unit, false},
         {help, "Duration of backend RDP probes which returned success"}]),
     ok.
+
+eait_hostname_check_fun() ->
+    {ok, MP} = re:compile("^[a-z]+[0-9]+-([0-9]+[.](labs[.])?eait[.]uq[.]edu[.]au)$"),
+    fun
+        ({dns_id, ID0}, {dNSName, ID1}) ->
+            case {re:run(ID0, MP), re:run(ID1, MP)} of
+                {nomatch, _} ->
+                    default;
+                {_, nomatch} ->
+                    default;
+                {{match, [_, {Prefix0, _} | _]}, {match, [_, {Prefix1, _} | _]}} ->
+                    Tail0 = lists:nthtail(Prefix0, ID0),
+                    Tail1 = lists:nthtail(Prefix1, ID1),
+                    if
+                        (Tail0 =:= Tail1) -> true;
+                        true -> default
+                    end
+            end;
+        (_RefId, _PresentedID) ->
+            default
+    end.
 
 -spec start_link(Frontend :: pid(), Listener :: atom(), Address :: inet:ip_address() | inet:hostname(), Port :: inet:port_number()) -> {ok, pid()} | {error, any()}.
 start_link(Frontend, L, Address, Port) ->
@@ -181,26 +204,41 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
     if HasSsl ->
         inet:setopts(Sock, [{packet, raw}]),
         Opts0 = rdpproxy:config([backend, ssl_options], [{verify, verify_none}]),
-        Opts1 = case session_ra:get_host(iolist_to_binary([Address])) of
+        Opts1 = case lists:keytake(customize_hostname_check, 1, Opts0) of
+            false ->
+                Opts0;
+            {value, CHCTuple = {_, CHC}, WithoutCHC} ->
+                case lists:keytake(match_fun, 1, CHC) of
+                    false ->
+                        [CHCTuple | WithoutCHC];
+                    {value, {_, {Mod, Fun, Args}}, WithoutMF} ->
+                        NewFun = apply(Mod, Fun, Args),
+                        [{customize_hostname_check,
+                            [{match_fun, NewFun} | WithoutMF]} | WithoutCHC];
+                    {value, {_, _}, _} ->
+                        Opts0
+                end
+        end,
+        Opts2 = case session_ra:get_host(iolist_to_binary([Address])) of
             {ok, #{cert_verify := default, hostname := Name}} ->
                 [{server_name_indication,
-                  binary_to_list(iolist_to_binary([Name]))} | Opts0];
+                  binary_to_list(iolist_to_binary([Name]))} | Opts1];
             {ok, #{cert_verify := verify_peer, hostname := Name}} ->
                 [{server_name_indication,
                   binary_to_list(iolist_to_binary([Name]))},
                   {verify, verify_peer} |
-                  lists:keydelete(verify, 1, Opts0)];
+                  lists:keydelete(verify, 1, Opts1)];
             {ok, #{cert_verify := verify_none}} ->
                 [{verify, verify_none} |
-                  lists:keydelete(verify, 1, Opts0)];
+                  lists:keydelete(verify, 1, Opts1)];
             {ok, #{hostname := Name}} ->
                 [{server_name_indication,
-                  binary_to_list(iolist_to_binary([Name]))} | Opts0];
+                  binary_to_list(iolist_to_binary([Name]))} | Opts1];
             _ ->
-                Opts0
+                Opts1
         end,
-        lager:debug("ssl opts = ~p", [Opts1]),
-        case ssl:connect(Sock, Opts1) of
+        lager:debug("ssl opts = ~p", [Opts2]),
+        case ssl:connect(Sock, Opts2) of
             {ok, SslSock} ->
                 ok = ssl:setopts(SslSock, [binary, {active, true}, {nodelay, true}]),
 
