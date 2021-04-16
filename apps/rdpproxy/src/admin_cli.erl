@@ -296,7 +296,7 @@ alloc_pool([User]) ->
     io:format("~p\n", [Pools]).
 
 print_prefs(Prefs) ->
-    Fmt = "~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~26.. s  ~16.. s  ~16.. s  ~8.. s  "
+    Fmt = "~16.. s  ~18.. s  ~8.. s  ~30.. s  ~26.. s  ~26.. s  ~16.. s  ~16.. s  ~8.. s  "
         "~22.. s  ~13.. s\n",
     io:format(Fmt, ["IP", "HOST", "ENABLED", "LASTERR", "LASTUSER",
         "LASTREP", "SESSIONS", "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
@@ -309,7 +309,7 @@ print_prefs(Prefs) ->
         LastErr = case queue:out_r(EHist) of
             {{value, #{time := ET, error := Err}}, _} ->
                 iolist_to_binary([
-                    io_lib:format("~10w", [Err]),
+                    io_lib:format("~14w", [Err]),
                     " (", format_reltime(ET), ")"]);
             _ -> "-"
         end,
@@ -561,7 +561,7 @@ host_list(Args) ->
             IpA > IpB -> false
         end
     end, Hosts1),
-    Fmt = "~10.. s  ~16.. s  ~18.. s  ~8.. s  ~26.. s  ~26.. s  ~16.. s  "
+    Fmt = "~10.. s  ~16.. s  ~18.. s  ~8.. s  ~30.. s  ~26.. s  ~16.. s  "
         "~16.. s  ~8.. s  ~22.. s  ~13.. s\n",
     io:format(Fmt, ["POOL", "IP", "HOST", "ENABLED", "LASTERR", "LASTUSER",
         "SESSIONS", "IMAGE", "ROLE", "REPSTATE", "REPORT"]),
@@ -573,7 +573,7 @@ host_list(Args) ->
         LastErr = case queue:out_r(EHist) of
             {{value, #{time := ET, error := Err}}, _} ->
                 iolist_to_binary([
-                    io_lib:format("~10w", [Err]),
+                    io_lib:format("~14w", [Err]),
                     " (", format_reltime(ET), ")"]);
             _ -> "-"
         end,
