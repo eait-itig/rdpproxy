@@ -402,10 +402,9 @@ host_find(IpOrName) ->
         {error, not_found} ->
             {ok, AllHosts} = session_ra:get_all_hosts(),
             Matches = lists:filter(fun (#{hostname := N}) ->
-                case N of
-                    IpBin -> true;
-                    <<B:(byte_size(IpBin))/binary, _/binary>>
-                        when B =:= IpBin -> true;
+                case {N, catch binary:part(N, {0, byte_size(IpBin)})} of
+                    {IpBin, _} -> true;
+                    {_, IpBin} -> true;
                     _ -> false
                 end
             end, AllHosts),
