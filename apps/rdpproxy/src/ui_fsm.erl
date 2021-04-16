@@ -459,6 +459,14 @@ login({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(login, S, [Event]);
+        #ts_suppress_output{allow_updates = false} ->
+            {next_state, login, S};
+        #ts_suppress_output{allow_updates = true} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(login, S, [Event]);
+        #ts_refresh_rect{} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(login, S, [Event]);
         _ ->
             {next_state, login, S}
     end;
@@ -769,6 +777,14 @@ mfa({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(mfa, S, [Event]);
+        #ts_suppress_output{allow_updates = false} ->
+            {next_state, mfa, S};
+        #ts_suppress_output{allow_updates = true} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(mfa, S, [Event]);
+        #ts_refresh_rect{} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(mfa, S, [Event]);
         _ ->
             {next_state, mfa, S}
     end;
@@ -998,6 +1014,14 @@ mfa_waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _
             handle_root_events(mfa_waiting, S, [Event]);
         #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
+            handle_root_events(mfa_waiting, S, [Event]);
+        #ts_suppress_output{allow_updates = false} ->
+            {next_state, mfa_waiting, S};
+        #ts_suppress_output{allow_updates = true} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(mfa_waiting, S, [Event]);
+        #ts_refresh_rect{} ->
+            Event = { [{id, root}], redraw },
             handle_root_events(mfa_waiting, S, [Event]);
         _ ->
             {next_state, mfa_waiting, S}
@@ -1323,6 +1347,14 @@ choose({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(choose, S, [Event]);
+        #ts_suppress_output{allow_updates = false} ->
+            {next_state, choose, S};
+        #ts_suppress_output{allow_updates = true} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(choose, S, [Event]);
+        #ts_refresh_rect{} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(choose, S, [Event]);
         _ ->
             {next_state, choose, S}
     end;
@@ -1598,6 +1630,14 @@ choose_pool({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
         #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
             handle_root_events(choose_pool, S, [Event]);
+        #ts_suppress_output{allow_updates = false} ->
+            {next_state, choose_pool, S};
+        #ts_suppress_output{allow_updates = true} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(choose_pool, S, [Event]);
+        #ts_refresh_rect{} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(choose_pool, S, [Event]);
         _ ->
             {next_state, choose_pool, S}
     end;
@@ -1734,6 +1774,14 @@ waiting({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}, root = _Root
             handle_root_events(waiting, S, [Event]);
         #ts_inpevt_unicode{code = _Code} ->
             Event = { [{tag, focus}], Evt },
+            handle_root_events(waiting, S, [Event]);
+        #ts_suppress_output{allow_updates = false} ->
+            {next_state, waiting, S};
+        #ts_suppress_output{allow_updates = true} ->
+            Event = { [{id, root}], redraw },
+            handle_root_events(waiting, S, [Event]);
+        #ts_refresh_rect{} ->
+            Event = { [{id, root}], redraw },
             handle_root_events(waiting, S, [Event]);
         _ ->
             {next_state, waiting, S}
