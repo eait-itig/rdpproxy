@@ -69,26 +69,25 @@ help([]) ->
               "POOL COMMANDS\n"
               "       rdpproxy-admin pool list\n"
               "                      pool get <name>\n"
-              "                      pool create <name>\n"
-              "                      pool update <name> <map>\n"
+              "                      pool create <name> [k=v]\n"
+              "                      pool update <name> <k=v>\n"
               "                      alloc pool <user>\n"
               "\n"
               "HOST COMMANDS\n"
               "       rdpproxy-admin host list\n"
               "                      host list <pool>\n"
-              "                      host get <ip>\n"
-              "                      host create <pool> <ip> <hostname> <port>\n"
-              "                      host create <pool> <ip>\n"
-              "                      host update <ip> <map>\n"
-              "                      host enable <ip>\n"
-              "                      host disable <ip>\n"
-              "                      host delete <ip>\n"
-              "                      host test <ip>\n"
+              "                      host get <ip|hostname>\n"
+              "                      host create <pool> <ip> [k=v]\n"
+              "                      host update <ip|hostname> <k=v>\n"
+              "                      host enable <ip|hostname>\n"
+              "                      host disable <ip|hostname>\n"
+              "                      host delete <ip|hostname>\n"
+              "                      host test <ip|hostname>\n"
               "                      alloc host <pool> <user>\n"
               "\n"
               "CONNECTION COMMANDS\n"
-              "       rdpproxy-admin conn list\n"
-              "                      conn user [-v] <_|user>\n"
+              "       rdpproxy-admin conn list [-j]\n"
+              "                      conn user [-j] <_|user>\n"
               "\n"
               "SESSION HANDLE COMMANDS\n"
               "       rdpproxy-admin handle list\n"
@@ -195,9 +194,19 @@ pool_list([]) ->
         io:format(Fmt, Fields)
     end, Pools).
 
-pool_create([NameStr]) ->
+pool_create([NameStr | Rest]) ->
     Id = list_to_atom(NameStr),
-    Res = session_ra:create_pool(#{id => Id}),
+    {ok, M0} = parse_update_map(Rest, #{
+        title => binary,
+        help_text => binary,
+        choice => atom,
+        mode => atom,
+        min_rsvd_time => integer,
+        hdl_expiry_time => integer,
+        priority => integer
+    }),
+    M1 = M0#{id => Id},
+    Res = session_ra:create_pool(M1),
     io:format("~p\n", [Res]).
 
 pool_get([NameStr]) ->
@@ -383,16 +392,24 @@ host_create([Pool, Ip]) ->
         hostname => iolist_to_binary([Hostname]),
         port => 3389}),
     io:format("~p\n", [Ret]);
-host_create([Pool, Ip, Hostname, Port]) ->
+host_create([Pool, Ip | Rest]) ->
     PoolAtom = list_to_atom(Pool),
     IpBin = unicode:characters_to_binary(Ip, latin1),
-    HostnameBin = unicode:characters_to_binary(Hostname, latin1),
-    PortNum = list_to_integer(Port),
-    Ret = session_ra:create_host(#{
+    {ok, M0} = parse_update_map(Rest, #{
+        hostname => binary,
+        port => integer,
+        idle_from => integer,
+        image => binary,
+        role => binary,
+        hypervisor => binary,
+        desc => binary,
+        cert_verify => atom
+    }),
+    M1 = M0#{
         pool => PoolAtom,
-        ip => IpBin,
-        hostname => HostnameBin,
-        port => PortNum}),
+        ip => IpBin
+    },
+    Ret = session_ra:create_host(M1),
     io:format("~p\n", [Ret]).
 
 host_find(IpOrName) ->
