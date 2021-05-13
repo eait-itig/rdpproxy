@@ -13,4 +13,7 @@ else
 	fi
 	cmd="${cmd}_${subcmd}"
 fi
+# Force the start script to use nodetool instead of erl_call
+# (since terminal redirection is broken in erl_call)
+export USE_NODETOOL=1
 exec $dir/rdpproxy rpc admin_cli "${cmd}" "$@"
