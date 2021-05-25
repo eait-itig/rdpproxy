@@ -237,7 +237,7 @@ handle_raw_data(Bin, _Srv,
                     end,
                     #?MODULE{matched_sessid = MatchedSessId} = S,
                     ForwardCreds =
-                        (MatchedSessId and ForwardEna =:= default) or
+                        (MatchedSessId and (ForwardEna =:= default)) or
                         (ForwardEna =:= always),
                     conn_ra:annotate(ConnId, #{forwarded_creds => ForwardCreds}),
                     TsInfo1 = TsInfo0#ts_info{
