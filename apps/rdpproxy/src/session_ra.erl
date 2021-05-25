@@ -1360,7 +1360,7 @@ filter_min_reserved(4, T, Pool, User, Ips0, #?MODULE{meta = M0, hdls = H0, pools
                     % Eliminate all backends with a handle that's within min
                     % belonging to a different user.
                     #{handles := Hdls = [_ | _]} ->
-                        lists:any(fun (Hdl) ->
+                        not lists:any(fun (Hdl) ->
                             case H0 of
                                 #{Hdl := #{user := User}} -> false;
                                 #{Hdl := #{state := error}} -> false;
