@@ -116,7 +116,10 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
                 rdp_backend_probe_duration_milliseconds, [Peer], Delta),
             gen_fsm:send_event(Pid, close),
             probe_rx(Pid, Peer, T0, MonRef, ok);
-        {'DOWN', MonRef, process, Pid, E} when (E =:= no_ssl) or (E =:= bad_cert) ->
+        {'DOWN', MonRef, process, Pid, E} when
+                (E =:= no_ssl) or
+                (E =:= bad_cert) or
+                (E =:= credssp_required) ->
             prometheus_counter:inc(rdp_backend_probe_errors_per_backend_total,
                 [Peer]),
             prometheus_counter:inc(rdp_backend_probe_errors_total),
@@ -195,6 +198,15 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error 
             session_ra:host_error(iolist_to_binary([Address]), no_ssl)
     end,
     {stop, no_ssl, Data};
+
+initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = error, rdp_error = Other}},
+        #?MODULE{addr = Address, usref = UsRef, server = Srv} = Data) ->
+    case Srv of
+        P when is_pid(P) -> ok;
+        {P, _} when is_pid(P) ->
+            session_ra:host_error(iolist_to_binary([Address]), Other)
+    end,
+    {stop, Other, Data};
 
 initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MODULE{usref = UsRef, sock = Sock, server = Srv, addr = Address, listener = L} = Data) ->
     #x224_cc{src = ThemRef, rdp_selected = Selected} = Pkt,
