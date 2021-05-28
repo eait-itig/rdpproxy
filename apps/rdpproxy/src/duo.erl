@@ -115,7 +115,7 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
         Path, <<"\n">>,
         Qs
     ],
-    Mac = crypto:mac(hmac, sha, SKey, SigningString),
+    Mac = crypto:hmac(sha, SKey, SigningString),
     Authz = [<<"Basic ">>, base64:encode(iolist_to_binary([IKey, $:, to_hex(Mac)]))],
     Uri = case Method of
         get -> iolist_to_binary([Path, $?, Qs]);
