@@ -42,6 +42,8 @@
     terminate/2
     ]).
 
+-export([parse_shell/1]).
+
 -export([register_metrics/0]).
 
 register_metrics() ->
@@ -126,7 +128,9 @@ init_ui(Srv, S = #?MODULE{subs = [], listener = L, connid = ConnId}) ->
     lager:debug("frontend spawned ui_fsm ~p", [Ui]),
     Tsuds = rdp_server:get_tsuds(Srv),
     Caps = rdp_server:get_caps(Srv),
-    conn_ra:annotate(ConnId, #{tsuds => Tsuds, ts_caps => Caps, ui_fsm => Ui}),
+    TSInfo = rdp_server:get_ts_info(Srv),
+    conn_ra:annotate(ConnId, #{tsuds => Tsuds, ts_caps => Caps,
+        ts_info => TSInfo#ts_info{password = snip}, ui_fsm => Ui}),
     {ok, S}.
 
 handle_event({subscribe, Pid}, _Srv, S = #?MODULE{subs = Subs}) ->
@@ -239,6 +243,18 @@ handle_raw_data(Bin, _Srv,
                     TsInfo1 = TsInfo0#ts_info{
                         flags = [autologon, unicode | TsInfo0#ts_info.flags]},
                     Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
+
+                    #ts_info{shell = Shell0} = TsInfo0,
+                    Shell1 = if
+                        Unicode ->
+                            unicode:characters_to_binary(Shell0,
+                                {utf16, little}, utf8);
+                        true ->
+                            Shell0
+                    end,
+                    [Shell2 | _] = binary:split(Shell1, <<0>>),
+                    {_Target, Shell3} = parse_shell(Shell2),
+
                     TsInfo2 = TsInfo1#ts_info{
                         domain = if
                             Unicode ->
@@ -268,6 +284,13 @@ handle_raw_data(Bin, _Srv,
                                 <<0, 0>>;
                             true ->
                                 <<0>>
+                            end,
+                        shell = if
+                            Unicode ->
+                                unicode:characters_to_binary(
+                                    <<Shell3/binary,0>>, utf8, {utf16, little});
+                            true ->
+                                <<Shell3/binary, 0>>
                             end
                         },
                     lager:debug("rewriting ts_info: ~s", [rdpp:pretty_print(TsInfo2#ts_info{password = snip, extra = snip})]),
@@ -350,3 +373,17 @@ terminate(_Reason, #?MODULE{listener = L, t0 = T0}) ->
     prometheus_histogram:observe(rdp_frontend_connection_duration_seconds,
         [L], Dur),
     ok.
+
+-spec parse_shell(binary()) -> {Hostname :: binary() | none, FinalShell :: binary()}.
+parse_shell(Bin) ->
+    case binary:split(Bin, [<<"rdp://">>]) of
+        [<<>>, Rem] ->
+            case binary:split(Rem, [<<"#">>]) of
+                [Hostname, Final] ->
+                    {Hostname, Final};
+                [Hostname] ->
+                    {Hostname, <<>>}
+            end;
+        _ ->
+            {none, Bin}
+    end.

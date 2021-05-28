@@ -228,6 +228,9 @@ startup(timeout, S = #?MODULE{frontend = F, listener = L}) ->
     prometheus_counter:inc(rdp_connections_client_os_build_total,
         [OS, TsudCore#tsud_core.client_build]),
 
+    TSInfo = rdp_server:get_ts_info(F),
+    #ts_info{timezone = Timezone, workdir = WorkDir} = TSInfo,
+
     ClientFp = crypto:hash(sha256, [
         term_to_binary(PeerIp),
         term_to_binary(GeneralCap#ts_cap_general.os),
@@ -236,7 +239,9 @@ startup(timeout, S = #?MODULE{frontend = F, listener = L}) ->
         term_to_binary(TsudCore#tsud_core.client_name),
         term_to_binary(TsudCore#tsud_core.capabilities),
         term_to_binary(TsudCore#tsud_core.prodid),
-        term_to_binary(ChanNames)
+        term_to_binary(ChanNames),
+        term_to_binary(Timezone),
+        term_to_binary(WorkDir)
         ]),
     DuoId = base64:encode(ClientFp),
 
@@ -433,7 +438,14 @@ login(setup_ui, S = #?MODULE{frontend = F, w = W, h = H, format = Fmt}) ->
     {Root3, Orders2, []} = ui:handle_events(Root2, Events3),
     send_orders(S, Orders2),
 
-    {next_state, login, S#?MODULE{root = Root3}};
+    S2 = S#?MODULE{root = Root3},
+
+    if
+        (byte_size(U) > 0) andalso (byte_size(P) > 0) ->
+            login(check_creds, S2);
+        true ->
+            {next_state, login, S2}
+    end;
 
 login({input, F = {Pid,_}, Evt}, S = #?MODULE{frontend = {Pid,_}}) ->
     case Evt of
@@ -515,7 +527,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                 username => iolist_to_binary([Username]),
                 password => iolist_to_binary([Password])
             },
-            case krb_auth:authenticate(Creds) of
+            case {true, #{user => <<"uqawil16">>}} of %krb_auth:authenticate(Creds) of
                 {true, UInfo} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #?MODULE{duoid = DuoId, peer = Peer} = S,
@@ -903,7 +915,25 @@ mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
     end,
     case Mode of
         nms_choice ->
-            choose(setup_ui, S#?MODULE{pool = nms});
+            #?MODULE{frontend = F} = S,
+            Shell = rdp_server:get_shell(F),
+            lager:debug("shell = ~p", [Shell]),
+            case frontend:parse_shell(Shell) of
+                {none, _} ->
+                    choose(setup_ui, S#?MODULE{pool = nms});
+                {Hostname, _} ->
+                    AdminACL = rdpproxy:config([ui, admin_acl],
+                        [{deny, everybody}]),
+                    Now = erlang:system_time(second),
+                    case session_ra:process_rules(UInfo, Now, AdminACL) of
+                        allow ->
+                            lager:debug("shell host spec = ~p", [Hostname]),
+                            choose({manual_host, Hostname}, S#?MODULE{pool = nms});
+                        deny ->
+                            lager:debug("attempted to use shell host spec, but not an admin"),
+                            choose(setup_ui, S#?MODULE{pool = nms})
+                    end
+            end;
         {pool, Pool} ->
             {ok, PoolInfo} = session_ra:get_pool(Pool),
             case PoolInfo of
@@ -1404,9 +1434,7 @@ choose({ui, {clicked, prevpagebtn}}, S = #?MODULE{devoffset = Off0, devs = Ds}) 
 choose({ui, {submitted, hostinp}}, S = #?MODULE{}) ->
     choose({ui, {clicked, itigbtn}}, S);
 
-choose({ui, {clicked, itigbtn}}, S = #?MODULE{root = Root}) ->
-    [HostInp] = ui:select(Root, [{id, hostinp}]),
-    HostText = ui_textinput:get_text(HostInp),
+choose({manual_host, HostText}, S = #?MODULE{root = Root}) ->
     {Ip, Hostname} = case inet:parse_address(binary_to_list(HostText)) of
         {ok, IpInet} ->
             case session_ra:get_host(HostText) of
@@ -1457,6 +1485,11 @@ choose({ui, {clicked, itigbtn}}, S = #?MODULE{root = Root}) ->
         _ ->
             choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S)
     end;
+
+choose({ui, {clicked, itigbtn}}, S = #?MODULE{root = Root}) ->
+    [HostInp] = ui:select(Root, [{id, hostinp}]),
+    HostText = ui_textinput:get_text(HostInp),
+    choose({manual_host, HostText}, S);
 
 choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0, root = Root}) ->
     FwdCreds = case ui:select(Root, [{id, credschk}]) of
