@@ -527,7 +527,7 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                 username => iolist_to_binary([Username]),
                 password => iolist_to_binary([Password])
             },
-            case {true, #{user => <<"uqawil16">>}} of %krb_auth:authenticate(Creds) of
+            case krb_auth:authenticate(Creds) of
                 {true, UInfo} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #?MODULE{duoid = DuoId, peer = Peer} = S,
