@@ -1880,6 +1880,21 @@ waiting({alloc_persistent_error, AllocPid, no_ssl}, S = #?MODULE{allocpid = Allo
     ],
     handle_root_events(waiting, S, Events);
 
+waiting({alloc_persistent_error, AllocPid, credssp_required}, S = #?MODULE{allocpid = AllocPid}) ->
+    do_ping_annotate(S),
+    LightRed = {1.0, 0.8, 0.8},
+    {Msg, MsgLines} = get_msg(err_credssp_req, S),
+    Events = [
+        { [{id, loginlyt}], {remove_child, {id, badlbl}} },
+        { [{id, loginlyt}], {add_child, {before, {id, closebtn}},
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0 * MsgLines}}
+            } },
+        { [{id, badlbl}],   {init, center, Msg} },
+        { [{id, badlbl}],   {set_fgcolor, LightRed} },
+        { [{id, badlbl}],   {set_bgcolor, bgcolour()} }
+    ],
+    handle_root_events(waiting, S, Events);
+
 waiting({alloc_persistent_error, AllocPid, down}, S = #?MODULE{allocpid = AllocPid}) ->
     do_ping_annotate(S),
     LightRed = {1.0, 0.8, 0.8},
