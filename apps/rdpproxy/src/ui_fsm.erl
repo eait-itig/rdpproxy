@@ -919,19 +919,28 @@ mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
             Shell = rdp_server:get_shell(F),
             lager:debug("shell = ~p", [Shell]),
             case frontend:parse_shell(Shell) of
-                {none, _} ->
+                {none, _, _} ->
                     choose(setup_ui, S#?MODULE{pool = nms});
-                {Hostname, _} ->
+                {Hostname, Opts, _} ->
                     AdminACL = rdpproxy:config([ui, admin_acl],
                         [{deny, everybody}]),
                     Now = erlang:system_time(second),
+                    S1 = S#?MODULE{pool = nms},
+                    S2 = case lists:member(no_forward_creds, Opts) of
+                        true ->
+                            #?MODULE{sess = Sess0} = S,
+                            Sess1 = Sess0#{password => <<"">>},
+                            S1#?MODULE{sess = Sess1};
+                        false ->
+                            S1
+                    end,
                     case session_ra:process_rules(UInfo, Now, AdminACL) of
                         allow ->
-                            lager:debug("shell host spec = ~p", [Hostname]),
-                            choose({manual_host, Hostname}, S#?MODULE{pool = nms});
+                            lager:debug("shell host spec = ~p (opts = ~p)", [Hostname, Opts]),
+                            choose({manual_host, Hostname}, S2);
                         deny ->
                             lager:debug("attempted to use shell host spec, but not an admin"),
-                            choose(setup_ui, S#?MODULE{pool = nms})
+                            choose(setup_ui, S2)
                     end
             end;
         {pool, Pool} ->
