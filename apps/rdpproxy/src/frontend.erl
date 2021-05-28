@@ -245,7 +245,7 @@ handle_raw_data(Bin, _Srv,
                             Shell0
                     end,
                     [Shell2 | _] = binary:split(Shell1, <<0>>),
-                    {_Target, Shell3} = parse_shell(Shell2),
+                    {_Target, _Opts, Shell3} = parse_shell(Shell2),
 
                     TsInfo2 = TsInfo1#ts_info{
                         domain = if
@@ -366,16 +366,31 @@ terminate(_Reason, #?MODULE{listener = L, t0 = T0}) ->
         [L], Dur),
     ok.
 
--spec parse_shell(binary()) -> {Hostname :: binary() | none, FinalShell :: binary()}.
+-type shell_opts() :: [no_forward_creds].
+-spec parse_shell(binary()) -> {Hostname :: binary() | none, shell_opts(), FinalShell :: binary()}.
 parse_shell(Bin) ->
     case binary:split(Bin, [<<"rdp://">>]) of
         [<<>>, Rem] ->
-            case binary:split(Rem, [<<"#">>]) of
-                [Hostname, Final] ->
-                    {Hostname, Final};
-                [Hostname] ->
-                    {Hostname, <<>>}
+            case binary:split(Rem, [<<"?">>]) of
+                [Hostname, QueryAndFinal] ->
+                    case binary:split(QueryAndFinal, [<<"#">>]) of
+                        [Query, Final] ->
+                            {Hostname, split_shell_opts(Query), Final};
+                        [Query] ->
+                            {Hostname, split_shell_opts(Query), <<>>}
+                    end;
+                [_] ->
+                    case binary:split(Rem, [<<"#">>]) of
+                        [Hostname, Final] ->
+                            {Hostname, [], Final};
+                        [Hostname] ->
+                            {Hostname, [], <<>>}
+                    end
             end;
         _ ->
-            {none, Bin}
+            {none, [], Bin}
     end.
+split_shell_opts(<<"no_forward_creds">>) ->
+    [no_forward_creds];
+split_shell_opts(<<"no_forward_creds&", Rest/binary>>) ->
+    [no_forward_creds | split_shell_opts(Rest)].
