@@ -32,92 +32,7 @@
 -export([authenticate/1]).
 
 -include_lib("kerlberos/include/KRB5.hrl").
--include_lib("kerlberos/include/pac.hrl").
-
-config_to_krb_client_opts(Config, CC) ->
-    maps:filter(fun
-        (kdc, _) -> true;
-        (ciphers, _) -> true;
-        (timeout, _) -> true;
-        (cc, _) -> true;
-        (_, _) -> false
-    end, Config#{cc => CC}).
-
-check_pac(asn1_NOVALUE) -> {false, #{groups => []}};
-check_pac([]) -> {false, #{groups => []}};
-check_pac([#'AuthorizationData_SEQOF'{'ad-type' = 1, 'ad-data' = D0} | Rest]) ->
-    {ok, InnerAD, <<>>} = 'KRB5':decode('AuthorizationData', D0),
-    case InnerAD of
-        [#'AuthorizationData_SEQOF'{'ad-type' = 128, 'ad-data' = PacBin}] ->
-            case (catch pac:decode(PacBin)) of
-                #pac{buffers = Bufs} ->
-                    LogonInfo = lists:keyfind(pac_logon_info, 1, Bufs),
-                    #pac_logon_info{domain_sid = DSid, groups = GMs} = LogonInfo,
-                    #sid{sub_auths = SubAuths} = DSid,
-                    GroupSids = [
-                        DSid#sid{sub_auths = SubAuths ++ [RId]}
-                        || #group_membership{rid = RId} <- GMs
-                    ],
-                    {true, #{groups => GroupSids}};
-                Err ->
-                    lager:debug("PAC failed to decode: ~p", [Err]),
-                    {false, #{groups => []}}
-            end;
-        _ -> check_pac(Rest)
-    end;
-check_pac([_ | Rest]) ->
-    check_pac(Rest).
-
-check_service(C, Realm, User, SPN, KeyMap, NeedPac) ->
-    case krb_client:obtain_ticket(C, SPN) of
-        {ok, _Key, Ticket} ->
-            #'Ticket'{'enc-part' = EPart} = Ticket,
-            EType = krb_crypto:etype_to_atom(EPart#'EncryptedData'.etype),
-            case KeyMap of
-                #{EType := Key} ->
-                    Data = krb_crypto:decrypt(EType, Key,
-                        EPart#'EncryptedData'.cipher, #{usage => 2}),
-                    {ok, Inner, <<>>} = 'KRB5':decode('EncTicketPart', Data),
-                    #'EncTicketPart'{cname = CName} = Inner,
-                    UserBin = iolist_to_binary([User]),
-                    UserString = unicode:characters_to_list(UserBin, latin1),
-                    #'PrincipalName'{'name-string' = [UserString]} = CName,
-                    ADs = Inner#'EncTicketPart'.'authorization-data',
-                    {HasPac, UInfo} = check_pac(ADs),
-                    case {NeedPac, HasPac} of
-                        {true, false} ->
-                            lager:debug("no PAC found in ticket for ~p (~p@~p)",
-                                [User, SPN, Realm]),
-                            record_failure({krb5_pac, Realm}, no_pac),
-                            false;
-                        _ ->
-                            {true, UInfo}
-                    end;
-                _ ->
-                    lager:debug("no key available for ~p@~p etype ~p",
-                        [SPN, Realm, EType]),
-                    record_failure({krb5_svc_ticket, Realm},
-                        {no_key_for_etype, EType}),
-                    false
-            end;
-        Other ->
-            lager:debug("failed to obtain service ticket for ~p as ~p in ~p: ~p",
-                [SPN, User, Realm, Other]),
-            record_failure({krb5_svc_ticket, Realm}, {krb_failure, Other}),
-            false
-    end.
-
--type groupmap() :: #{groups => [#sid{}]}.
--type result() :: false | {true, groupmap()}.
--spec merge([result()]) -> result().
-merge([]) -> {true, #{groups => []}};
-merge([false | _]) -> false;
-merge([{true, #{groups := G0}} | Rest]) ->
-    case merge(Rest) of
-        {true, #{groups := G1}} ->
-            {true, #{groups => G0 ++ G1}};
-        V -> V
-    end.
+-include_lib("kerlberos/include/ms_pac.hrl").
 
 record_failure(Stage, Reason) ->
     case erlang:get(conn_ra_sid) of
@@ -133,11 +48,153 @@ record_failure(Stage, Reason) ->
             conn_ra:auth_attempt(Sid, Attempt1)
     end.
 
-authenticate(#{username := U, password := P} = A) ->
-    Krb5Config = maps:from_list(application:get_env(rdpproxy, krb5, [])),
+-type user_info() :: #{
+    username => binary(),
+    password => binary(),
+    groups => [krb_ms_pac:sid()]
+    }.
+
+-record(realm_state, {
+    pid :: pid(),
+    tgt :: krb_proto:ticket()
+    }).
+
+-record(?MODULE, {
+    realm :: undefined | string(),
+    realms = #{} :: #{string() => #realm_state{}},
+    svctkt :: undefined | krb_proto:ticket(),
+    uinfo :: user_info(),
+    lasterr :: any()
+    }).
+
+eval_step({all_of, []}, S0 = #?MODULE{}) ->
+    {ok, S0};
+eval_step({all_of, [Next | Rest]}, S0 = #?MODULE{}) ->
+    case eval_step(Next, S0) of
+        E = {error, _} -> E;
+        {ok, S1} -> eval_step({all_of, Rest}, S1)
+    end;
+eval_step({any_of, []}, #?MODULE{lasterr = Err}) ->
+    Err;
+eval_step({any_of, [Next | Rest]}, S0 = #?MODULE{}) ->
+    case eval_step(Next, S0) of
+        E = {error, _} ->
+            eval_step({any_of, Rest}, S0#?MODULE{lasterr = E});
+        {ok, S1} ->
+            {ok, S1}
+    end;
+eval_step({authenticate, Opts}, S0 = #?MODULE{uinfo = UInfo0}) ->
+    #?MODULE{realms = Rs0} = S0,
+    OptsMap = maps:from_list(Opts),
+    #{realm := N} = OptsMap,
+    #{username := User, password := Password} = UInfo0,
+    Principal = [unicode:characters_to_list(User, utf8)],
+    {ok, Realm} = krb_realm:open(N),
+    case krb_realm:authenticate(Realm, Principal, Password) of
+        {ok, TGT} ->
+            lager:debug("authenticated as ~s@~s", [User, N]),
+            Rec = #realm_state{pid = Realm, tgt = TGT},
+            Rs1 = Rs0#{N => Rec},
+            S1 = S0#?MODULE{realm = N, realms = Rs1},
+            {ok, S1};
+        {error, Why} ->
+            lager:debug("authentication failure as ~s@~s: ~p",
+                [User, N, Why]),
+            {error, {{realm, N}, Why}}
+    end;
+eval_step({cross_realm, Opts}, S0 = #?MODULE{realms = Rs0}) ->
+    OptsMap = maps:from_list(Opts),
+    #{to_realm := R1} = OptsMap,
+    R0 = maps:get(from_realm, OptsMap, S0#?MODULE.realm),
+    #{R0 := #realm_state{pid = Realm0, tgt = TGT0}} = Rs0,
+    {ok, Realm1} = krb_realm:open(R1),
+    SvcPrincipal = ["krbtgt", R1],
+    case krb_realm:obtain_ticket(Realm0, TGT0, SvcPrincipal) of
+        {ok, TGT1} ->
+            Rec = #realm_state{pid = Realm1, tgt = TGT1},
+            Rs1 = Rs0#{R1 => Rec},
+            S1 = S0#?MODULE{realm = R1, realms = Rs1},
+            {ok, S1};
+        {error, Why} ->
+            #?MODULE{uinfo = #{username := U}} = S0,
+            lager:debug("cross-realm failure as ~s (~s to ~s): ~p",
+                [U, R0, R1, Why]),
+            {error, {{cross_realm, R0, R1}, Why}}
+    end;
+eval_step({get_service_ticket, Opts}, S0 = #?MODULE{realms = Rs0}) ->
+    OptsMap = maps:from_list(Opts),
+    #{principal := SvcPrincipal} = OptsMap,
+    R = maps:get(realm, OptsMap, S0#?MODULE.realm),
+    #{R := #realm_state{pid = Realm, tgt = TGT}} = Rs0,
+    case krb_realm:obtain_ticket(Realm, TGT, SvcPrincipal) of
+        {ok, SvcTicket} ->
+            S1 = S0#?MODULE{svctkt = SvcTicket},
+            {ok, S1};
+        {error, Why} ->
+            #?MODULE{uinfo = #{username := U}} = S0,
+            lager:debug("service ticket (~p) failure as ~s@~s: ~p",
+                [SvcPrincipal, U, R, Why]),
+            {error, {{service_tkt, SvcPrincipal, R}, Why}}
+    end;
+eval_step({check_service_ticket, _Opts}, _S0 = #?MODULE{svctkt = undefined}) ->
+    {error, no_service_ticket};
+eval_step({check_service_ticket, Opts}, S0 = #?MODULE{svctkt = SvcTkt0}) ->
+    OptsMap = maps:from_list(Opts),
+    #{keytab := KeyTabPath} = OptsMap,
+    {ok, Data} = file:read_file(KeyTabPath),
+    {ok, KeyTab} = krb_mit_keytab:parse(Data),
+    #{ticket := SvcTicket0} = SvcTkt0,
+    {ok, Keys} = krb_mit_keytab:filter_for_ticket(KeyTab, SvcTicket0),
+    case krb_proto:decrypt(Keys, kdc_rep_ticket, SvcTicket0) of
+        {ok, SvcTicket1 = #'Ticket'{'enc-part' = EP}} ->
+            #?MODULE{uinfo = UInfo0} = S0,
+            #{username := User} = UInfo0,
+            OurPrincipal = [unicode:characters_to_list(User, utf8)],
+            #'EncTicketPart'{cname = CName} = EP,
+            #'PrincipalName'{'name-string' = TheirPrincipal} = CName,
+            if
+                (OurPrincipal =/= TheirPrincipal) ->
+                    {error, {princ_mismatch, OurPrincipal, TheirPrincipal}};
+                (OurPrincipal =:= TheirPrincipal) ->
+                    SvcTkt1 = SvcTkt0#{ticket => SvcTicket1},
+                    S1 = S0#?MODULE{svctkt = SvcTkt1},
+                    {ok, S1}
+            end;
+        {error, Why} ->
+            {error, {decrypt_ticket, Why}}
+    end;
+eval_step({check_pac, Opts}, S0 = #?MODULE{svctkt = SvcTkt}) ->
+    OptsMap = maps:from_list(Opts),
+    Required = maps:get(required, OptsMap, true),
+    #{ticket := SvcTicket} = SvcTkt,
+    case krb_ms_pac:decode_ticket(SvcTicket) of
+        {ok, #pac{buffers = Bufs}} ->
+            #?MODULE{uinfo = UInfo0} = S0,
+            Groups0 = maps:get(groups, UInfo0, []),
+            LogonInfo = lists:keyfind(pac_logon_info, 1, Bufs),
+            #pac_logon_info{domain_sid = DSid, groups = GMs} = LogonInfo,
+            #sid{sub_auths = SubAuths} = DSid,
+            GroupSids = [
+                DSid#sid{sub_auths = SubAuths ++ [RId]}
+                || #group_membership{rid = RId} <- GMs
+            ],
+            UInfo1 = UInfo0#{groups => Groups0 ++ GroupSids},
+            S1 = S0#?MODULE{uinfo = UInfo1},
+            {ok, S1};
+        {error, no_pac} when not Required ->
+            {ok, S0};
+        Err = {error, _} ->
+            Err
+    end.
+
+
+authenticate(#{username := U, password := P} = Args) ->
+    Krb5Config = application:get_env(rdpproxy, krb5, []),
+
+    UInfo0 = #{username => U, password => P},
 
     BaseAttempt = #{username => U, time => erlang:system_time(second)},
-    case A of
+    case Args of
         #{session := Sid} ->
             erlang:put(conn_ra_sid, Sid),
             erlang:put(conn_ra_attempt, BaseAttempt),
@@ -146,54 +203,13 @@ authenticate(#{username := U, password := P} = A) ->
             erlang:erase(conn_ra_sid)
     end,
 
-    {ok, CC} = krbcc:start_link(krbcc_ets, #{}),
-
-    Opts = config_to_krb_client_opts(Krb5Config, CC),
-    #{realm := AuthRealm} = Krb5Config,
-    {ok, C0} = krb_client:open(AuthRealm, Opts),
-
-    Res = case krb_client:authenticate(C0, U, P) of
-        ok ->
-            Res2 = case Krb5Config of
-                #{service := SPN, service_keys := KeyList} ->
-                    KeyMap = maps:from_list(KeyList),
-                    NeedPac = maps:get(require_pac, Krb5Config, false),
-                    check_service(C0, AuthRealm, U, SPN, KeyMap, NeedPac);
-                _ ->
-                    {true, #{groups => []}}
-            end,
-            Res3 = case Krb5Config of
-                #{cross_realm := XRealmConfLists} ->
-                    merge(lists:map(fun (XRealmConfList) ->
-                        XRealmConf = maps:from_list(XRealmConfList),
-                        #{realm := XRealm} = XRealmConf,
-                        {ok, _, _} = krb_client:obtain_ticket(C0, ["krbtgt", XRealm]),
-                        XOpts = config_to_krb_client_opts(XRealmConf, CC),
-                        {ok, CX} = krb_client:open(XRealm, XOpts),
-                        XRes = case XRealmConf of
-                            #{service := XSPN, service_keys := XKeyList} ->
-                                XKeyMap = maps:from_list(XKeyList),
-                                XNeedPac = maps:get(require_pac, XRealmConf, false),
-                                check_service(CX, XRealm, U, XSPN, XKeyMap, XNeedPac);
-                            _ ->
-                                {true, #{groups => []}}
-                        end,
-                        krb_client:close(CX),
-                        XRes
-                    end, XRealmConfLists));
-                _ ->
-                    {true, #{groups => []}}
-            end,
-            merge([Res2, Res3]);
-        LoginErr ->
-            record_failure({krb5_login, AuthRealm}, LoginErr),
-            false
-    end,
-    krb_client:close(C0),
-    krbcc:stop(CC),
-    case Res of
-        {true, Info0} ->
-            case A of
+    S0 = #?MODULE{uinfo = UInfo0},
+    case eval_step(Krb5Config, S0) of
+        {ok, #?MODULE{uinfo = UInfo1}} ->
+            UInfo2 = maps:remove(username, UInfo1),
+            UInfo3 = maps:remove(password, UInfo2),
+            UInfo4 = UInfo3#{user => U},
+            case Args of
                 #{session := CSid} ->
                     Attempt = #{
                         username => U,
@@ -203,7 +219,8 @@ authenticate(#{username := U, password := P} = A) ->
                     conn_ra:auth_attempt(CSid, Attempt);
                 _ -> ok
             end,
-            {true, Info0#{user => U}};
-        _ ->
-            Res
+            {true, UInfo4};
+        {error, Why} ->
+            record_failure(krb5_login, Why),
+            false
     end.

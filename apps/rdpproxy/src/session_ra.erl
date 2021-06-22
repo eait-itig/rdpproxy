@@ -30,7 +30,7 @@
 -module(session_ra).
 -behaviour(ra_machine).
 
--include_lib("kerlberos/include/pac.hrl").
+-include_lib("kerlberos/include/ms_pac.hrl").
 
 -export([init/1, apply/3, state_enter/2]).
 -export([start/0]).

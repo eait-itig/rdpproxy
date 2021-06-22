@@ -203,64 +203,60 @@
                 {1, 16#9ce909408df2e85bf88ae7ce9db60c1a}
             ]}
         ]},
-        {krb5, [
+        {krb5,
             %%
-            %% Kerberos realm to authenticate users against
+            %% Defines the steps which should be followed to authenticate a
+            %% user. You can use {all_of, []} and {any_of, []} to stack actions
+            %% into different alternative options.
             %%
-            {realm, "KRB5.UQ.EDU.AU"},
-
-            %%
-            %% Optional settings for KRB5 (explicit KDCs, ciphers)
-            %%
-            %{kdc, ["kdc1.domain"]},
-            %{ciphers, [aes256_hmac_sha1, aes128_hmac_sha1, rc4_hmac]},
-
-            %%
-            %% How long to wait for KRB5 responses
-            %%
-            {timeout, 2000},
-
-            %%
-            %% Cross-realm checking. This is useful if you auth to a KRB5
-            %% domain which then refers you to AD, and you want to check that
-            %% the AD domain has the user as well.
-            %%
-            {cross_realm, [
-                [
-                    %%
-                    %% The cross-realm to refer into. We will request a ticket
-                    %% for krbtgt/THIS_VALUE@MAIN_KRB5_REALM_FROM_ABOVE
-                    %%
-                    {realm, "EAIT.UQ.EDU.AU"},
-
-                    %%
-                    %% Optional settings for KRB5 (explicit KDCs, ciphers)
-                    %%
-                    %{kdc, ["kdc1.domain"]},
-                    %{ciphers, [aes256_hmac_sha1, aes128_hmac_sha1, rc4_hmac]},
-                    %%
-                    %% How long to wait for KRB5 responses
-                    %%
-                    {timeout, 2000},
-
-                    %%
-                    %% This is an AD domain, check that we get a PAC in our
-                    %% service ticket
-                    %%
-                    {require_pac, true},
-
-                    %%
-                    %% Obtain a service ticket and validate it. Required if
-                    %% require_pac is true, otherwise optional.
-                    %%
-                    {service, ["host", "rdp.eait.uq.edu.au"]},
-                    {service_keys, [
-                        {aes256_hmac_sha1, <<16#12345679abcd:256/big>>},
-                        {aes128_hmac_sha1, <<16#12345689abcd:128/big>>}
-                    ]}
-                ]
+            {all_of, [
+                %%
+                %% Alternatives: we either want the user to log into
+                %% KRB5.UQ.EDU.AU (and then we get a cross-realm TGT for them);
+                %% or they can log in directly to EAIT.UQ.EDU.AU if that
+                %% fails.
+                %%
+                {any_of, [
+                    %% First alternative
+                    {all_of, [
+                        %%
+                        %% The "authenticate" action attempts password
+                        %% authentication against a KRB5 realm.
+                        %%
+                        {authenticate, [{realm, "KRB5.UQ.EDU.AU"}]},
+                        %%
+                        %% The "cross_realm" action uses the TGT from a
+                        %% previous "authenticate" to get a TGT for a second,
+                        %% different realm.
+                        %%
+                        {cross_realm, [{to_realm, "EAIT.UQ.EDU.AU"}]}
+                    ]},
+                    %% Second alternative
+                    {authenticate, [{realm, "EAIT.UQ.EDU.AU"}]}
+                ]},
+                %%
+                %% Gets a service ticket issued for a particular principal.
+                %% Doesn't try to decrypt or validate it.
+                %%
+                {get_service_ticket, [
+                    {principal, ["host", "rdp.eait.uq.edu.au"]}
+                ]},
+                %%
+                %% Decrypts and validates the contents of a service ticket
+                %% (using a service keytab which must contain keys for the
+                %% last ticket we got).
+                %%
+                {check_service_ticket, [
+                    {keytab, "etc/krb5.keytab"}
+                ]},
+                %%
+                %% Extracts the Microsoft AD PAC from a service ticket and
+                %% validates its contents. Also adds any group SIDs the user
+                %% is a member of into the set of groups available for ACLs.
+                %%
+                {check_pac, [{required, true}]}
             ]}
-        ]},
+        },
         {duo, [
             %%
             %% Details for Duo 2FA
@@ -285,6 +281,56 @@
             %{api_host, "nms.eait.uq.edu.au"},
             %{key_id, <<"rdpproxy">>},
             %{privkey_path, "etc/nms_key.pem"}
+        ]}
+    ]},
+
+    %%
+    %% Detailed KRB5 client settings
+    %%
+    {kerlberos, [
+        {realms, [
+            %%
+            %% Default settings which apply to all realms (but can be over-
+            %% ridden per-realm below).
+            %%
+            {default, [
+                %%
+                %% Always/never use DNS discovery of KDCs (set to true to
+                %% override a krb5.conf which has "dns_lookup_kdc = false"
+                %%
+                %{use_dns, true},
+
+                %%
+                %% Base timeout for abandoning requests to a KDC (msecs)
+                %%
+                %{timeout, 1000},
+
+                %%
+                %% Limit of total number of attempts to talk to a KDC
+                %%
+                %{retries, 3},
+
+                %%
+                %% Choose an explicit priority list for Kerberos etypes/ciphers.
+                %%
+                %{ciphers, [aes256_hmac_sha384, aes128_hmac_sha256,
+                %           aes256_hmac_sha1, aes128_hmac_sha1, rc4_hmac]},
+            ]},
+
+            %%
+            %% Override some settings for one realm
+            %%
+            {"SOME.REALM.COM", [
+                %%
+                %% Explicitly list KDCs for this realm
+                %%
+                %{kdc, ["kdc1.domain", {"kdc2.domain", 8888}]},
+            ]}
+
+            %%
+            %% Note that kerlberos also parses settings from /etc/krb5.conf
+            %% including realms with explicit KDCs.
+            %%
         ]}
     ]},
 
