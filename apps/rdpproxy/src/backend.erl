@@ -70,17 +70,19 @@ register_metrics() ->
     ok.
 
 eait_hostname_check_fun() ->
-    {ok, MP} = re:compile("^[a-z]+[0-9]+-([0-9]+[.](labs[.])?eait[.]uq[.]edu[.]au)$"),
+    {ok, MP} = re:compile("^[a-z]+[0-9]+[a-z]?-([0-9]+[.](labs[.])?eait[.]uq[.]edu[.]au)$"),
     fun
         ({dns_id, ID0}, {dNSName, ID1}) ->
-            case {re:run(ID0, MP), re:run(ID1, MP)} of
+            LID0 = string:lowercase(ID0),
+            LID1 = string:lowercase(ID1),
+            case {re:run(LID0, MP), re:run(LID1, MP)} of
                 {nomatch, _} ->
                     default;
                 {_, nomatch} ->
                     default;
                 {{match, [_, {Prefix0, _} | _]}, {match, [_, {Prefix1, _} | _]}} ->
-                    Tail0 = lists:nthtail(Prefix0, ID0),
-                    Tail1 = lists:nthtail(Prefix1, ID1),
+                    Tail0 = lists:nthtail(Prefix0, LID0),
+                    Tail1 = lists:nthtail(Prefix1, LID1),
                     if
                         (Tail0 =:= Tail1) -> true;
                         true -> default
