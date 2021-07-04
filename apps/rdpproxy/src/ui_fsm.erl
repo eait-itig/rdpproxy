@@ -913,8 +913,18 @@ mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
                     choose(setup_ui, S#?MODULE{pool = Pool})
             end;
         pool ->
-            {ok, Pools} = session_ra:get_pools_for(UInfo),
-            case Pools of
+            {ok, Pools0} = session_ra:get_pools_for(UInfo),
+            NMSAcl = rdpproxy:config([ui, pool_nms_acl], [{deny, everybody}]),
+            Now = erlang:system_time(second),
+            Pools1 = case session_ra:process_rules(UInfo, Now, NMSAcl) of
+                allow ->
+                    [#{id => '_nms_pool', title => <<"NMS">>,
+                       help_text => <<"Choose from personally assigned\nhosts in NMS.">>}
+                     | Pools0];
+                deny ->
+                    Pools0
+            end,
+            case Pools1 of
                 [#{id := Pool, choice := false}] ->
                     waiting(setup_ui, S#?MODULE{pool = Pool});
                 [#{id := Pool, choice := true}] ->
