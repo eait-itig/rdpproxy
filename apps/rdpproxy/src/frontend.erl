@@ -177,10 +177,8 @@ handle_raw_data(Bin, _Srv,
                     lager:warning("sessid mismatch (ours = ~p, they sent = ~p), "
                         "will not rewrite ts_info (no auto-login)",
                         [SessId, TheirSessId]),
-                    conn_ra:annotate(ConnId, #{forwarded_creds => false}),
                     S#?MODULE{matched_sessid = false};
                 true ->
-                    conn_ra:annotate(ConnId, #{forwarded_creds => true}),
                     S#?MODULE{matched_sessid = true}
             end,
 
@@ -229,9 +227,19 @@ handle_raw_data(Bin, _Srv,
                         ts_info => TsInfo0#ts_info{password = snip}
                     }),
 
-                    #?MODULE{matched_sessid = MatchedSessId} = S,
-                    #?MODULE{session = #{user := User,
+                    #?MODULE{session = #{user := User, ip := IP,
                         password := Password, domain := Domain}} = S,
+                    ForwardEna = case session_ra:get_host(IP) of
+                        {ok, #{forward_creds := Setting}} ->
+                            Setting;
+                        _ ->
+                            default
+                    end,
+                    #?MODULE{matched_sessid = MatchedSessId} = S,
+                    ForwardCreds =
+                        (MatchedSessId and ForwardEna =:= default) or
+                        (ForwardEna =:= always),
+                    conn_ra:annotate(ConnId, #{forwarded_creds => ForwardCreds}),
                     TsInfo1 = TsInfo0#ts_info{
                         flags = [autologon, unicode | TsInfo0#ts_info.flags]},
                     Unicode = lists:member(unicode, TsInfo1#ts_info.flags),
@@ -256,10 +264,10 @@ handle_raw_data(Bin, _Srv,
                                 <<Domain/binary, 0>>
                             end,
                         username = if
-                            Unicode and MatchedSessId ->
+                            Unicode and ForwardCreds ->
                                 unicode:characters_to_binary(
                                     <<User/binary,0>>, utf8, {utf16, little});
-                            MatchedSessId ->
+                            ForwardCreds ->
                                 <<User/binary, 0>>;
                             Unicode ->
                                 <<0, 0>>;
@@ -267,10 +275,10 @@ handle_raw_data(Bin, _Srv,
                                 <<0>>
                             end,
                         password = if
-                            Unicode and MatchedSessId ->
+                            Unicode and ForwardCreds ->
                                 unicode:characters_to_binary(
                                     <<Password/binary,0>>, utf8, {utf16, little});
-                            MatchedSessId ->
+                            ForwardCreds ->
                                 <<Password/binary, 0>>;
                             Unicode ->
                                 <<0, 0>>;

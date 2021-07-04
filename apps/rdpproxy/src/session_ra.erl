@@ -596,7 +596,10 @@ process_rules(UInfo, T, [Rule | Rest]) ->
 
     image => none | binary(),
     role => none | binary(),
-    hypervisor => unknown | ipstr()
+    hypervisor => unknown | ipstr(),
+
+    cert_verify => default | verify_none | verify_peer,
+    forward_creds => default | always | never
     }.
 
 -type handle_state() :: #{
@@ -955,7 +958,8 @@ apply(_Meta, {create_host, T, Map}, S0 = #?MODULE{meta = M0, pools = P0}) ->
                         image => maps:get(image, Map, none),
                         role => maps:get(role, Map, none),
                         hypervisor => maps:get(hypervisor, Map, unknown),
-                        cert_verify => default
+                        cert_verify => default,
+                        forward_creds => default
                     },
                     M1 = M0#{Ip => HM0},
                     S1 = S0#?MODULE{meta = M1},
@@ -979,6 +983,7 @@ apply(_Meta, {update_host, T, CM}, S0 = #?MODULE{meta = M0}) when is_map(CM) ->
                 (K = hypervisor, V, Acc) when is_binary(V) -> Acc#{K => V};
                 (K = desc, V, Acc) when is_binary(V) -> Acc#{K => V};
                 (K = cert_verify, V, Acc) when is_atom(V) -> Acc#{K => V};
+                (K = forward_creds, V, Acc) when is_atom(V) -> Acc#{K => V};
                 (_, _, Acc) -> Acc
             end, HM0, CM),
             HM2 = HM1#{last_update => T},
