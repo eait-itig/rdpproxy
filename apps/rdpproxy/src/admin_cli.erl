@@ -291,7 +291,8 @@ host_update([Ip | Rest]) ->
         role => binary,
         hypervisor => binary,
         desc => binary,
-        cert_verify => atom
+        cert_verify => atom,
+        forward_creds => atom
     }),
     case host_find(Ip) of
         {ok, #{ip := RealIp}} ->
@@ -404,7 +405,8 @@ host_create([Pool, Ip | Rest]) ->
         role => binary,
         hypervisor => binary,
         desc => binary,
-        cert_verify => atom
+        cert_verify => atom,
+        forward_creds => atom
     }),
     M1 = M0#{
         pool => PoolAtom,
@@ -473,6 +475,10 @@ host_get([Ip]) ->
                 #{cert_verify := Override} -> io_lib:format("~p", [Override]);
                 _ -> "default"
             end,
+            ForwardCreds = case Host of
+                #{forward_creds := FwdOverride} -> io_lib:format("~p", [FwdOverride]);
+                _ -> "default"
+            end,
             LastRepTxt = case LastRep of
                 none -> "-";
                 _ ->
@@ -495,6 +501,7 @@ host_get([Ip]) ->
             io:format("LAST REPORT   ~s\n", [LastRepTxt]),
             io:format("REPORT STATE  ~s\n", [RepStateTxt]),
             io:format("CERT VERIFY   ~s\n", [CertVerify]),
+            io:format("FWD CREDS     ~s\n", [ForwardCreds]),
             io:format("\n"),
             Fmt = "~17.. s  ~16.. s  ~10.. s  ~20.. s  ~20.. s  ~20.. s  ~20.. s\n",
             io:format(Fmt, ["HANDLE", "USER", "STATE", "START", "MIN", "EXPIRY", "PID"]),
