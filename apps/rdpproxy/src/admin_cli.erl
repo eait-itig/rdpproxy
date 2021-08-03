@@ -58,7 +58,8 @@
     handle_help/1,
     dump_sessions/1,
     dump_conns/1,
-    pool_reprobe/1
+    pool_reprobe/1,
+    pool_errors/1
     ]).
 
 -export([print_prefs/1]).
@@ -1022,6 +1023,37 @@ pool_reprobe([PoolName]) ->
                 io:format("~s: not responding to ping\n", [Ip])
         end
     end, Errors).
+
+pool_errors([PoolName]) ->
+    PoolAtom = list_to_atom(PoolName),
+    {ok, {_, S0}, _} = ra:leader_query(session_ra, fun (S) -> S end),
+    M0 = element(3, S0),
+    M1 = maps:fold(fun (IP, HM0, Acc) ->
+        HM1 = HM0#{enabled => true},
+        Acc#{IP => HM1}
+    end, #{}, M0),
+    S1 = setelement(3, S0, M1),
+    Annotes = session_ra:annotate_prefs(4, PoolAtom, <<"_nobody">>, S1),
+    Errors = [A || #{in_error := true} = A <- Annotes],
+    T0 = erlang:system_time(second) - 3600*24*14,
+    Recent = [A || A = #{e_latest := E} <- Errors, E >= T0],
+    ErrGroups = lists:foldl(fun (#{ip := IP}, Acc) ->
+        #{error_history := EH} = maps:get(IP, M1),
+        EHL = queue:to_list(EH),
+        Errs = lists:usort([E || #{error := E, time := T} <- EHL, T >= T0]),
+        L0 = maps:get(Errs, Acc, []),
+        Acc#{Errs => [IP | L0]}
+    end, #{}, Recent),
+    lists:foreach(fun ({UErrs, IPs}) ->
+        io:format("=== ~p ===\n", [UErrs]),
+        lists:foreach(fun (IP) ->
+            #{hostname := Hostname, alloc_history := AH} = maps:get(IP, M1),
+            Users = lists:usort([U || #{user := U} <- queue:to_list(AH)]),
+            io:format("~s\t~s\t~s\n", [IP, Hostname,
+                iolist_to_binary(lists:join($,, Users))])
+        end, IPs),
+        io:format("\n")
+    end, maps:to_list(ErrGroups)).
 
 format_reltime(Time) -> format_reltime(Time, true).
 format_reltime(Time, Flavour) ->
