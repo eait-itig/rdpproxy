@@ -741,9 +741,9 @@ conn_list([]) ->
                 "ERR";
             #{ts_error_info := {denied, _Why}} ->
                 "DENY";
-            #{ts_error_info := {logoff, normal}} ->
+            #{ts_error_info := {logoff, Why}} when (Why =:= normal) or (Why =:= client) ->
                 "L:ok";
-            #{ts_error_info := {disconnect, normal}} ->
+            #{ts_error_info := {disconnect, Why}} when (Why =:= normal) or (Why =:= client) ->
                 "D:ok";
             #{ts_error_info := {logoff, admin}} ->
                 "L:adm";
@@ -757,6 +757,8 @@ conn_list([]) ->
                 "D:repl";
             #{ts_error_info := {logoff, Why}} when (Why =:= idle) or (Why =:= timelimit) ->
                 "L:time";
+            #{ts_error_info := _} ->
+                "?";
             _ ->
                 "-"
         end,
@@ -936,9 +938,9 @@ conn_user([User]) ->
                 "ERR";
             #{ts_error_info := {denied, _Why}} ->
                 "DENY";
-            #{ts_error_info := {logoff, normal}} ->
+            #{ts_error_info := {logoff, Why}} when (Why =:= normal) or (Why =:= client) ->
                 "L:ok";
-            #{ts_error_info := {disconnect, normal}} ->
+            #{ts_error_info := {disconnect, Why}} when (Why =:= normal) or (Why =:= client) ->
                 "D:ok";
             #{ts_error_info := {logoff, admin}} ->
                 "L:adm";
@@ -952,6 +954,8 @@ conn_user([User]) ->
                 "D:repl";
             #{ts_error_info := {logoff, Why}} when (Why =:= idle) or (Why =:= timelimit) ->
                 "L:time";
+            #{ts_error_info := _} ->
+                "?";
             _ ->
                 "-"
         end,
