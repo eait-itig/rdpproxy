@@ -1036,6 +1036,9 @@ pool_reprobe([PoolName]) ->
     end, Errors).
 
 pool_errors([PoolName]) ->
+    pool_errors([PoolName, "168"]);
+pool_errors([PoolName, HoursStr]) ->
+    Hours = list_to_integer(HoursStr),
     PoolAtom = list_to_atom(PoolName),
     {ok, {_, S0}, _} = ra:leader_query(session_ra, fun (S) -> S end),
     M0 = element(3, S0),
@@ -1046,7 +1049,7 @@ pool_errors([PoolName]) ->
     S1 = setelement(3, S0, M1),
     Annotes = session_ra:annotate_prefs(4, PoolAtom, <<"_nobody">>, S1),
     Errors = [A || #{in_error := true} = A <- Annotes],
-    T0 = erlang:system_time(second) - 3600*24*14,
+    T0 = erlang:system_time(second) - 3600*Hours,
     Recent = [A || A = #{e_latest := E} <- Errors, E >= T0],
     ErrGroups = lists:foldl(fun (#{ip := IP}, Acc) ->
         #{error_history := EH} = maps:get(IP, M1),
