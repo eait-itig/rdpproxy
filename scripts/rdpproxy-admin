@@ -13,7 +13,17 @@ else
 	fi
 	cmd="${cmd}_${subcmd}"
 fi
+arglist="[["
+while [ $# -gt 0 ]; do
+        next="$1"
+        shift
+        arglist="${arglist}\"${next}\""
+        if [ $# -gt 0 ]; then
+                arglist="${arglist},"
+        fi
+done
+arglist="${arglist}]]"
 # Force the start script to use nodetool instead of erl_call
 # (since terminal redirection is broken in erl_call)
 export USE_NODETOOL=1
-exec $dir/rdpproxy rpc admin_cli "${cmd}" "$@"
+exec $dir/rdpproxy rpc admin_cli "${cmd}" "${arglist}"
