@@ -369,7 +369,10 @@ initiation({pdu, #x224_cc{class = 0, dst = Ref} = Pkt}, #?MODULE{} = Data) ->
     lager:debug("upstream sent x224 cc with dst = ~p, changing our ref",
         [Ref]),
     Data1 = Data#?MODULE{usref = Ref},
-    initiation({pdu, Pkt}, Data1).
+    initiation({pdu, Pkt}, Data1);
+
+initiation(close, #?MODULE{} = D) ->
+    {stop, closed_before_mcs_cr, D}.
 
 proxy_intercept({data, Bin}, #?MODULE{server = Srv, origcr = OrigCr} = Data) ->
     case rdpp:decode_connseq(Bin) of

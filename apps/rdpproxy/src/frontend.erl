@@ -374,12 +374,15 @@ terminate(_Reason, #?MODULE{listener = L, t0 = T0, backend = undefined}) ->
         [L], Dur),
     ok;
 terminate(Reason, #?MODULE{backend = B} = S) ->
+    MRef = monitor(process, B),
+    lager:debug("sending close message to backend"),
     gen_fsm:send_event(B, close),
     receive
-        {'EXIT', B, _Why} -> ok
+        {'DOWN', MRef, process, B, _Why} -> ok
     after 5000 ->
         #?MODULE{session = #{ip := Ip}} = S,
-            session_ra:host_error(Ip, backend_force_kill)
+        lager:debug("recording force kill of backend"),
+        session_ra:host_error(Ip, backend_force_kill)
     end,
     terminate(Reason, S#?MODULE{backend = undefined}).
 
