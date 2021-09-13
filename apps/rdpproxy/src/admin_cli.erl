@@ -655,12 +655,14 @@ conn_list(["-j"]) ->
         io:format("~s", [conn_ra_v2:conn_to_json(Conn1)])
     end, Conns);
 
-conn_list([]) ->
+conn_list(Opts) ->
+    AbsOnly = lists:member("-a", Opts),
     {ok, Conns} = conn_ra:get_all_open(),
-    Fmt = "~16.. s  ~24.. s  ~10.. s  ~16.. s  ~19.. s  ~10.. s  ~16.. s  ~15.. s  "
-        "~10.. s  ~8.. s  ~14.. s  ~11.. s  ~6.. s  ~5.. s  ~6.. s\n",
+    Fmt = "~16.. s  ~24.. s  ~10.. s  ~16.. s  ~19.. s  ~10.. s  ~16.. s  "
+        "~16.. s  ~15.. s  ~10.. s  ~8.. s  ~14.. s  ~11.. s  ~6.. s  ~5.. s\n",
     io:format(Fmt, ["ID", "PEER", "NODE", "PID", "STARTED", "USER", "HANDLE",
-        "BACKEND", "POOL", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS", "END"]),
+        "BACKEND", "BACKEND IP", "POOL", "PROTVER", "REMHOST", "RES", "RECONN",
+        "TSESS"]),
     ConnsSorted = lists:sort(fun (CA, CB) ->
         #{started := StartedA, id := IdA} = CA,
         #{started := StartedB, id := IdB} = CB,
@@ -680,7 +682,7 @@ conn_list([]) ->
         end,
         BackendText = case Conn of
             #{ui_fsm := _} when (Backend =/= undefined) -> [Backend, "*"];
-            _ when (Backend =:= undefined) -> "";
+            _ when (Backend =:= undefined) -> "-";
             _ -> Backend
         end,
         PoolTxt = case Backend of
@@ -688,6 +690,12 @@ conn_list([]) ->
             _ ->
                 {ok, #{pool := Pool}} = session_ra:get_host(Backend),
                 io_lib:format("~p", [Pool])
+        end,
+        HostnameTxt = case Backend of
+            undefined -> "-";
+            _ ->
+                {ok, #{hostname := HN}} = session_ra:get_host(Backend),
+                [HN]
         end,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
@@ -730,54 +738,22 @@ conn_list([]) ->
             _ ->
                 "-"
         end,
-        End = case Conn of
-            #{ts_error_info := {error, driver_crash}} ->
-                "ERR:dr";
-            #{ts_error_info := {error, driver_iface}} ->
-                "ERR:dr";
-            #{ts_error_info := {error, driver_timeout}} ->
-                "ERR:dr";
-            #{ts_error_info := {error, _Why}} ->
-                "ERR";
-            #{ts_error_info := {denied, _Why}} ->
-                "DENY";
-            #{ts_error_info := {logoff, Why}} when (Why =:= normal) or (Why =:= client) ->
-                "L:ok";
-            #{ts_error_info := {disconnect, Why}} when (Why =:= normal) or (Why =:= client) ->
-                "D:ok";
-            #{ts_error_info := {logoff, admin}} ->
-                "L:adm";
-            #{ts_error_info := {disconnect, admin}} ->
-                "D:adm";
-            #{ts_error_info := {logoff, user_on_server}} ->
-                "L:usr";
-            #{ts_error_info := {disconnect, user_on_server}} ->
-                "D:usr";
-            #{ts_error_info := {disconnect, other_conn}} ->
-                "D:repl";
-            #{ts_error_info := {logoff, Why}} when (Why =:= idle) or (Why =:= timelimit) ->
-                "L:time";
-            #{ts_error_info := _} ->
-                "?";
-            _ ->
-                "-"
-        end,
         Fields = [
             Id,
             Peer,
             Node,
             io_lib:format("~w", [Pid]),
-            format_reltime(Started),
+            format_reltime(Started, true, AbsOnly),
             U,
             Hdl,
+            HostnameTxt,
             BackendText,
             PoolTxt,
             ProtVer,
             Client,
             Res,
             Reconn,
-            TSess,
-            End
+            TSess
         ],
         io:format(Fmt, Fields)
     end, ConnsSorted),
@@ -867,21 +843,36 @@ conn_user(["-v", User]) ->
         end
     end, Conns);
 
-conn_user([User]) ->
+conn_user([User | Opts]) ->
+    AbsOnly = lists:member("-a", Opts),
     UserBin = unicode:characters_to_binary(User, utf8),
     {ok, Conns} = conn_ra:get_user(UserBin),
-    Fmt = "~12.. s  ~16.. s  ~14.. s  ~24.. s  ~19.. s  ~10.. s  ~10.. s  ~15.. s  "
-        "~8.. s  ~14.. s  ~11.. s  ~6.. s  ~5.. s  ~6.. s\n",
+    Fmt = "~12.. s  ~16.. s  ~14.. s  ~24.. s  ~19.. s  ~10.. s  ~10.. s  "
+        "~16.. s  ~15.. s  ~10.. s  ~8.. s  ~14.. s  ~11.. s  ~6.. s  ~5.. s  "
+        "~6.. s\n",
     io:format(Fmt, ["ID", "PID", "NODE", "PEER", "STARTED", "DURATION", "USER",
-        "BACKEND", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS", "END"]),
+        "BACKEND", "BACKEND IP", "POOL", "PROTVER", "REMHOST", "RES", "RECONN", "TSESS",
+        "END"]),
     lists:foreach(fun (Conn) ->
         #{id := Id, frontend_pid := Pid, started := Started,
           peer := {Ip, Port}, session := #{user := U, ip := Backend}} = Conn,
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         BackendText = case Conn of
             #{ui_fsm := _} when (Backend =/= undefined) -> [Backend, "*"];
-            _ when (Backend =:= undefined) -> "";
+            _ when (Backend =:= undefined) -> "-";
             _ -> Backend
+        end,
+        PoolTxt = case Backend of
+            undefined -> "-";
+            _ ->
+                {ok, #{pool := Pool}} = session_ra:get_host(Backend),
+                io_lib:format("~p", [Pool])
+        end,
+        HostnameTxt = case Backend of
+            undefined -> "-";
+            _ ->
+                {ok, #{hostname := HN}} = session_ra:get_host(Backend),
+                [HN]
         end,
         [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
@@ -964,10 +955,12 @@ conn_user([User]) ->
             io_lib:format("~w", [Pid]),
             Node,
             Peer,
-            format_reltime(Started),
+            format_reltime(Started, true, AbsOnly),
             Duration,
             U,
+            HostnameTxt,
             BackendText,
+            PoolTxt,
             ProtVer,
             RemHost,
             Res,
@@ -1069,12 +1062,12 @@ pool_errors([PoolName, HoursStr]) ->
         io:format("\n")
     end, maps:to_list(ErrGroups)).
 
-format_reltime(Time) -> format_reltime(Time, true).
-format_reltime(Time, Flavour) ->
+format_reltime(Time) -> format_reltime(Time, true, false).
+format_reltime(Time, Flavour, AbsOnly) ->
     Now = erlang:system_time(second),
     Delta = Now - Time,
     if
-        (Delta > 12*3600) ->
+        (Delta > 12*3600) or AbsOnly ->
             calendar:system_time_to_rfc3339(Time, [
                 {time_designator, $ },
                 {unit, second}]);
