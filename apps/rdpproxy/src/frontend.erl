@@ -379,7 +379,7 @@ terminate(Reason, #?MODULE{backend = B} = S) ->
     gen_fsm:send_event(B, close),
     receive
         {'DOWN', MRef, process, B, _Why} -> ok
-    after 5000 ->
+    after 7000 ->
         #?MODULE{session = #{ip := Ip}} = S,
         lager:debug("recording force kill of backend"),
         session_ra:host_error(Ip, backend_force_kill)
