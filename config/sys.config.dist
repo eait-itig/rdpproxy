@@ -259,6 +259,10 @@
         },
         {duo, [
             %%
+            %% Bypass Duo 2FA completely for all users
+            %%
+            %{bypass, true},
+            %%
             %% Details for Duo 2FA
             %%
             {integration_key, <<"aaaaaa">>},

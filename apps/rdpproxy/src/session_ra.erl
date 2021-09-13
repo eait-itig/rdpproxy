@@ -599,7 +599,9 @@ process_rules(UInfo, T, [Rule | Rest]) ->
     hypervisor => unknown | ipstr(),
 
     cert_verify => default | verify_none | verify_peer,
-    forward_creds => default | always | never
+    forward_creds => default | always | never,
+
+    cert_hostname => binary()
     }.
 
 -type handle_state() :: #{
@@ -984,6 +986,7 @@ apply(_Meta, {update_host, T, CM}, S0 = #?MODULE{meta = M0}) when is_map(CM) ->
                 (K = desc, V, Acc) when is_binary(V) -> Acc#{K => V};
                 (K = cert_verify, V, Acc) when is_atom(V) -> Acc#{K => V};
                 (K = forward_creds, V, Acc) when is_atom(V) -> Acc#{K => V};
+                (K = cert_hostname, V, Acc) when is_binary(V) -> Acc#{K => V};
                 (_, _, Acc) -> Acc
             end, HM0, CM),
             HM2 = HM1#{last_update => T},

@@ -83,6 +83,8 @@ eval_step({any_of, [Next | Rest]}, S0 = #?MODULE{}) ->
         {ok, S1} ->
             {ok, S1}
     end;
+eval_step(danger_testing_only_always_allow, S0 = #?MODULE{}) ->
+    {ok, S0};
 eval_step({authenticate, Opts}, S0 = #?MODULE{uinfo = UInfo0}) ->
     #?MODULE{realms = Rs0} = S0,
     OptsMap = maps:from_list(Opts),

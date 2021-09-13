@@ -527,7 +527,17 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                 username => iolist_to_binary([Username]),
                 password => iolist_to_binary([Password])
             },
+            SkipDuo = rdpproxy:config([duo, bypass], false),
             case krb_auth:authenticate(Creds) of
+                {true, UInfo} when SkipDuo ->
+                    lager:debug("auth for ~p succeeded!", [Username]),
+                    Sess0 = #{user => Username, domain => Domain,
+                        password => Password},
+                    conn_ra:annotate(FPid, #{
+                        session => Sess0#{ip => undefined, password => snip}}),
+                    S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
+                    lager:debug("duo bypass for ~p", [Username]),
+                    mfa(allow, S1);
                 {true, UInfo} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #?MODULE{duoid = DuoId, peer = Peer} = S,

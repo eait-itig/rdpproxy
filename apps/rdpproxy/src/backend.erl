@@ -40,7 +40,7 @@
 
 -export([register_metrics/0]).
 
--export([eait_hostname_check_fun/0]).
+-export([eait_hostname_check_fun/1, hostname_match_regex_capture_fun/2]).
 
 % Keep last N small packets to search for disconnect reason
 -define(END_PKT_BUF, 32).
@@ -69,10 +69,22 @@ register_metrics() ->
         {help, "Duration of backend RDP probes which returned success"}]),
     ok.
 
-eait_hostname_check_fun() ->
-    {ok, MP} = re:compile("^[a-z]+[0-9]+[a-z]?-([0-9]+[.](labs[.])?eait[.]uq[.]edu[.]au)$"),
+eait_hostname_check_fun(HostInfo) ->
+    hostname_match_regex_capture_fun(
+        "^[a-z]+[0-9]+[a-z]?-([0-9]+[.](labs[.])?eait[.]uq[.]edu[.]au)$",
+        HostInfo).
+
+hostname_match_regex_capture_fun(Regex, HostInfo) ->
+    {ok, MP} = re:compile(Regex),
     fun
         ({dns_id, ID0}, {dNSName, ID1}) ->
+            case HostInfo of
+                #{ip := IP} ->
+                    session_ra:update_host(#{ip => IP,
+                        cert_hostname => iolist_to_binary([ID1])});
+                _ ->
+                    ok
+            end,
             LID0 = string:lowercase(ID0),
             LID1 = string:lowercase(ID1),
             case {re:run(LID0, MP), re:run(LID1, MP)} of
@@ -88,6 +100,21 @@ eait_hostname_check_fun() ->
                         true -> default
                     end
             end;
+        (_RefId, _PresentedID) ->
+            default
+    end.
+
+std_hostname_check_fun(HostInfo) ->
+    fun
+        ({dns_id, _ID0}, {dNSName, ID1}) ->
+            case HostInfo of
+                #{ip := IP} ->
+                    session_ra:update_host(#{ip => IP,
+                        cert_hostname => iolist_to_binary([ID1])});
+                _ ->
+                    ok
+            end,
+            default;
         (_RefId, _PresentedID) ->
             default
     end.
@@ -217,35 +244,42 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
 
     if HasSsl ->
         inet:setopts(Sock, [{packet, raw}]),
+        HostInfo = case session_ra:get_host(iolist_to_binary([Address])) of
+            {ok, HI} -> HI;
+            _ -> #{}
+        end,
         Opts0 = rdpproxy:config([backend, ssl_options], [{verify, verify_none}]),
         Opts1 = case lists:keytake(customize_hostname_check, 1, Opts0) of
             false ->
-                Opts0;
-            {value, CHCTuple = {_, CHC}, WithoutCHC} ->
+                Fun = std_hostname_check_fun(HostInfo),
+                [{customize_hostname_check, [{match_fun, Fun}]} | Opts0];
+            {value, {_, CHC}, WithoutCHC} ->
                 case lists:keytake(match_fun, 1, CHC) of
                     false ->
-                        [CHCTuple | WithoutCHC];
+                        Fun = std_hostname_check_fun(HostInfo),
+                        CHC1 = [{match_fun, Fun} | CHC],
+                        [{customize_hostname_check, CHC1} | WithoutCHC];
                     {value, {_, {Mod, Fun, Args}}, WithoutMF} ->
-                        NewFun = apply(Mod, Fun, Args),
+                        NewFun = apply(Mod, Fun, Args ++ [HostInfo]),
                         [{customize_hostname_check,
                             [{match_fun, NewFun} | WithoutMF]} | WithoutCHC];
                     {value, {_, _}, _} ->
                         Opts0
                 end
         end,
-        Opts2 = case session_ra:get_host(iolist_to_binary([Address])) of
-            {ok, #{cert_verify := default, hostname := Name}} ->
+        Opts2 = case HostInfo of
+            #{cert_verify := default, hostname := Name} ->
                 [{server_name_indication,
                   binary_to_list(iolist_to_binary([Name]))} | Opts1];
-            {ok, #{cert_verify := verify_peer, hostname := Name}} ->
+            #{cert_verify := verify_peer, hostname := Name} ->
                 [{server_name_indication,
                   binary_to_list(iolist_to_binary([Name]))},
                   {verify, verify_peer} |
                   lists:keydelete(verify, 1, Opts1)];
-            {ok, #{cert_verify := verify_none}} ->
+            #{cert_verify := verify_none} ->
                 [{verify, verify_none} |
                   lists:keydelete(verify, 1, Opts1)];
-            {ok, #{hostname := Name}} ->
+            #{hostname := Name} ->
                 [{server_name_indication,
                   binary_to_list(iolist_to_binary([Name]))} | Opts1];
             _ ->

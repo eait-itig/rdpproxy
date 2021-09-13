@@ -479,6 +479,10 @@ host_get([Ip]) ->
                 #{forward_creds := FwdOverride} -> io_lib:format("~p", [FwdOverride]);
                 _ -> "default"
             end,
+            CertHostname = case Host of
+                #{cert_hostname := H} -> [H];
+                _ -> "-"
+            end,
             LastRepTxt = case LastRep of
                 none -> "-";
                 _ ->
@@ -502,6 +506,7 @@ host_get([Ip]) ->
             io:format("REPORT STATE  ~s\n", [RepStateTxt]),
             io:format("CERT VERIFY   ~s\n", [CertVerify]),
             io:format("FWD CREDS     ~s\n", [ForwardCreds]),
+            io:format("LAST CERT     ~s\n", [CertHostname]),
             io:format("\n"),
             Fmt = "~17.. s  ~16.. s  ~10.. s  ~20.. s  ~20.. s  ~20.. s  ~20.. s\n",
             io:format(Fmt, ["HANDLE", "USER", "STATE", "START", "MIN", "EXPIRY", "PID"]),
