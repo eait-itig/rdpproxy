@@ -367,12 +367,21 @@ debug_print_data(Bin) ->
             ok
     end.
 
-terminate(_Reason, #?MODULE{listener = L, t0 = T0}) ->
+terminate(_Reason, #?MODULE{listener = L, t0 = T0, backend = undefined}) ->
     T1 = erlang:system_time(second),
     Dur = T1 - T0,
     prometheus_histogram:observe(rdp_frontend_connection_duration_seconds,
         [L], Dur),
-    ok.
+    ok;
+terminate(Reason, #?MODULE{backend = B} = S) ->
+    gen_fsm:send_event(B, close),
+    receive
+        {'EXIT', B, _Why} -> ok
+    after 5000 ->
+        #?MODULE{session = #{ip := Ip}} = S,
+            session_ra:host_error(Ip, backend_force_kill)
+    end,
+    terminate(Reason, S#?MODULE{backend = undefined}).
 
 -type shell_opts() :: [no_forward_creds].
 -spec parse_shell(binary()) -> {Hostname :: binary() | none, shell_opts(), FinalShell :: binary()}.
