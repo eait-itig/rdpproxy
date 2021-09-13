@@ -41,6 +41,7 @@
     pool_create/1,
     pool_update/1,
     pool_help/1,
+    host_certs/1,
     host_create/1,
     host_get/1,
     host_list/1,
@@ -561,6 +562,90 @@ host_test([Ip]) ->
             io:format("error: ~p\n", [Other]),
             session_ra:alloc_error(Hdl, Other)
     end.
+
+host_certs(Args) ->
+    MismatchOnly = lists:member("-m", Args),
+    T0 = erlang:system_time(second) - 3600*168,
+    Fmt = "~10.. s  ~16.. s  ~30.. s  ~30.. s  ~5.. s  ~s\n",
+    io:format(Fmt, ["POOL", "IP", "HOST", "CERT HOST", "MATCH", "ERRORS"]),
+    {ok, Hosts0} = session_ra:get_all_hosts(),
+    Hosts1 = case Args of
+        [] -> Hosts0;
+        ["-m"] -> Hosts0;
+        ["-m", PoolName] ->
+            PoolAtom = list_to_atom(PoolName),
+            lists:filter(fun(Host) ->
+                case Host of
+                    #{pool := PoolAtom} -> true;
+                    _ -> false
+                end
+            end, Hosts0);
+        [PoolName] ->
+            PoolAtom = list_to_atom(PoolName),
+            lists:filter(fun(Host) ->
+                case Host of
+                    #{pool := PoolAtom} -> true;
+                    _ -> false
+                end
+            end, Hosts0)
+    end,
+    MatchFun = public_key:pkix_verify_hostname_match_fun(https),
+    Hosts2 = lists:map(fun
+        (#{hostname := H0, cert_hostname := CH0} = Host0) ->
+            H1 = unicode:characters_to_list(H0, utf8),
+            CH1 = unicode:characters_to_list(CH0, utf8),
+            case MatchFun({dns_id, H1}, {dNSName, CH1}) of
+                true -> Host0#{mismatch => false};
+                false -> Host0#{mismatch => true}
+            end;
+        (Host0) ->
+            Host0#{mismatch => false}
+    end, Hosts1),
+    Hosts3 = case MismatchOnly of
+        false -> Hosts2;
+        true -> [H || H = #{mismatch := true} <- Hosts2]
+    end,
+    Hosts4 = lists:sort(fun(A, B) ->
+        #{hostname := HostA, pool := PoolA, enabled := EnaA,
+          mismatch := MMA} = A,
+        #{hostname := HostB, pool := PoolB, enabled := EnaB,
+          mismatch := MMB} = B,
+        if
+            PoolA < PoolB -> true;
+            PoolA > PoolB -> false;
+            EnaA and (not EnaB) -> true;
+            (not EnaA) and EnaB -> false;
+            MMA and (not MMB) -> true;
+            (not MMA) and MMB -> false;
+            HostA < HostB -> true;
+            HostA > HostB -> false
+        end
+    end, Hosts3),
+    lists:foreach(fun (Host) ->
+        #{ip := IP, pool := Pool, hostname := Hostname, mismatch := MM} = Host,
+        #{error_history := EH} = Host,
+        EHL = queue:to_list(EH),
+        Errs = lists:usort([E || #{error := E, time := T} <- EHL, T >= T0]),
+        ErrsStr = io_lib:format("~p", [Errs]),
+        PoolStr = io_lib:format("~p", [Pool]),
+        MMStr = case MM of
+            true -> "NO";
+            false -> ""
+        end,
+        CertHostStr = case Host of
+            #{cert_hostname := CH} -> CH;
+            _ -> "-"
+        end,
+        Fields = [
+            PoolStr,
+            IP,
+            Hostname,
+            CertHostStr,
+            MMStr,
+            ErrsStr
+        ],
+        io:format(Fmt, Fields)
+    end, Hosts4).
 
 host_list(Args) ->
     {ok, Hosts0} = session_ra:get_all_hosts(),
