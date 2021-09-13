@@ -685,18 +685,15 @@ conn_list(Opts) ->
             _ when (Backend =:= undefined) -> "-";
             _ -> Backend
         end,
-        PoolTxt = case Backend of
-            undefined -> "-";
-            _ ->
-                {ok, #{pool := Pool}} = session_ra:get_host(Backend),
-                io_lib:format("~p", [Pool])
+        BackendInfo = case session_ra:get_host(Backend) of
+            {ok, Map} -> Map;
+            _ -> #{}
         end,
-        HostnameTxt = case Backend of
-            undefined -> "-";
-            _ ->
-                {ok, #{hostname := HN}} = session_ra:get_host(Backend),
-                [HN]
+        PoolTxt = case BackendInfo of
+            #{pool := Pool} -> io_lib:format("~p", [Pool]);
+            _ -> "-"
         end,
+        HostnameTxt = [maps:get(hostname, BackendInfo, "-")],
         Peer = io_lib:format("~15.. s :~B", [inet:ntoa(Ip), Port]),
         [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
@@ -862,18 +859,15 @@ conn_user([User | Opts]) ->
             _ when (Backend =:= undefined) -> "-";
             _ -> Backend
         end,
-        PoolTxt = case Backend of
-            undefined -> "-";
-            _ ->
-                {ok, #{pool := Pool}} = session_ra:get_host(Backend),
-                io_lib:format("~p", [Pool])
+        BackendInfo = case session_ra:get_host(Backend) of
+            {ok, Map} -> Map;
+            _ -> #{}
         end,
-        HostnameTxt = case Backend of
-            undefined -> "-";
-            _ ->
-                {ok, #{hostname := HN}} = session_ra:get_host(Backend),
-                [HN]
+        PoolTxt = case BackendInfo of
+            #{pool := Pool} -> io_lib:format("~p", [Pool]);
+            _ -> "-"
         end,
+        HostnameTxt = [maps:get(hostname, BackendInfo, "-")],
         [_, Node] = binary:split(atom_to_binary(node(Pid), latin1), [<<"@">>]),
         case Conn of
             #{tsuds := Tsuds} ->
