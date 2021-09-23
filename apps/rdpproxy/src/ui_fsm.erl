@@ -1453,8 +1453,11 @@ choose({ui, {clicked, prevpagebtn}}, S = #?MODULE{devoffset = Off0, devs = Ds}) 
 choose({ui, {submitted, hostinp}}, S = #?MODULE{}) ->
     choose({ui, {clicked, itigbtn}}, S);
 
-choose({manual_host, HostText}, S = #?MODULE{root = Root}) ->
-    {Ip, Hostname} = case inet:parse_address(binary_to_list(HostText)) of
+choose({manual_host, HostText0}, S = #?MODULE{root = Root}) ->
+    HostText1 = unicode:characters_to_list(HostText0, utf8),
+    HostText2 = string:strip(HostText1, both),
+    HostText = unicode:characters_to_binary(HostText2, utf8),
+    {Ip, Hostname} = case inet:parse_address(HostText2) of
         {ok, IpInet} ->
             case session_ra:get_host(HostText) of
                 {ok, #{hostname := HN}} -> {HostText, HN};
@@ -1485,7 +1488,7 @@ choose({manual_host, HostText}, S = #?MODULE{root = Root}) ->
                 {[#{ip := Ip0, hostname := HN0} | _], _} -> {Ip0, HN0};
                 {[], [#{ip := Ip0, hostname := HN0}]} -> {Ip0, HN0};
                 _ ->
-                    case inet_res:gethostbyname(binary_to_list(HostText)) of
+                    case inet_res:gethostbyname(HostText2) of
                         {ok, #hostent{h_name = RealName, h_addr_list = [Addr]}} ->
                             AddrBin = iolist_to_binary([inet:ntoa(Addr)]),
                             RealNameBin = iolist_to_binary([RealName]),
