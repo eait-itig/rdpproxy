@@ -195,9 +195,15 @@ claim_handle(Hdl) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {claim_handle, T, Hdl, Pid}) of
         {ok, {ok, Data}, _Leader} ->
-            #{ip := Ip, user := User, password := PwCrypt} = Data,
+            #{ip := Ip, user := User, password := PwCrypt, tgts := TgtsCrypt} = Data,
             Pw = decrypt(PwCrypt, <<Hdl/binary, Ip/binary, User/binary>>),
-            {ok, Data#{password => Pw}};
+            Tgts = case TgtsCrypt of
+                none -> none;
+                _ ->
+                    binary_to_term(decrypt(
+                        TgtsCrypt, <<Hdl/binary, Ip/binary, User/binary>>))
+            end,
+            {ok, Data#{password => Pw, tgts => Tgts}};
         {ok, {conflict, OtherPid}, _Leader} ->
             exit(OtherPid, kill),
             timer:sleep(500),
@@ -211,7 +217,7 @@ get_handle(Hdl) ->
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {get_handle, T, Hdl}) of
         {ok, {ok, Data}, _Leader} ->
-            DataNoPw = maps:remove(password, Data),
+            DataNoPw = maps:remove(tgts, maps:remove(password, Data)),
             {ok, DataNoPw};
         {ok, Res, _Leader} -> Res;
         Else -> Else
@@ -291,9 +297,14 @@ get_prefs(Pool, User) ->
 allocate(Hdl, HD0) ->
     T = erlang:system_time(second),
     Id = crypto:rand_uniform(0, 1 bsl 31),
-    #{ip := Ip, user := User, password := Pw} = HD0,
+    #{ip := Ip, user := User, password := Pw, tgts := Tgts} = HD0,
     PwCrypt = encrypt(Pw, <<Hdl/binary, Ip/binary, User/binary>>),
-    HD1 = HD0#{password => PwCrypt, sessid => Id},
+    TgtsCrypt = case Tgts of
+        none -> none;
+        _ -> encrypt(
+            term_to_binary(Tgts), <<Hdl/binary, Ip/binary, User/binary>>)
+    end,
+    HD1 = HD0#{password => PwCrypt, sessid => Id, tgts => TgtsCrypt},
     case ra:process_command(?MODULE, {allocate, T, Hdl, HD1}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
@@ -620,6 +631,7 @@ process_rules(UInfo, T, [Rule | Rest]) ->
 
     % not filled out during "probe" state
     password => none | encrypted(),
+    tgts => none | encrypted(),
     domain => none | binary(),
     sessid => none | sessid()
     }.
@@ -659,6 +671,7 @@ process_rules(UInfo, T, [Rule | Rest]) ->
 
     % not filled out during "probe" state
     password => none | binary(),
+    tgts => none | #{string() => krb_proto:ticket()},
     domain => none | binary(),
     sessid => none | sessid()
     }.
@@ -1108,6 +1121,7 @@ apply(_Meta, {allocate, T, Hdl, Attrs}, S0 = #?MODULE{meta = M0, hdls = H0}) ->
             HD2 = maps:map(fun (K, V0) ->
                 case {K, Attrs} of
                     {password, #{K := V1}} when is_binary(V1) -> V1;
+                    {tgts, #{K := V1}} when is_binary(V1) -> V1;
                     {domain, #{K := V1}} when is_binary(V1) -> V1;
                     {sessid, #{K := V1}} when is_integer(V1) -> V1;
                     _ -> V0
@@ -1326,6 +1340,7 @@ begin_handle(Hdl, T, User, Ip, Pid, S0 = #?MODULE{}) ->
         ip => Ip,
         port => Port,
         password => none,
+        tgts => none,
         domain => none,
         sessid => none
     },

@@ -101,7 +101,8 @@ start_link(Frontend, L) ->
     devs :: undefined | [#{}],
     devoffset :: undefined | integer(),
     pools :: undefined | [#{}],
-    pooloffset :: undefined | integer()}).
+    pooloffset :: undefined | integer(),
+    duomsg :: undefined | binary()}).
 
 %% @private
 init([Frontend, L]) ->
@@ -529,22 +530,24 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
             },
             SkipDuo = rdpproxy:config([duo, bypass], false),
             case krb_auth:authenticate(Creds) of
-                {true, UInfo} when SkipDuo ->
+                {true, UInfo, Tgts} when SkipDuo ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     Sess0 = #{user => Username, domain => Domain,
-                        password => Password},
+                        password => Password, tgts => Tgts},
                     conn_ra:annotate(FPid, #{
-                        session => Sess0#{ip => undefined, password => snip}}),
+                        session => Sess0#{ip => undefined, password => snip,
+                                          tgts => snip}}),
                     S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
                     lager:debug("duo bypass for ~p", [Username]),
                     mfa(allow, S1);
-                {true, UInfo} ->
+                {true, UInfo, Tgts} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     #?MODULE{duoid = DuoId, peer = Peer} = S,
                     Sess0 = #{user => Username, domain => Domain,
-                        password => Password},
+                        password => Password, tgts => Tgts},
                     conn_ra:annotate(FPid, #{
-                        session => Sess0#{ip => undefined, password => snip}}),
+                        session => Sess0#{ip => undefined, password => snip,
+                                          tgts => snip}}),
                     S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
                     Args = #{
                         <<"username">> => Username,
@@ -577,6 +580,10 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                                     lager:debug("sending ~p to duo screen", [Username]),
                                     mfa(setup_ui, S1#?MODULE{duodevs = Devs})
                             end;
+                        {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := Msg}} ->
+                            S2 = S1#?MODULE{duomsg = Msg},
+                            lager:debug("duo deny for ~p: ~p", [Username, Msg]),
+                            login(mfa_deny, S2);
                         Else ->
                             lager:debug("duo preauth else for ~p: ~p", [Username, Else]),
                             login(invalid_login, S)
@@ -602,6 +609,20 @@ login(invalid_login, S = #?MODULE{}) ->
     ],
     handle_root_events(login, S, Events);
 
+login(mfa_deny, S = #?MODULE{duomsg = DuoMsg}) ->
+    BgColour = bgcolour(),
+    LightRed = {1.0, 0.8, 0.8},
+    Events = [
+        { [{id, loginlyt}], {remove_child, {id, badlbl}} },
+        { [{id, loginlyt}], {add_child, {before, {id, loginbtn}},
+            #widget{id = badlbl, mod = ui_label, size = {400.0, 30.0}}
+            } },
+        { [{id, badlbl}],   {init, center, <<"Duo MFA denied access:\n", DuoMsg/binary>>} },
+        { [{id, badlbl}],   {set_fgcolor, LightRed} },
+        { [{id, badlbl}],   {set_bgcolor, BgColour} }
+    ],
+    handle_root_events(login, S, Events);
+
 login(mfa_enroll, S = #?MODULE{}) ->
     BgColour = bgcolour(),
     LightRed = {1.0, 0.8, 0.8},
@@ -610,7 +631,7 @@ login(mfa_enroll, S = #?MODULE{}) ->
         { [{id, loginlyt}], {add_child, {before, {id, loginbtn}},
             #widget{id = badlbl, mod = ui_label, size = {400.0, 15.0}}
             } },
-        { [{id, badlbl}],   {init, center, <<"MFA required but not enrolled">>} },
+        { [{id, badlbl}],   {init, center, <<"Duo MFA required but not enrolled">>} },
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, BgColour} }
     ],
@@ -939,7 +960,7 @@ mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
                     S2 = case lists:member(no_forward_creds, Opts) of
                         true ->
                             #?MODULE{sess = Sess0} = S,
-                            Sess1 = Sess0#{password => <<"">>},
+                            Sess1 = Sess0#{password => <<>>, tgts => #{}},
                             S1#?MODULE{sess = Sess1};
                         false ->
                             S1
@@ -1520,7 +1541,7 @@ choose({ui, {clicked, {choosebtn, Ip, Hostname}}}, S = #?MODULE{sess = Sess0, ro
     end,
     Sess1 = case FwdCreds of
         true -> Sess0#{ip => Ip, port => 3389};
-        false -> Sess0#{ip => Ip, port => 3389, password => <<"">>}
+        false -> Sess0#{ip => Ip, port => 3389, password => <<>>, tgts => #{}}
     end,
     _ = session_ra:create_host(#{
         pool => default,
@@ -1867,7 +1888,7 @@ waiting({allocated_session, AllocPid, Sess}, S = #?MODULE{frontend = F = {FPid, 
                 Else -> lager:debug("nms:bump_count returned ~p", [Else])
             end
     end,
-    conn_ra:annotate(FPid, #{session => Sess#{password => snip}}),
+    conn_ra:annotate(FPid, #{session => Sess#{password => snip, tgts => snip}}),
     do_ping_annotate(S),
     rdp_server:send_redirect(F, Cookie, SessId,
         rdpproxy:config([frontend, L, hostname], <<"localhost">>)),

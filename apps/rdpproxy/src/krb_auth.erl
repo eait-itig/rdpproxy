@@ -54,6 +54,8 @@ record_failure(Stage, Reason) ->
     groups => [krb_ms_pac:sid()]
     }.
 
+-type tgts() :: #{string() => krb_proto:ticket()}.
+
 -record(realm_state, {
     pid :: pid(),
     tgt :: krb_proto:ticket()
@@ -190,6 +192,7 @@ eval_step({check_pac, Opts}, S0 = #?MODULE{svctkt = SvcTkt}) ->
     end.
 
 
+-spec authenticate(user_info()) -> false | {true, user_info(), tgts()}.
 authenticate(#{username := U, password := P} = Args) ->
     Krb5Config = application:get_env(rdpproxy, krb5, []),
 
@@ -207,7 +210,7 @@ authenticate(#{username := U, password := P} = Args) ->
 
     S0 = #?MODULE{uinfo = UInfo0},
     case eval_step(Krb5Config, S0) of
-        {ok, #?MODULE{uinfo = UInfo1}} ->
+        {ok, #?MODULE{uinfo = UInfo1, realms = Rs}} ->
             UInfo2 = maps:remove(username, UInfo1),
             UInfo3 = maps:remove(password, UInfo2),
             UInfo4 = UInfo3#{user => U},
@@ -221,7 +224,8 @@ authenticate(#{username := U, password := P} = Args) ->
                     conn_ra:auth_attempt(CSid, Attempt);
                 _ -> ok
             end,
-            {true, UInfo4};
+            Tgts = maps:map(fun (K, #realm_state{tgt = TGT}) -> TGT end, Rs),
+            {true, UInfo4, Tgts};
         {error, Why} ->
             record_failure(krb5_login, Why),
             false
