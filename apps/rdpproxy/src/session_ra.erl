@@ -1260,7 +1260,7 @@ expire_hdls(T, S0 = #?MODULE{hdlexp = HT0}) ->
 kill_handle(Hdl, S0 = #?MODULE{hdls = H0, meta = M0}) ->
     % No need to remove from the expiry tree (we're only called in expire_hdls)
     % Remove the record of the handle itself
-    #{Hdl := #{ip := Ip, user := U}} = H0,
+    #{Hdl := #{ip := Ip}} = H0,
     H1 = maps:remove(Hdl, H0),
     % Also remove the handle from the hosts handles list
     #{Ip := HM0 = #{handles := HH0, pool := P}} = M0,
@@ -1511,7 +1511,11 @@ user_existing_hosts_multi(User, Pool, #?MODULE{meta = M0, users = U0, hdls = H0}
 
 -spec user_existing_hosts_single(username(), pool(), #?MODULE{}) -> [ipstr()].
 user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
-                                                    users = U0, hdls = H0}) ->
+                                                pools = P0, users = U0,
+                                                hdls = H0}) ->
+    #{Pool := PoolConfig} = P0,
+    RolePrioMap = maps:get(role_priority, PoolConfig, #{default => 0}),
+    HdlExpiryTime = maps:get(hdl_expiry_time, PoolConfig, 900),
     % First, look at all recent reservations which belong to this user.
     % If we have any, keep track of the last handle we had each host (so
     % we can see if it was an error or a good alloc)
@@ -1586,6 +1590,33 @@ user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
             end;
         (_Ip, _) -> false
     end, WithoutDisabled),
+    % Attempt to filter out old sessions on "overflow" machines. If the machine
+    % has a negative role priority in the pool, AND the session started more
+    % than one handle expiry time ago, AND the machine reports as available,
+    % exclude it.
+    WithoutInPerson = maps:filter(fun
+        (Ip, {_, #{state := ok, time := T0}}) ->
+            case M0 of
+                #{Ip := HM} ->
+                    Role = maps:get(role, HM, none),
+                    RolePrio = case RolePrioMap of
+                        #{Role := RPN} -> RPN;
+                        #{default := RPN} -> RPN;
+                        _ -> 0
+                    end,
+                    #{report_state := {RepState, _},
+                      last_report := RepTime} = HM,
+                    case RepState of
+                        available when (RepTime =:= none) -> true;
+                        available when (RepTime >= T0 + HdlExpiryTime)
+                                   and (Now - T0 > HdlExpiryTime)
+                                   and (RolePrio < 0) -> false;
+                        _ -> true
+                    end;
+                _ -> false
+            end;
+        (_Ip, _) -> false
+    end, WithoutOtherResvd),
     % Remove machines which are in error state and have had errors in the
     % last 3 hours
     WithoutErrors = maps:filter(fun
@@ -1612,7 +1643,7 @@ user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
                 true -> true
             end;
         (_Ip, _) -> false
-    end, WithoutOtherResvd),
+    end, WithoutInPerson),
     ToGive = maps:keys(WithoutErrors),
     lists:sort(fun (IpA, IpB) ->
         #{IpA := A, IpB := B} = M0,
