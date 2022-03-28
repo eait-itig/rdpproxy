@@ -586,7 +586,15 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                             login(mfa_deny, S2);
                         Else ->
                             lager:debug("duo preauth else for ~p: ~p", [Username, Else]),
-                            login(invalid_login, S)
+                            case remember_ra:check({DuoId, Username}) of
+                                true ->
+                                    lager:debug("skipping duo for ~p due to remember me", [Username]),
+                                    mfa(allow, S1);
+                                false ->
+                                    Msg = iolist_to_binary(io_lib:format("~999p", [Else])),
+                                    S2 = S1#?MODULE{duomsg = Msg},
+                                    login(mfa_deny, S2)
+                            end
                     end;
                 false ->
                     lager:debug("auth for ~p failed", [Username]),
