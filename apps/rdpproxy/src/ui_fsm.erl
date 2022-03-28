@@ -582,10 +582,10 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                             end;
                         {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := Msg}} ->
                             S2 = S1#?MODULE{duomsg = Msg},
-                            lager:debug("duo deny for ~p: ~p", [Username, Msg]),
+                            lager:debug("duo deny for ~p: ~p (id = ~p)", [Username, Msg, DuoId]),
                             login(mfa_deny, S2);
                         Else ->
-                            lager:debug("duo preauth else for ~p: ~p", [Username, Else]),
+                            lager:debug("duo preauth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
                             case remember_ra:check({DuoId, Username}) of
                                 true ->
                                     lager:debug("skipping duo for ~p due to remember me", [Username]),
