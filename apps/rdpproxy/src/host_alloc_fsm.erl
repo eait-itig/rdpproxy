@@ -54,10 +54,10 @@ init([From, Pool, Sess = #{user := U}]) ->
         sess = Sess}, 0}.
 
 reserve_pool(timeout, S = #?MODULE{pool = Pool, sess = Sess}) ->
-    #{user := U, password := Pw, domain := D} = Sess,
+    #{user := U, password := Pw, domain := D, tgts := Tgts} = Sess,
     case session_ra:reserve(Pool, U) of
         {ok, Hdl, HD0} ->
-            Sess1 = HD0#{password => Pw, domain => D},
+            Sess1 = HD0#{password => Pw, tgts => Tgts, domain => D},
             S1 = S#?MODULE{sess = Sess1, hdl = Hdl, retries = 3, errs = 0},
             {next_state, probe, S1, 0};
         {error, no_hosts} ->
@@ -66,9 +66,9 @@ reserve_pool(timeout, S = #?MODULE{pool = Pool, sess = Sess}) ->
     end.
 
 reserve_ip(timeout, S = #?MODULE{sess = Sess}) ->
-    #{ip := Ip, user := U, password := Pw, domain := D} = Sess,
+    #{ip := Ip, user := U, password := Pw, tgts := Tgts, domain := D} = Sess,
     {ok, Hdl, HD0} = session_ra:reserve_ip(U, Ip),
-    Sess1 = HD0#{password => Pw, domain => D},
+    Sess1 = HD0#{password => Pw, domain => D, tgts => Tgts},
     S1 = S#?MODULE{sess = Sess1, hdl = Hdl, retries = unlimited, errs = 0},
     {next_state, probe, S1, 0}.
 
