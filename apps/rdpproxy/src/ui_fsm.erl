@@ -933,10 +933,11 @@ mfa({submit_otp, _DevId, Code}, S = #?MODULE{duo = Duo, root = Root, peer = Peer
     [Chk] = ui:select(Root, [{id, rmbrchk}]),
     S1 = S#?MODULE{duoremember = ui_checkbox:get_checked(Chk)},
     case duo:auth(Duo, Args) of
-        {ok, #{<<"result">> := <<"deny">>}} ->
-            lager:debug("user gave an invalid OTP code"),
+        {ok, R = #{<<"result">> := <<"deny">>}} ->
+            lager:debug("user gave an invalid OTP code: ~p", [R]),
             mfa(mfa_deny, S);
-        {error, _} ->
+        Err = {error, _} ->
+            lager:debug("error reaching duo: ~p", [Err]),
             mfa(mfa_deny, S);
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("used an OTP code, proceeding"),
@@ -1120,7 +1121,12 @@ mfa_waiting({auth_finished, Result}, S = #?MODULE{}) ->
         #{<<"result">> := <<"allow">>} ->
             lager:debug("mfa finished, proceeding"),
             mfa(allow, S);
-        _ ->
+        R = #{<<"result">> := <<"deny">>} ->
+            lager:debug("mfa denied async: ~p", [R]),
+            {next_state, mfa, S1} = mfa(setup_ui, S),
+            mfa(mfa_deny, S1);
+        Other ->
+            lager:debug("weird result from mfa wait: ~p", [Other]),
             mfa(setup_ui, S)
     end;
 
