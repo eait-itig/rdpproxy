@@ -389,10 +389,11 @@ proxy_intercept({data, Bin}, #?MODULE{server = Srv, origcr = OrigCr} = Data) ->
             TsudSvrCore1 = TsudSvrCore0#tsud_svr_core{requested = OrigCr#x224_cr.rdp_protocols},
             lager:debug("rewriting tsud: ~p", [TsudSvrCore1]),
             Tsuds1 = lists:keyreplace(tsud_svr_core, 1, Tsuds0, TsudSvrCore1),
+            Tsuds2 = lists:keydelete(tsud_svr_multitransport, 1, Tsuds1),
             TsudsBin1 = lists:foldl(fun(Tsud, SoFar) ->
                 {ok, TsudBin} = tsud:encode(Tsud),
                 <<SoFar/binary, TsudBin/binary>>
-            end, <<>>, Tsuds1),
+            end, <<>>, Tsuds2),
             {ok, OutCrData} = mcsgcc:encode_cr(Cr#mcs_cr{data = TsudsBin1}),
             {ok, OutDtData} = x224:encode(#x224_dt{data = OutCrData}),
             {ok, OutPkt} = tpkt:encode(OutDtData),

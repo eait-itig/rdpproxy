@@ -188,33 +188,34 @@ handle_raw_data(Bin, _Srv,
             lager:debug("core tsud: ~s", [tsud:pretty_print(TsudCore0)]),
             lager:debug("cluster tsud: ~s", [tsud:pretty_print(TsudCluster0)]),
 
-            case {HasGfx, Has32Bpp} of
-                {true, false} ->
-                    % Remove the redirection info while we're here.
-                    TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
-                    lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCluster1)]),
-                    Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),
+            % Remove the redirection info
+            TsudCluster1 = TsudCluster0#tsud_cluster{sessionid = none},
+            lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCluster1)]),
+            Tsuds1 = lists:keyreplace(tsud_cluster, 1, Tsuds0, TsudCluster1),
 
+            Tsuds2 = case {HasGfx, Has32Bpp} of
+                {true, false} ->
                     Colors1 = ['32bpp' | Colors0],
                     Color1 = '32bpp',
                     Caps1 = ['want_32bpp' | Caps0],
                     TsudCore1 = TsudCore0#tsud_core{colors = Colors1, color = Color1, capabilities = Caps1},
                     lager:debug("rewriting client tsud: ~s", [tsud:pretty_print(TsudCore1)]),
-                    Tsuds2 = lists:keyreplace(tsud_core, 1, Tsuds1, TsudCore1),
-
-                    TsudsBin1 = iolist_to_binary(lists:map(fun(Tsud) ->
-                        {ok, TsudBin} = tsud:encode(Tsud),
-                        TsudBin
-                    end, Tsuds2)),
-                    {ok, OutCiData} = mcsgcc:encode_ci(McsCi#mcs_ci{data = TsudsBin1}),
-                    {ok, OutDtData} = x224:encode(#x224_dt{data = OutCiData}),
-                    {ok, OutPkt} = tpkt:encode(OutDtData),
-                    gen_fsm:send_event(B, {frontend_data, <<OutPkt/binary, Rem/binary>>}),
-                    {ok, S1};
+                    lists:keyreplace(tsud_core, 1, Tsuds1, TsudCore1);
                 _ ->
-                    gen_fsm:send_event(B, {frontend_data, Bin}),
-                    {ok, S1}
-            end;
+                    Tsuds1
+            end,
+
+            Tsuds3 = lists:keydelete(tsud_multitransport, 1, Tsuds2),
+
+            TsudsBin1 = iolist_to_binary(lists:map(fun(Tsud) ->
+                {ok, TsudBin} = tsud:encode(Tsud),
+                TsudBin
+            end, Tsuds3)),
+            {ok, OutCiData} = mcsgcc:encode_ci(McsCi#mcs_ci{data = TsudsBin1}),
+            {ok, OutDtData} = x224:encode(#x224_dt{data = OutCiData}),
+            {ok, OutPkt} = tpkt:encode(OutDtData),
+            gen_fsm:send_event(B, {frontend_data, <<OutPkt/binary, Rem/binary>>}),
+            {ok, S1};
         %
         % The last thing we have to rewrite before we can just be a data shovel
         % is the ts_info PDU. Here we'll forcibly inject the domain, username
