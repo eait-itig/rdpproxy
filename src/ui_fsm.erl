@@ -33,6 +33,7 @@
 -include_lib("rdp_proto/include/rdpp.hrl").
 -include_lib("rdp_proto/include/kbd.hrl").
 -include_lib("rdp_proto/include/tsud.hrl").
+-include_lib("rdp_proto/include/rdpdr.hrl").
 -include_lib("cairerl/include/cairerl.hrl").
 -include_lib("rdp_ui/include/ui.hrl").
 
@@ -183,6 +184,37 @@ handle_paste(TextInpId, State, S = #?MODULE{frontend = F, root = Root}) ->
             end;
         _ ->
             {next_state, State, S}
+    end.
+
+check_scard(S = #?MODULE{frontend = F}) ->
+    case rdp_server:get_vchan_pid(F, rdpdr_fsm) of
+        {ok, RdpDr} ->
+            case rdpdr_fsm:get_devices(RdpDr) of
+                {ok, Devs} ->
+                    case lists:keyfind(rdpdr_dev_smartcard, 1, Devs) of
+                        false ->
+                            {error, no_scard};
+                        #rdpdr_dev_smartcard{id = DevId} ->
+                            case rdpdr_scard:open(RdpDr, DevId, user) of
+                                {ok, SC0} ->
+                                    case (catch scard_auth:check(SC0)) of
+                                        {'EXIT', Why} ->
+                                            lager:debug("probing scard failed:"
+                                                " ~p", [Why]),
+                                            {error, check_error};
+                                        Other -> Other
+                                    end;
+                                Err ->
+                                    lager:debug("failed to establish ctx: ~p",
+                                        [Err])
+                            end
+                    end;
+                Err ->
+                    lager:debug("failed to get rdpdr devs: ~p", [Err]),
+                    Err
+            end;
+        _ ->
+            {error, no_rdpdr}
     end.
 
 bgcolour() ->
@@ -528,7 +560,13 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                 username => iolist_to_binary([Username]),
                 password => iolist_to_binary([Password])
             },
-            SkipDuo = rdpproxy:config([duo, bypass], false),
+            HasValidCard = case check_scard(S) of
+                {ok, _Piv, _Rdr, _SC0} -> true;
+                _ -> false
+            end,
+            SkipWithCard = rdpproxy:config([smartcard, bypass_duo_with_cak], false),
+            SkipDuo = rdpproxy:config([duo, bypass], false) or
+                (HasValidCard and SkipWithCard),
             case krb_auth:authenticate(Creds) of
                 {true, UInfo, Tgts} when SkipDuo ->
                     lager:debug("auth for ~p succeeded!", [Username]),

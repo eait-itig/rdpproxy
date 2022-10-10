@@ -277,6 +277,17 @@
             %%
             {remember_time, 36000}
         ]},
+        {smartcard, [
+            %%
+            %% Path to CA certificate
+            %%
+            %{ca_cert, "/etc/ssl/certs/EAIT_Internal_CA.pem"},
+            %%
+            %% Use PIV 9E key to bypass Duo, if the cert is signed by the CA
+            %% and validates.
+            %%
+            %{bypass_duo_with_cak, true}
+        ]},
         {nms_api, [
             %%
             %% Options for talking to NMS (if using nms_choice mode, ignored
