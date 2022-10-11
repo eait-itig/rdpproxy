@@ -80,6 +80,8 @@ init(_Args) ->
     {ok, _Pid} = http_api:start(),
     {ok, _MetricsPid} = metrics_http:start(),
 
+    {ok, _} = ra_system:start_default(),
+
     _ = (catch conn_ra:start()),
     _ = (catch session_ra:start()),
     _ = (catch remember_ra:start()),

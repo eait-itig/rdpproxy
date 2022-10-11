@@ -41,7 +41,8 @@ start() ->
     Config = application:get_env(rdpproxy, ra, []),
     Nodes = proplists:get_value(nodes, Config, [node() | nodes()]),
     Servers = [{?MODULE, N} || N <- Nodes],
-    ra:start_or_restart_cluster(?MODULE_STRING, {module, ?MODULE, #{}}, Servers).
+    ra:start_or_restart_cluster(default,
+        ?MODULE_STRING, {module, ?MODULE, #{}}, Servers).
 
 register_metrics() ->
     prometheus_gauge:new([
