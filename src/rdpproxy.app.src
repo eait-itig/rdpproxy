@@ -21,7 +21,8 @@
                   rdp_ui,
                   prometheus,
                   cowboy,
-                  apdu
+                  apdu,
+                  inets
                  ]},
   {mod, { rdpproxy, []}},
   {env, [
