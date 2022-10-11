@@ -352,12 +352,12 @@
     {lager, [
         {handlers, [
             {lager_console_backend, [{level, debug}]},
-            {lager_file_backend, [{file, "log/console.log"}, {level, info}]},
-            {lager_file_backend, [{file, "log/error.log"}, {level, error}]},
-            {lager_file_backend, [{file, "log/debug.log"}, {level, debug}, {count, 10}]}
+            {lager_file_backend, [{file, "console.log"}, {level, info}]},
+            {lager_file_backend, [{file, "error.log"}, {level, error}]},
+            {lager_file_backend, [{file, "debug.log"}, {level, debug}, {count, 10}]}
         ]},
 
-        {crash_log, "log/crash.log"},
+        {crash_log, "crash.log"},
         {crash_log_date, "$D0"},
         {crash_log_count, 5},
 
