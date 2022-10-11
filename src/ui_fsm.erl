@@ -195,7 +195,7 @@ check_scard(S = #?MODULE{frontend = F}) ->
                         false ->
                             {error, no_scard};
                         #rdpdr_dev_smartcard{id = DevId} ->
-                            case rdpdr_scard:open(RdpDr, DevId, user) of
+                            case rdpdr_scard:open(RdpDr, DevId, system) of
                                 {ok, SC0} ->
                                     case (catch scard_auth:check(SC0)) of
                                         {'EXIT', Why} ->
