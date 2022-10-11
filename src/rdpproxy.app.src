@@ -20,7 +20,8 @@
                   rdp_proto,
                   rdp_ui,
                   prometheus,
-                  cowboy
+                  cowboy,
+                  apdu
                  ]},
   {mod, { rdpproxy, []}},
   {env, [
