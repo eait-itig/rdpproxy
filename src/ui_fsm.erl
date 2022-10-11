@@ -561,7 +561,11 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                 password => iolist_to_binary([Password])
             },
             HasValidCard = case check_scard(S) of
-                {ok, _Piv, _Rdr, _SC0} -> true;
+                {ok, _Piv, _Rdr, SC0} ->
+                    % for now just disconnect, we only check the CAK
+                    {ok, SC1} = rdpdr_scard:disconnect(leave, SC0),
+                    rdpdr_scard:close(SC1),
+                    true;
                 _ -> false
             end,
             SkipWithCard = rdpproxy:config([smartcard, bypass_duo_with_cak], false),
