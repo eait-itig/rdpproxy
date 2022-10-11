@@ -36,10 +36,20 @@
     ]).
 
 check(SC0) ->
-    {ok, Groups, SC1} = rdpdr_scard:list_groups(SC0),
-    [Group0 | _] = Groups,
-    {ok, Readers, SC2} = rdpdr_scard:list_readers(Group0, SC1),
-    check_rdr(Readers, SC2).
+    case rdpdr_scard:list_groups(SC0) of
+        {ok, Groups, SC1} ->
+            [Group0 | _] = Groups,
+            {ok, Readers, SC2} = rdpdr_scard:list_readers(Group0, SC1),
+            check_rdr(Readers, SC2);
+        _ ->
+            case rdpdr_scard:list_readers("SCard$DefaultReaders", SC0) of
+                {ok, Readers, SC1} ->
+                    check_rdr(Readers, SC1);
+                _ ->
+                    {ok, Readers, SC1} = rdpdr_scard:list_readers("", SC0),
+                    check_rdr(Readers, SC1)
+            end
+    end.
 
 cert_to_pubkey(#'OTPCertificate'{} = Cert) ->
     #'OTPCertificate'{
