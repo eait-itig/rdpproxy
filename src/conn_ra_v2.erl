@@ -32,6 +32,7 @@
 
 -include_lib("rdp_proto/include/rdpp.hrl").
 -include_lib("rdp_proto/include/tsud.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 -export([init/1, apply/3, state_enter/2]).
 -export([version/0]).
@@ -324,7 +325,70 @@ conn_to_json(C) ->
             };
         _ -> J9
     end,
-    [jsx:encode(J10), $\n].
+    J11 = case C of
+        #{scard := SCard} ->
+            #{cak_subj := CakSubj, auth_subj := AuthSubj,
+              cak_serial := CakSerial, auth_serial := AuthSerial} = SCard,
+            J10#{
+                <<"smartcard_info">> => #{
+                    <<"cak">> => #{
+                        <<"dn">> => dn_to_str(CakSubj),
+                        <<"serial">> => CakSerial
+                    },
+                    <<"auth">> => #{
+                        <<"dn">> => dn_to_str(AuthSubj),
+                        <<"serial">> => AuthSerial
+                    }
+                }
+            };
+        _ -> J10
+    end,
+    J12 = case C of
+        #{scard := #{yk_version := YKVer, yk_serial := YKSerial}} ->
+            J11#{
+                <<"yubikey">> => #{
+                    <<"fw_version">> => yk_ver_to_string(YKVer),
+                    <<"serial">> => YKSerial
+                }
+            };
+        #{scard := #{yk_version := YKVer}} ->
+            J11#{
+                <<"yubikey">> => #{
+                    <<"fw_version">> => yk_ver_to_string(YKVer)
+                }
+            };
+        _ -> J11
+    end,
+    [jsx:encode(J12), $\n].
+
+dn_oid_to_str(?'id-at-commonName') -> "cn";
+dn_oid_to_str(?'id-at-countryName') -> "c";
+dn_oid_to_str(?'id-at-title') -> "title";
+dn_oid_to_str(?'id-at-organizationalUnitName') -> "ou";
+dn_oid_to_str(?'id-at-organizationName') -> "o";
+dn_oid_to_str(?'id-at-stateOrProvinceName') -> "s";
+dn_oid_to_str(?'id-at-localityName') -> "l";
+dn_oid_to_str(?'id-domainComponent') -> "dc";
+dn_oid_to_str(?'id-emailAddress') -> "emailAddress";
+dn_oid_to_str(Tuple) ->
+    lists:join(".", [integer_to_list(X) || X <- tuple_to_list(Tuple)]).
+
+dn_to_str_parts([]) -> [];
+dn_to_str_parts([[#'AttributeTypeAndValue'{type = A, value = V}] | Rest]) ->
+    StrV = case V of
+        {_Type, VV} when is_binary(VV) -> VV;
+        VV when is_binary(VV) -> VV;
+        VV when is_list(VV) -> VV
+    end,
+    [[dn_oid_to_str(A), $=, StrV] | dn_to_str_parts(Rest)].
+
+dn_to_str(DN) ->
+    iolist_to_binary(lists:join(", ", lists:reverse(dn_to_str_parts(DN)))).
+
+yk_ver_to_string({V0,V1,V2}) ->
+    <<(integer_to_binary(V0))/binary, ".",
+      (integer_to_binary(V1))/binary, ".",
+      (integer_to_binary(V2))/binary>>.
 
 evict_hour(Hour, S0 = #?MODULE{hours = H0, hourlives = HL0, conns = C0}) ->
     #{Hour := #{count := 0, conns := ConnKeys}} = H0,

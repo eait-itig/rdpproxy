@@ -555,17 +555,26 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
             lager:debug("supplied empty password for ~p, rejecting", [Username]),
             login(invalid_login, S);
         _ ->
+            UsernameBin = iolist_to_binary([Username]),
             Creds = #{
                 session => FPid,
-                username => iolist_to_binary([Username]),
+                username => UsernameBin,
                 password => iolist_to_binary([Password])
             },
             HasValidCard = case check_scard(S) of
-                {ok, _Piv, _Rdr, SC0} ->
+                {ok, _Piv, _Rdr, SC0, Info} ->
                     % for now just disconnect, we only check the CAK
                     {ok, SC1} = rdpdr_scard:disconnect(leave, SC0),
                     rdpdr_scard:close(SC1),
-                    true;
+                    conn_ra:annotate(FPid, #{scard => Info}),
+                    case Info of
+                        #{auth_cn := {_, UsernameBin}} ->
+                            true;
+                        #{auth_cn := AuthCN} ->
+                            lager:debug("auth CN (~p) does not match login (~p)",
+                                [AuthCN, UsernameBin]),
+                            false
+                    end;
                 _ -> false
             end,
             SkipWithCard = rdpproxy:config([smartcard, bypass_duo_with_cak], false),
@@ -578,7 +587,8 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                         password => Password, tgts => Tgts},
                     conn_ra:annotate(FPid, #{
                         session => Sess0#{ip => undefined, password => snip,
-                                          tgts => snip}}),
+                                          tgts => snip},
+                        duo_preauth => <<"bypass">>}),
                     S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
                     lager:debug("duo bypass for ~p", [Username]),
                     mfa(allow, S1);

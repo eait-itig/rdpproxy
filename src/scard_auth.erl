@@ -172,7 +172,7 @@ get_dn_attr([L | Rest], Attr) when is_list(L) ->
 get_dn_attr([_ | Rest], Attr) ->
     get_dn_attr(Rest, Attr).
 
-check_cak(Piv, Rdr, SC0) ->
+check_cak(Piv, Rdr, SC0, Info0) ->
     {ok, [{ok, CAKCert}]} = apdu_transform:command(Piv, {read_cert, piv_card_auth}),
     #'OTPCertificate'{tbsCertificate = TBS} = CAKCert,
     #'OTPTBSCertificate'{subject = {rdnSequence, Subj},
@@ -194,8 +194,19 @@ check_cak(Piv, Rdr, SC0) ->
                 Other -> error({no_ou_match, Other})
             end
     end,
+    {ok, [{ok, AuthCert}]} = apdu_transform:command(Piv, {read_cert, piv_auth}),
+    #'OTPCertificate'{tbsCertificate = ATBS} = AuthCert,
+    #'OTPTBSCertificate'{subject = {rdnSequence, AuthSubj},
+                         serialNumber = AuthSerial} = ATBS,
     apdu_transform:end_transaction(Piv),
-    {ok, Piv, Rdr, SC0}.
+    Info1 = Info0#{
+        cak_subj => Subj,
+        cak_serial => Serial,
+        auth_subj => AuthSubj,
+        auth_serial => AuthSerial,
+        auth_cn => get_dn_attr(AuthSubj, ?'id-at-commonName')
+    },
+    {ok, Piv, Rdr, SC0, Info1}.
 
 check_rdr([], SC0) ->
     rdpdr_scard:close(SC0),
@@ -212,20 +223,23 @@ check_rdr([Rdr | Rest], SC0) ->
                         {ok, [{ok, #{guid := <<Guid:128/big>>}}]} ->
                             lager:debug("PIV applet v~B in ~p, GUID ~.16B",
                                 [V, Rdr, Guid]),
-                            case apdu_transform:command(Piv, yk_get_version) of
+                            Info0 = #{},
+                            Info1 = case apdu_transform:command(Piv, yk_get_version) of
                                 {ok, [{ok, Version}]} ->
                                     lager:debug("YubiKey firmware version ~p",
-                                        [Version]);
+                                        [Version]),
+                                    Info0#{yk_version => Version};
                                 _ ->
-                                    ok
+                                    Info0
                             end,
-                            case apdu_transform:command(Piv, yk_get_serial) of
+                            Info2 = case apdu_transform:command(Piv, yk_get_serial) of
                                 {ok, [{ok, Serial}]} ->
-                                    lager:debug("YubiKey serial ~B", [Serial]);
+                                    lager:debug("YubiKey serial ~B", [Serial]),
+                                    Info1#{yk_serial => Serial};
                                 _ ->
-                                    ok
+                                    Info1
                             end,
-                            case (catch check_cak(Piv, Rdr, SC1)) of
+                            case (catch check_cak(Piv, Rdr, SC1, Info2)) of
                                 {'EXIT', Why} ->
                                     lager:debug("failed to verify cak: ~p",
                                         [Why]),
