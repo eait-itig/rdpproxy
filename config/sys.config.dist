@@ -286,7 +286,11 @@
             %% Use PIV 9E key to bypass Duo, if the cert is signed by the CA
             %% and validates.
             %%
-            %{bypass_duo_with_cak, true}
+            %{bypass_duo_with_cak, true},
+            %%
+            %% Require a specific OU= attribute in the CAK DN
+            %%
+            %{cak_ou_match, "Some Org Unit"}
         ]},
         {nms_api, [
             %%

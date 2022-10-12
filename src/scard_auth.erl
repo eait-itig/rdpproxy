@@ -37,8 +37,7 @@
 
 check(SC0) ->
     case rdpdr_scard:list_groups(SC0) of
-        {ok, Groups, SC1} ->
-            [Group0 | _] = Groups,
+        {ok, [Group0 | _], SC1} ->
             {ok, Readers, SC2} = rdpdr_scard:list_readers(Group0, SC1),
             check_rdr(Readers, SC2);
         _ ->
@@ -123,45 +122,78 @@ fetch_dp_names(DP, [_ | Rest]) ->
     fetch_dp_names(DP, Rest);
 fetch_dp_names(_DP, []) -> [].
 
-find_ca([], _Cert) -> error(unknown_ca);
+find_ca([], Cert = #'OTPCertificate'{tbsCertificate = TBS}) ->
+    #'OTPTBSCertificate'{issuer = {rdnSequence, Issuer}} = TBS,
+    error({unknown_ca, Issuer});
+find_ca([], _Cert) ->
+    error(unknown_ca);
 find_ca([CA | Rest], Cert) ->
     case public_key:pkix_is_issuer(Cert, CA) of
         true -> CA;
         false -> find_ca(Rest, Cert)
     end.
 
-check_cak(Piv, Rdr, SC0) ->
-    {ok, [{ok, CAKCert}]} = apdu_transform:command(Piv, {read_cert, piv_card_auth}),
-    #'OTPCertificate'{
-        tbsCertificate = #'OTPTBSCertificate'{subject = Subj,
-                                              serialNumber = Serial}
-        } = CAKCert,
-    {rdnSequence, Seq} = Subj,
-    DPandCRLs = fetch_dp_and_crls(CAKCert),
+check_cert(Cert) ->
+    DPandCRLs = fetch_dp_and_crls(Cert),
     SCardConfig = application:get_env(rdpproxy, smartcard, []),
     CACertPath = proplists:get_value(ca_cert, SCardConfig,
         "/etc/ssl/cert.pem"),
     {ok, CAData} = file:read_file(CACertPath),
     Entries0 = public_key:pem_decode(CAData),
     Entries1 = [public_key:pkix_decode_cert(E, otp) || {'Certificate',E,_} <- Entries0],
-    CA = find_ca(Entries1, CAKCert),
+    CA = find_ca(Entries1, Cert),
     Opts = [],
-    {ok, _} = public_key:pkix_path_validation(CA, [CAKCert], Opts),
+    {ok, _} = public_key:pkix_path_validation(CA, [Cert], Opts),
     CRLOpts = [
         {issuer_fun, {fun (_DP, CL, _Name, none) ->
             {ok, find_ca(Entries1, CL), []}
         end, none}}
     ],
-    valid = public_key:pkix_crls_validate(CAKCert, DPandCRLs, CRLOpts),
-    PubKey = cert_to_pubkey(CAKCert),
+    valid = public_key:pkix_crls_validate(Cert, DPandCRLs, CRLOpts).
+
+challenge_slot(Piv, Slot, PubKey) ->
     Algo = alg_for_key(PubKey),
     Challenge = <<"rdpproxy cak challenge", 0,
         (crypto:strong_rand_bytes(16))/binary>>,
     Hash = crypto:hash(sha256, Challenge),
-    {ok, [{ok, CardSig}]} = apdu_transform:command(Piv, {sign, piv_card_auth,
+    {ok, [{ok, CardSig}]} = apdu_transform:command(Piv, {sign, Slot,
         Algo, Hash}),
-    true = public_key:verify(Challenge, sha256, CardSig, PubKey),
-    lager:debug("verified CAK: serial = ~.16B, subj = ~p", [Serial, Seq]),
+    true = public_key:verify(Challenge, sha256, CardSig, PubKey).
+
+get_dn_attr([], Attr) ->
+    false;
+get_dn_attr([#'AttributeTypeAndValue'{type = Attr, value = V} | Rest], Attr) ->
+    V;
+get_dn_attr([L | Rest], Attr) when is_list(L) ->
+    case get_dn_attr(L, Attr) of
+        false -> get_dn_attr(Rest, Attr);
+        Other -> Other
+    end;
+get_dn_attr([_ | Rest], Attr) ->
+    get_dn_attr(Rest, Attr).
+
+check_cak(Piv, Rdr, SC0) ->
+    {ok, [{ok, CAKCert}]} = apdu_transform:command(Piv, {read_cert, piv_card_auth}),
+    #'OTPCertificate'{tbsCertificate = TBS} = CAKCert,
+    #'OTPTBSCertificate'{subject = {rdnSequence, Subj},
+                         serialNumber = Serial} = TBS,
+    check_cert(CAKCert),
+    PubKey = cert_to_pubkey(CAKCert),
+    challenge_slot(Piv, piv_card_auth, PubKey),
+    lager:debug("verified CAK: serial = ~.16B, subj = ~p", [Serial, Subj]),
+    SCardConfig = application:get_env(rdpproxy, smartcard, []),
+    case proplists:get_value(cak_ou_match, SCardConfig) of
+        undefined ->
+            ok;
+        OrgUnit ->
+            OrgUnitUtf8 = unicode:characters_to_binary(OrgUnit),
+            OrgUnitLatin1 = unicode:characters_to_binary(OrgUnit, utf8, latin1),
+            case get_dn_attr(Subj, ?'id-at-organizationalUnitName') of
+                {utf8String, OrgUnitUtf8} -> ok;
+                {_, OrgUnitLatin1} -> ok;
+                Other -> error({no_ou_match, Other})
+            end
+    end,
     apdu_transform:end_transaction(Piv),
     {ok, Piv, Rdr, SC0}.
 
