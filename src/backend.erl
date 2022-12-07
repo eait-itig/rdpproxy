@@ -320,7 +320,8 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
             {error, {tls_alert, Why = {Atom, _}}} when
                         (Atom =:= unknown_ca) or (Atom =:= bad_certificate) or
                         (Atom =:= unsupported_certificate) or
-                        (Atom =:= certificate_expired) ->
+                        (Atom =:= certificate_expired) or
+                        (Atom =:= certificate_revoked) ->
                 lager:debug("bad TLS certificate: ~p", [Why]),
                 gen_tcp:close(Sock),
                 case Srv of
