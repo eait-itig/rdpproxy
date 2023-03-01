@@ -289,7 +289,7 @@
                 %%
                 %% Allow certs with CN=username under a specific DN tree
                 %%
-                %{branch, {'if', cert, piv_auth, dn_suffix, [
+                %{branch, {'if', cert, piv_auth, dn_prefix, [
                 %          {c, <<"AU">>}, {o, <<"The University of Queensland"},
                 %          {ou, <<"Faculty of EAIT">>}]}, [
                 %    {allow, cert, piv_auth, cn, user}

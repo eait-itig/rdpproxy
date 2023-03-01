@@ -570,6 +570,7 @@ match_slot_rule(#{valid := true, upn := UPNs}, upn, UPN) ->
         true -> match;
         false -> no_match
     end;
+match_slot_rule(_, upn, _UPN) -> no_match;
 match_slot_rule(#{valid := true, cn := CN}, cn, CN) -> match;
 match_slot_rule(#{valid := true, cn := {_, CN}}, cn, CN) -> match;
 match_slot_rule(#{valid := true, cn := CNData}, cn, CN) ->
@@ -577,9 +578,11 @@ match_slot_rule(#{valid := true, cn := CNData}, cn, CN) ->
         CN -> match;
         _ -> no_match
     end;
+match_slot_rule(_, cn, _) -> no_match;
 match_slot_rule(#{valid := true, dn := DN}, dn_prefix, Prefix) ->
     match_dn_prefix(DN, Prefix);
-match_slot_rule(_, _, _) -> no_match.
+match_slot_rule(_, dn_prefix, _) -> no_match;
+match_slot_rule(_, Field, _) -> error({bad_acl_slot_field, Field}).
 
 -spec match_slots_rule([scard_auth:slot_info()], upn | cn | dn_prefix, term()) -> match | no_match.
 match_slots_rule([], _Field, _Value) -> no_match;
