@@ -556,8 +556,8 @@ match_timeexp(_T, Exp) ->
 
 -spec match_ip_mask(string(), string(), integer()) -> boolean().
 match_ip_mask(Peer, Net, MaskLen) ->
-    {A1,B1,C1,D1} = inet:parse_ip4_address(Peer),
-    {A2,B2,C2,D2} = inet:parse_ip4_address(Net),
+    {A1,B1,C1,D1} = inet:parse_ipv4_address(Peer),
+    {A2,B2,C2,D2} = inet:parse_ipv4_address(Net),
     Int1 = (A1 bsl 24) bor (B1 bsl 16) bor (C1 bsl 8) bor D1,
     Int2 = (A2 bsl 24) bor (B2 bsl 16) bor (C2 bsl 8) bor D2,
     HostMask = ((1 bsl (32 - MaskLen)) - 1),
