@@ -443,6 +443,13 @@ match_dn_prefix([[Check] | CheckRest], [{K, V} | WantRest]) ->
             match_dn_prefix(CheckRest, WantRest);
         #'AttributeTypeAndValue'{type = Type, value = {_, V}} ->
             match_dn_prefix(CheckRest, WantRest);
+        #'AttributeTypeAndValue'{type = Type, value = {_, V2}} ->
+            case unicode:characters_to_binary(V2, utf8) of
+                V ->
+                    match_dn_prefix(CheckRest, WantRest);
+                _ ->
+                    no_match
+            end;
         #'AttributeTypeAndValue'{type = Type, value = V2} ->
             case unicode:characters_to_binary(V2, utf8) of
                 V ->
