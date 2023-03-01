@@ -571,7 +571,12 @@ match_slot_rule(#{valid := true, upn := UPNs}, upn, UPN) ->
         false -> no_match
     end;
 match_slot_rule(#{valid := true, cn := CN}, cn, CN) -> match;
-match_slot_rule(#{valid := true, cn := _OtherCN}, cn, CN) -> no_match;
+match_slot_rule(#{valid := true, cn := {_, CN}}, cn, CN) -> match;
+match_slot_rule(#{valid := true, cn := CNData}, cn, CN) ->
+    case unicode:characters_to_binary(CNData, utf8) of
+        CN -> match;
+        _ -> no_match
+    end;
 match_slot_rule(#{valid := true, dn := DN}, dn_prefix, Prefix) ->
     match_dn_prefix(DN, Prefix);
 match_slot_rule(_, _, _) -> no_match.
