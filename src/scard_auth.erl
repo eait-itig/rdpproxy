@@ -199,11 +199,13 @@ get_card_cert_info(Piv, [], I0) -> I0;
 get_card_cert_info(Piv, [Slot | Rest], I0) ->
     case apdu_transform:command(Piv, {read_cert, Slot}) of
         {ok, [{ok, Cert}]} ->
-            SI0 = #{cert => Cert, pubkey => cert_to_pubkey(Cert)},
+            SI0 = #{pubkey => cert_to_pubkey(Cert)},
             case (catch check_cert(Cert)) of
                 {'EXIT', Why} ->
                     SI1 = SI0#{valid => false},
-                    get_card_cert_info(Piv, Rest, I0#{Slot => SI1});
+                    Slots0 = maps:get(slots, I0, #{}),
+                    Slots1 = Slots0#{Slot => SI1},
+                    get_card_cert_info(Piv, Rest, I0#{slots => Slots1});
                 _ ->
                     #'OTPCertificate'{tbsCertificate = TBS} = Cert,
                     #'OTPTBSCertificate'{extensions = Exts,
@@ -226,7 +228,9 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                         CN -> SI2#{cn => CN}
                     end,
                     SI4 = SI3#{valid => true},
-                    get_card_cert_info(Piv, Rest, I0#{Slot => SI4})
+                    Slots0 = maps:get(slots, I0, #{}),
+                    Slots1 = Slots0#{Slot => SI4},
+                    get_card_cert_info(Piv, Rest, I0#{slots => Slots1})
             end;
         _Err ->
             get_card_cert_info(Piv, Rest, I0)
@@ -235,9 +239,8 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
 check_cak(Piv, Rdr, SC0, Info0) ->
     Info1 = get_card_cert_info(Piv, [piv_card_auth, piv_auth, {retired, 1},
         {retired, 2}], Info0),
-    #{slots := #{piv_card_auth := #{valid := true, cert := CAKCert,
-                                    pubkey := PubKey, serial := Serial,
-                                    dn := Subj}}} = Info1,
+    #{slots := #{piv_card_auth := #{valid := true, pubkey := PubKey,
+                                    serial := Serial, dn := Subj}}} = Info1,
     challenge_slot(Piv, piv_card_auth, PubKey),
     lager:debug("verified CAK: serial = ~.16B, subj = ~p", [Serial, Subj]),
     apdu_transform:end_transaction(Piv),
