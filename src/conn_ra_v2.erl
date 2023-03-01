@@ -326,9 +326,9 @@ conn_to_json(C) ->
         _ -> J9
     end,
     J11 = case C of
-        #{scard := SCard} ->
-            #{cak_subj := CakSubj, auth_subj := AuthSubj,
-              cak_serial := CakSerial, auth_serial := AuthSerial} = SCard,
+        #{scard := #{slots := #{piv_card_auth := CAK, piv_auth := Auth}}} ->
+            #{dn := CakSubj, serial := CakSerial} = CAK,
+            #{dn := AuthSubj, serial := AuthSerial} = Auth,
             J10#{
                 <<"smartcard_info">> => #{
                     <<"cak">> => #{
