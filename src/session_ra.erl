@@ -30,7 +30,7 @@
 -module(session_ra).
 -behaviour(ra_machine).
 
--include_lib("kerlberos/include/ms_pac.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 -export([init/1, apply/3, state_enter/2]).
 -export([start/0]).
@@ -60,9 +60,12 @@
 -define(SORT_VSN, 4).
 -define(HISTORY_LIMIT, 16).
 
+-export_types([handle_state/0]).
 -export_types([handle/0, handle_state_nopw/0, handle_state_plain/0]).
 -export_types([host_state/0, error_record/0, alloc_record/0, session_record/0]).
 -export_types([pool_config/0, user_info/0]).
+
+-type sid() :: [integer()].
 
 gen_key(0) -> [];
 gen_key(N) ->
@@ -138,7 +141,9 @@ get_pool(Pool) ->
 
 -type user_info() :: #{
     user => username(),
-    groups => [#sid{}]
+    groups => [sid()],
+    client_ip => string() | binary(),
+    card_info => scard_auth:card_info()
     }.
 
 -spec get_pools_for(user_info()) -> {ok, [pool_config()]} | ra_error().
@@ -403,13 +408,52 @@ decrypt(Crypted, MacExtraData) ->
     {month, integer()} | {months, integer(), integer()} |
     {week_of, calendar:date()} | {weeks_of, calendar:date(), calendar:date()} |
     {hours, integer(), integer()}.
--type acl_entry() ::
-    {acl_verb(), everybody} |
-    {acl_verb(), user, binary()} |
-    {acl_verb(), group, #sid{}} |
-    {acl_verb(), everybody, time_expr()} |
-    {acl_verb(), user, binary(), time_expr()} |
-    {acl_verb(), group, #sid{}, time_expr()}.
+-type dn() :: [{cn | dc | c | title | o | ou | l | st, binary()}].
+-type acl_entry() :: acl_entry_verb(acl_verb()).
+-type acl_entry_verb(V) ::
+    {branch, acl_entry_verb('if'), [acl_entry()]} |
+    {V, everybody} |
+    {V, user, binary()} |
+    {V, group, sid()} |
+    {V, everybody, time_expr()} |
+    {V, user, binary(), time_expr()} |
+    {V, group, sid(), time_expr()} |
+    {V, netmask, string(), integer()} |
+    {V, netmask, string(), integer(), time_expr()} |
+    {V, cert, any | nist_piv:slot(), upn, binary()} |
+    {V, cert, any | nist_piv:slot(), cn, user | binary()} |
+    {V, cert, any | nist_piv:slot(), dn_prefix, []}.
+
+dn_name_to_oid(cn) -> ?'id-at-commonName';
+dn_name_to_oid(dc) -> ?'id-domainComponent';
+dn_name_to_oid(title) -> ?'id-at-title';
+dn_name_to_oid(o) -> ?'id-at-organizationName';
+dn_name_to_oid(ou) -> ?'id-at-organizationalUnitName';
+dn_name_to_oid(l) -> ?'id-at-localityName';
+dn_name_to_oid(st) -> ?'id-at-stateOrProvinceName';
+dn_name_to_oid(c) -> ?'id-at-countryName'.
+
+-spec match_dn_prefix([#'AttributeTypeAndValue'{}], dn()) -> match | no_match.
+match_dn_prefix(_DN, _Prefix = []) -> match;
+match_dn_prefix([], [_ | _]) -> no_match;
+match_dn_prefix([[Check] | CheckRest], [{K, V} | WantRest]) ->
+    Type = dn_name_to_oid(K),
+    case Check of
+        #'AttributeTypeAndValue'{type = Type, value = V} ->
+            match_dn_prefix(CheckRest, WantRest);
+        #'AttributeTypeAndValue'{type = Type, value = {_, V}} ->
+            match_dn_prefix(CheckRest, WantRest);
+        #'AttributeTypeAndValue'{type = Type, value = V2} ->
+            case unicode:characters_to_binary(V2, utf8) of
+                V ->
+                    match_dn_prefix(CheckRest, WantRest);
+                _ ->
+                    no_match
+            end;
+        _ ->
+            no_match
+    end;
+match_dn_prefix(_, [_ | _]) -> no_match.
 
 -spec day_to_int(weekday()) -> integer().
 day_to_int(monday) -> 1;
@@ -510,12 +554,67 @@ match_timeexp(T, {hours, MinHour, MaxHour}) ->
 match_timeexp(_T, Exp) ->
     error({bad_time_exp, Exp}).
 
+-spec match_ip_mask(string(), string(), integer()) -> boolean().
+match_ip_mask(Peer, Net, MaskLen) ->
+    {A1,B1,C1,D1} = inet:parse_ip4_address(Peer),
+    {A2,B2,C2,D2} = inet:parse_ip4_address(Net),
+    Int1 = (A1 bsl 24) bor (B1 bsl 16) bor (C1 bsl 8) bor D1,
+    Int2 = (A2 bsl 24) bor (B2 bsl 16) bor (C2 bsl 8) bor D2,
+    HostMask = ((1 bsl (32 - MaskLen)) - 1),
+    NetMask = ((1 bsl 32) - 1) bxor HostMask,
+    (Int1 band NetMask) == (Int2 band NetMask).
+
+-spec match_slot_rule(scard_auth:slot_info(), upn | cn | dn_prefix, term()) -> match | no_match.
+match_slot_rule(#{valid := true, upn := UPNs}, upn, UPN) ->
+    case lists:member(UPN, UPNs) of
+        true -> match;
+        false -> no_match
+    end;
+match_slot_rule(#{valid := true, cn := CN}, cn, CN) -> match;
+match_slot_rule(#{valid := true, cn := _OtherCN}, cn, CN) -> no_match;
+match_slot_rule(#{valid := true, dn := DN}, dn_prefix, Prefix) ->
+    match_dn_prefix(DN, Prefix);
+match_slot_rule(_, _, _) -> no_match.
+
+-spec match_slots_rule([scard_auth:slot_info()], upn | cn | dn_prefix, term()) -> match | no_match.
+match_slots_rule([], _Field, _Value) -> no_match;
+match_slots_rule([Slot | Rest], Field, Value) ->
+    case match_slot_rule(Slot, Field, Value) of
+        match -> match;
+        no_match -> match_slots_rule(Rest, Field, Value)
+    end.
+
 -spec match_rule(user_info(), time(), acl_entry()) -> match | no_match.
 match_rule(_UInfo, _T, {_, everybody}) -> match;
 match_rule(_UInfo, T, {_, everybody, TimeExp}) -> match_timeexp(T, TimeExp);
+match_rule(#{client_ip := IP}, _T, {_, netmask, Net, MaskLen}) ->
+    case match_ip_mask(IP, Net, MaskLen) of
+        true -> match;
+        _ -> no_match
+    end;
+match_rule(#{client_ip := IP}, T, {_, netmask, Net, MaskLen, TimeExp}) ->
+    case match_ip_mask(IP, Net, MaskLen) of
+        true -> match_timeexp(T, TimeExp);
+        _ -> no_match
+    end;
+match_rule(#{user := U, card_info := #{slots := SlotMap}}, _T,
+           {_, cert, Slot, Field, Value0}) ->
+    Value1 = case Value0 of
+        user -> U;
+        _ -> Value0
+    end,
+    Slots = case Slot of
+        any -> maps:values(SlotMap);
+        _ -> [maps:get(Slot, SlotMap, #{})]
+    end,
+    match_slots_rule(Slots, Field, Value1);
 match_rule(#{user := U}, _T, {_, user, U}) -> match;
 match_rule(#{user := U}, T, {_, user, U, TimeExp}) -> match_timeexp(T, TimeExp);
 match_rule(#{user := _U}, _T, {_, user, _}) -> no_match;
+match_rule(UInfo, T, {V, group, {sid,A,B,C}}) ->
+    match_rule(UInfo, T, {V, group, [A,B|C]});
+match_rule(UInfo, T, {V, group, {sid,A,B,C}, TimeExp}) ->
+    match_rule(UInfo, T, {V, group, [A,B|C], TimeExp});
 match_rule(#{groups := Gs}, _T, {_, group, G}) ->
     case lists:member(G, Gs) of
         true -> match;
@@ -528,8 +627,22 @@ match_rule(#{groups := Gs}, T, {_, group, G, TimeExp}) ->
     end;
 match_rule(_UInfo, _T, {_, group, _}) -> no_match.
 
--spec process_rules(user_info(), time(), [acl_entry()]) -> allow | deny.
-process_rules(_UInfo, _T, []) -> allow;
+-spec process_rules(user_info(), time(), [acl_entry()]) -> allow | deny | no_match.
+process_rules(_UInfo, _T, []) -> no_match;
+process_rules(UInfo, T, [{branch, Rule, BranchRules} | Rest]) ->
+    'if' = element(1, Rule),
+    Match = match_rule(UInfo, T, Rule),
+    case Match of
+        match ->
+            case process_rules(UInfo, T, BranchRules) of
+                no_match ->
+                    process_rules(UInfo, T, Rest);
+                Result ->
+                    Result
+            end;
+        no_match ->
+            process_rules(UInfo, T, Rest)
+    end;
 process_rules(UInfo, T, [Rule | Rest]) ->
     Match = match_rule(UInfo, T, Rule),
     case {Match, element(1, Rule)} of
@@ -636,6 +749,7 @@ process_rules(UInfo, T, [Rule | Rest]) ->
     domain => none | binary(),
     sessid => none | sessid()
     }.
+
 
 -type handle_state_nopw() :: #{
     handle => handle(),

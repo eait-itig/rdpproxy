@@ -175,12 +175,11 @@ eval_step({check_pac, Opts}, S0 = #?MODULE{svctkt = SvcTkt}) ->
         {ok, #pac{buffers = Bufs}} ->
             #?MODULE{uinfo = UInfo0} = S0,
             Groups0 = maps:get(groups, UInfo0, []),
-            LogonInfo = lists:keyfind(pac_logon_info, 1, Bufs),
-            #pac_logon_info{domain_sid = DSid, groups = GMs} = LogonInfo,
-            #sid{sub_auths = SubAuths} = DSid,
+            #pac_logon_info{info = LogonInfo} = lists:keyfind(pac_logon_info, 1, Bufs),
+            #kerb_validation_info{logon_domain_id = DSid, group_ids = GMs} = LogonInfo,
             GroupSids = [
-                DSid#sid{sub_auths = SubAuths ++ [RId]}
-                || #group_membership{rid = RId} <- GMs
+                DSid ++ [RId]
+                || #group_membership{relative_id = RId} <- GMs
             ],
             UInfo1 = UInfo0#{groups => Groups0 ++ GroupSids},
             S1 = S0#?MODULE{uinfo = UInfo1},

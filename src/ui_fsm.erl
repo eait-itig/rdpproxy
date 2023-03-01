@@ -529,7 +529,7 @@ login({ui, {submitted, passinp}}, S = #?MODULE{}) ->
 login({ui, {clicked, loginbtn}}, S = #?MODULE{}) ->
     login(check_creds, S);
 
-login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend = {FPid,_}}) ->
+login(check_creds, S = #?MODULE{root = Root, listener = L, frontend = {FPid,_}}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config([frontend, L, domains], [<<".">>]),
 
     [UsernameTxt] = ui:select(Root, [{id, userinp}]),
@@ -561,27 +561,19 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                 username => UsernameBin,
                 password => iolist_to_binary([Password])
             },
-            HasValidCard = case check_scard(S) of
+            CardInfo = case check_scard(S) of
                 {ok, _Piv, _Rdr, SC0, Info} ->
                     % for now just disconnect, we only check the CAK
                     {ok, SC1} = rdpdr_scard:disconnect(leave, SC0),
                     rdpdr_scard:close(SC1),
                     conn_ra:annotate(FPid, #{scard => Info}),
-                    case Info of
-                        #{auth_cn := {_, UsernameBin}} ->
-                            true;
-                        #{auth_cn := AuthCN} ->
-                            lager:debug("auth CN (~p) does not match login (~p)",
-                                [AuthCN, UsernameBin]),
-                            false
-                    end;
-                _ -> false
+                    Info;
+                _ ->
+                   #{}
             end,
             SkipWithCard = rdpproxy:config([smartcard, bypass_duo_with_cak], false),
-            SkipDuo = rdpproxy:config([duo, bypass], false) or
-                (HasValidCard and SkipWithCard),
             case krb_auth:authenticate(Creds) of
-                {true, UInfo, Tgts} when SkipDuo ->
+                {true, UInfo, Tgts} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
                     Sess0 = #{user => Username, domain => Domain,
                         password => Password, tgts => Tgts},
@@ -590,63 +582,17 @@ login(check_creds, S = #?MODULE{root = Root, duo = Duo, listener = L, frontend =
                                           tgts => snip},
                         duo_preauth => <<"bypass">>}),
                     S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
-                    lager:debug("duo bypass for ~p", [Username]),
-                    mfa(allow, S1);
-                {true, UInfo, Tgts} ->
-                    lager:debug("auth for ~p succeeded!", [Username]),
-                    #?MODULE{duoid = DuoId, peer = Peer} = S,
-                    Sess0 = #{user => Username, domain => Domain,
-                        password => Password, tgts => Tgts},
-                    conn_ra:annotate(FPid, #{
-                        session => Sess0#{ip => undefined, password => snip,
-                                          tgts => snip}}),
-                    S1 = S#?MODULE{sess = Sess0, uinfo = UInfo},
-                    Args = #{
-                        <<"username">> => Username,
-                        <<"ipaddr">> => Peer,
-                        <<"trusted_device_token">> => DuoId
-                    },
-                    EnrollIsAllow = rdpproxy:config([duo, enroll_is_allow], false),
-                    Res = duo:preauth(Duo, Args),
-                    case Res of
-                        {ok, #{<<"result">> := R}} ->
-                            conn_ra:annotate(FPid, #{duo_preauth => R});
-                        _ ->
-                            ok
-                    end,
-                    case Res of
-                        {ok, #{<<"result">> := <<"enroll">>}} when EnrollIsAllow ->
-                            lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
-                            mfa(allow, S1);
-                        {ok, #{<<"result">> := <<"enroll">>}} ->
-                            login(mfa_enroll, S1);
-                        {ok, #{<<"result">> := <<"allow">>}} ->
+                    #?MODULE{peer = Peer} = S1,
+                    UInfo2 = UInfo#{card_info => CardInfo},
+                    SkipDuoACL = rdpproxy:config([duo, bypass_acl],
+                        [{deny, everybody}]),
+                    Now = erlang:system_time(second),
+                    case session_ra:process_rules(UInfo2, Now, SkipDuoACL) of
+                        allow ->
                             lager:debug("duo bypass for ~p", [Username]),
                             mfa(allow, S1);
-                        {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
-                            case remember_ra:check({DuoId, Username}) of
-                                true ->
-                                    lager:debug("skipping duo for ~p due to remember me", [Username]),
-                                    mfa(allow, S1);
-                                false ->
-                                    lager:debug("sending ~p to duo screen", [Username]),
-                                    mfa(setup_ui, S1#?MODULE{duodevs = Devs})
-                            end;
-                        {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := Msg}} ->
-                            S2 = S1#?MODULE{duomsg = Msg},
-                            lager:debug("duo deny for ~p: ~p (id = ~p)", [Username, Msg, DuoId]),
-                            login(mfa_deny, S2);
-                        Else ->
-                            lager:debug("duo preauth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
-                            case remember_ra:check({DuoId, Username}) of
-                                true ->
-                                    lager:debug("skipping duo for ~p due to remember me", [Username]),
-                                    mfa(allow, S1);
-                                false ->
-                                    Msg = iolist_to_binary(io_lib:format("~999p", [Else])),
-                                    S2 = S1#?MODULE{duomsg = Msg},
-                                    login(mfa_deny, S2)
-                            end
+                        deny ->
+                            login(mfa_start, S1)
                     end;
                 false ->
                     lager:debug("auth for ~p failed", [Username]),
@@ -695,7 +641,59 @@ login(mfa_enroll, S = #?MODULE{}) ->
         { [{id, badlbl}],   {set_fgcolor, LightRed} },
         { [{id, badlbl}],   {set_bgcolor, BgColour} }
     ],
-    handle_root_events(login, S, Events).
+    handle_root_events(login, S, Events);
+
+login(mfa_start, S1 = #?MODULE{}) ->
+    #?MODULE{duoid = DuoId, duo = Duo, peer = Peer, sess = Sess, uinfo = UInfo,
+             frontend = {FPid,_}} = S1,
+    #{user := Username} = Sess,
+    Args = #{
+        <<"username">> => Username,
+        <<"ipaddr">> => Peer,
+        <<"trusted_device_token">> => DuoId
+    },
+    EnrollIsAllow = rdpproxy:config([duo, enroll_is_allow], false),
+    Res = duo:preauth(Duo, Args),
+    case Res of
+        {ok, #{<<"result">> := R}} ->
+            conn_ra:annotate(FPid, #{duo_preauth => R});
+        _ ->
+            ok
+    end,
+    case Res of
+        {ok, #{<<"result">> := <<"enroll">>}} when EnrollIsAllow ->
+            lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
+            mfa(allow, S1);
+        {ok, #{<<"result">> := <<"enroll">>}} ->
+            login(mfa_enroll, S1);
+        {ok, #{<<"result">> := <<"allow">>}} ->
+            lager:debug("duo bypass for ~p", [Username]),
+            mfa(allow, S1);
+        {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
+            case remember_ra:check({DuoId, Username}) of
+                true ->
+                    lager:debug("skipping duo for ~p due to remember me", [Username]),
+                    mfa(allow, S1);
+                false ->
+                    lager:debug("sending ~p to duo screen", [Username]),
+                    mfa(setup_ui, S1#?MODULE{duodevs = Devs})
+            end;
+        {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := Msg}} ->
+            S2 = S1#?MODULE{duomsg = Msg},
+            lager:debug("duo deny for ~p: ~p (id = ~p)", [Username, Msg, DuoId]),
+            login(mfa_deny, S2);
+        Else ->
+            lager:debug("duo preauth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
+            case remember_ra:check({DuoId, Username}) of
+                true ->
+                    lager:debug("skipping duo for ~p due to remember me", [Username]),
+                    mfa(allow, S1);
+                false ->
+                    Msg = iolist_to_binary(io_lib:format("~999p", [Else])),
+                    S2 = S1#?MODULE{duomsg = Msg},
+                    login(mfa_deny, S2)
+            end
+    end.
 
 mfa(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     BgColour = bgcolour(),

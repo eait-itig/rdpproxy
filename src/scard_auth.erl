@@ -35,6 +35,27 @@
     check/1
     ]).
 
+-export_type([
+    card_info/0,
+    slot_info/0
+    ]).
+
+-type slot_info() :: #{
+    valid => boolean(),
+    cert => #'OTPCertificate'{},
+    pubkey => public_key:pubkey(),
+    upn => [binary()],
+    serial => integer(),
+    dn => [#'AttributeTypeAndValue'{} | term()],
+    cn => binary()
+    }.
+
+-type card_info() :: #{
+    yk_version => term(),
+    yk_serial => integer(),
+    slots => #{nist_piv:slot() => slot_info()}
+    }.
+
 check(SC0) ->
     case rdpdr_scard:list_groups(SC0) of
         {ok, [Group0 | _], SC1} ->
@@ -172,40 +193,54 @@ get_dn_attr([L | Rest], Attr) when is_list(L) ->
 get_dn_attr([_ | Rest], Attr) ->
     get_dn_attr(Rest, Attr).
 
+-define('szOID_NT_PRINCIPAL_NAME', {1,3,6,1,4,1,311,20,2,3}).
+
+get_card_cert_info(Piv, [], I0) -> I0;
+get_card_cert_info(Piv, [Slot | Rest], I0) ->
+    case apdu_transform:command(Piv, {read_cert, Slot}) of
+        {ok, [{ok, Cert}]} ->
+            SI0 = #{cert => Cert, pubkey => cert_to_pubkey(Cert)},
+            case (catch check_cert(Cert)) of
+                {'EXIT', Why} ->
+                    SI1 = SI0#{valid => false},
+                    get_card_cert_info(Piv, Rest, I0#{Slot => SI1});
+                _ ->
+                    #'OTPCertificate'{tbsCertificate = TBS} = Cert,
+                    #'OTPTBSCertificate'{extensions = Exts,
+                                         subject = {rdnSequence, Subj},
+                                         serialNumber = Serial} = TBS,
+                    SANExts = [E || E = #'Extension'{extnID = ID} <- Exts,
+                                    ID =:= ?'id-ce-subjectAltName'],
+                    SI1 = case SANExts of
+                        [#'Extension'{extnValue = SANs}] ->
+                            Ders = [V || {otherName, #'AnotherName'{'type-id' = ?'szOID_NT_PRINCIPAL_NAME', value = V}} <- SANs],
+                            Tlvs = [asn1rt_nif:decode_ber_tlv(Der) || Der <- Ders],
+                            UPNs = [Str || {{_Tag, Str}, <<>>} <- Tlvs, is_binary(Str)],
+                            SI0#{upn => UPNs};
+                        _ ->
+                            SI0
+                    end,
+                    SI2 = SI1#{serial => Serial, dn => Subj},
+                    SI3 = case get_dn_attr(Subj, ?'id-at-commonName') of
+                        false -> SI2;
+                        CN -> SI2#{cn => CN}
+                    end,
+                    SI4 = SI3#{valid => true},
+                    get_card_cert_info(Piv, Rest, I0#{Slot => SI4})
+            end;
+        _Err ->
+            get_card_cert_info(Piv, Rest, I0)
+    end.
+
 check_cak(Piv, Rdr, SC0, Info0) ->
-    {ok, [{ok, CAKCert}]} = apdu_transform:command(Piv, {read_cert, piv_card_auth}),
-    #'OTPCertificate'{tbsCertificate = TBS} = CAKCert,
-    #'OTPTBSCertificate'{subject = {rdnSequence, Subj},
-                         serialNumber = Serial} = TBS,
-    check_cert(CAKCert),
-    PubKey = cert_to_pubkey(CAKCert),
+    Info1 = get_card_cert_info(Piv, [piv_card_auth, piv_auth, {retired, 1},
+        {retired, 2}], Info0),
+    #{slots := #{piv_card_auth := #{valid := true, cert := CAKCert,
+                                    pubkey := PubKey, serial := Serial,
+                                    dn := Subj}}} = Info1,
     challenge_slot(Piv, piv_card_auth, PubKey),
     lager:debug("verified CAK: serial = ~.16B, subj = ~p", [Serial, Subj]),
-    SCardConfig = application:get_env(rdpproxy, smartcard, []),
-    case proplists:get_value(cak_ou_match, SCardConfig) of
-        undefined ->
-            ok;
-        OrgUnit ->
-            OrgUnitUtf8 = unicode:characters_to_binary(OrgUnit),
-            OrgUnitLatin1 = unicode:characters_to_binary(OrgUnit, utf8, latin1),
-            case get_dn_attr(Subj, ?'id-at-organizationalUnitName') of
-                {utf8String, OrgUnitUtf8} -> ok;
-                {_, OrgUnitLatin1} -> ok;
-                Other -> error({no_ou_match, Other})
-            end
-    end,
-    {ok, [{ok, AuthCert}]} = apdu_transform:command(Piv, {read_cert, piv_auth}),
-    #'OTPCertificate'{tbsCertificate = ATBS} = AuthCert,
-    #'OTPTBSCertificate'{subject = {rdnSequence, AuthSubj},
-                         serialNumber = AuthSerial} = ATBS,
     apdu_transform:end_transaction(Piv),
-    Info1 = Info0#{
-        cak_subj => Subj,
-        cak_serial => Serial,
-        auth_subj => AuthSubj,
-        auth_serial => AuthSerial,
-        auth_cn => get_dn_attr(AuthSubj, ?'id-at-commonName')
-    },
     {ok, Piv, Rdr, SC0, Info1}.
 
 check_rdr([], SC0) ->

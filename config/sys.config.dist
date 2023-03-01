@@ -126,7 +126,14 @@
                 %% Allow an AD group (if authing against AD and krb5 is
                 %% configured to obtain a service ticket)
                 %%
-                %{allow, group, {sid,1,5,[21,123545676989,123,123,1]}},
+                %{allow, group, [1,5,21,123545676989,123,123,1]},
+
+                %%
+                %% Conditional rules
+                %%
+                %{branch, {'if', group, [1,5,21,...]}, [
+                %    {allow, netmask, "1.2.3.4", 24}
+                %]},
 
                 %%
                 %% Default-deny
@@ -259,38 +266,55 @@
         },
         {duo, [
             %%
-            %% Bypass Duo 2FA completely for all users
-            %%
-            %{bypass, true},
-            %%
             %% Details for Duo 2FA
             %%
             {integration_key, <<"aaaaaa">>},
             {secret_key, <<"aaaaaa">>},
             {api_host, "api-abc123.duosecurity.com"},
+
             %%
             %% Interpret "enroll" responses from Duo as bypass
             %%
             {enroll_is_allow, true},
+
             %%
             %% Lifetime of "remember me" entries in seconds
             %%
-            {remember_time, 36000}
+            {remember_time, 36000},
+
+            %%
+            %% Bypass Duo 2FA completely for users allowed by this ACL
+            %%
+            {bypass_acl, [
+                %%
+                %% Allow certs with CN=username under a specific DN tree
+                %%
+                %{branch, {'if', cert, piv_auth, dn_suffix, [
+                %          {c, <<"AU">>}, {o, <<"The University of Queensland"},
+                %          {ou, <<"Faculty of EAIT">>}]}, [
+                %    {allow, cert, piv_auth, cn, user}
+                %]},
+
+                %%
+                %% Allow members of an AD group if they have a valid cert for a
+                %% particular account and are connecting from a particular net
+                %%
+                %{branch, {'if', group, [1,5,21,...]}, [
+                %    {require, netmask, "10.55.0.0", 16},
+                %    {allow, cert, any, upn, "account@domain.com"}
+                %]},
+
+                %%
+                %% Duo for everybody else!
+                %%
+                {deny, everybody}
+            ]},
         ]},
         {smartcard, [
             %%
             %% Path to CA certificate
             %%
             %{ca_cert, "/etc/ssl/certs/EAIT_Internal_CA.pem"},
-            %%
-            %% Use PIV 9E key to bypass Duo, if the cert is signed by the CA
-            %% and validates.
-            %%
-            %{bypass_duo_with_cak, true},
-            %%
-            %% Require a specific OU= attribute in the CAK DN
-            %%
-            %{cak_ou_match, "Some Org Unit"}
         ]},
         {nms_api, [
             %%
