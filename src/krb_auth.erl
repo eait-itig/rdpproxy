@@ -226,6 +226,7 @@ authenticate(#{username := U, password := P} = Args) ->
             Tgts = maps:map(fun (K, #realm_state{tgt = TGT}) -> TGT end, Rs),
             {true, UInfo4, Tgts};
         {error, Why} ->
+            lager:debug("failed auth for ~s: ~p", [U, Why]),
             record_failure(krb5_login, Why),
             false
     end.
