@@ -569,7 +569,7 @@ login(check_creds, S = #?MODULE{root = Root, listener = L, frontend = {FPid,_}})
                     conn_ra:annotate(FPid, #{scard => Info}),
                     Info;
                 _ ->
-                   #{}
+                   #{slots => #{}}
             end,
             SkipWithCard = rdpproxy:config([smartcard, bypass_duo_with_cak], false),
             case krb_auth:authenticate(Creds) of
