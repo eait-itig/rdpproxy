@@ -561,17 +561,23 @@ login(check_creds, S = #?MODULE{root = Root, listener = L, frontend = {FPid,_}})
                 username => UsernameBin,
                 password => iolist_to_binary([Password])
             },
-            CardInfo = case check_scard(S) of
-                {ok, _Piv, _Rdr, SC0, Info} ->
+	    Fsm = self(),
+	    spawn(fun() ->
+                Res = check_scard(S),
+		Fsm ! {scard_result, Res}
+            end),
+            CardInfo = receive
+                {scard_result, {ok, _Piv, _Rdr, SC0, Info}} ->
                     % for now just disconnect, we only check the CAK
                     {ok, SC1} = rdpdr_scard:disconnect(leave, SC0),
                     rdpdr_scard:close(SC1),
                     conn_ra:annotate(FPid, #{scard => Info}),
                     Info;
-                _ ->
-                   #{slots => #{}}
+                {scard_result, _} ->
+                    #{slots => #{}}
+            after 5000 ->
+                #{slots => #{}}
             end,
-            SkipWithCard = rdpproxy:config([smartcard, bypass_duo_with_cak], false),
             case krb_auth:authenticate(Creds) of
                 {true, UInfo, Tgts} ->
                     lager:debug("auth for ~p succeeded!", [Username]),
@@ -2054,6 +2060,8 @@ waiting({ui, {clicked, closebtn}}, S = #?MODULE{frontend = F}) ->
 
 handle_info({'DOWN', MRef, process, _, _}, _State, S = #?MODULE{mref = MRef}) ->
     {stop, normal, S};
+handle_info({scard_result, _}, State, S = #?MODULE{}) ->
+    {next_state, State, S};
 handle_info(Msg, State, S = #?MODULE{}) ->
     ?MODULE:State(Msg, S).
 

@@ -377,8 +377,11 @@ dn_to_str_parts([]) -> [];
 dn_to_str_parts([[#'AttributeTypeAndValue'{type = A, value = V}] | Rest]) ->
     StrV = case V of
         {_Type, VV} when is_binary(VV) -> VV;
+        {_Type, VV} when is_list(VV) ->
+            unicode:characters_to_binary(VV, utf8);
         VV when is_binary(VV) -> VV;
-        VV when is_list(VV) -> VV
+        VV when is_list(VV) ->
+            unicode:characters_to_binary(VV, utf8)
     end,
     [[dn_oid_to_str(A), $=, StrV] | dn_to_str_parts(Rest)].
 
