@@ -1116,29 +1116,33 @@ apply(_Meta, {create_host, T, Map}, S0 = #?MODULE{meta = M0, pools = P0}) ->
     end;
 
 apply(_Meta, {update_host, T, CM}, S0 = #?MODULE{meta = M0}) when is_map(CM) ->
-    #{ip := Ip} = CM,
-    case M0 of
-        #{Ip := HM0} ->
-            HM1 = maps:fold(fun
-                (K = hostname, V, Acc) when is_binary(V) -> Acc#{K => V};
-                (K = port, V, Acc) when is_integer(V) -> Acc#{K => V};
-                (K = pool, V, Acc) when is_atom(V) -> Acc#{K => V};
-                (K = idle_from, V, Acc) when is_integer(V) -> Acc#{K => V};
-                (K = image, V, Acc) when is_binary(V) -> Acc#{K => V};
-                (K = role, V, Acc) when is_binary(V) -> Acc#{K => V};
-                (K = hypervisor, V, Acc) when is_binary(V) -> Acc#{K => V};
-                (K = desc, V, Acc) when is_binary(V) -> Acc#{K => V};
-                (K = cert_verify, V, Acc) when is_atom(V) -> Acc#{K => V};
-                (K = forward_creds, V, Acc) when is_atom(V) -> Acc#{K => V};
-                (K = cert_hostname, V, Acc) when is_binary(V) -> Acc#{K => V};
-                (_, _, Acc) -> Acc
-            end, HM0, CM),
-            HM2 = HM1#{last_update => T},
-            M1 = M0#{Ip => HM2},
-            S1 = S0#?MODULE{meta = M1},
-            {S1, ok, []};
+    case CM of
+        #{ip := Ip} ->
+            case M0 of
+                #{Ip := HM0} ->
+                    HM1 = maps:fold(fun
+                        (K = hostname, V, Acc) when is_binary(V) -> Acc#{K => V};
+                        (K = port, V, Acc) when is_integer(V) -> Acc#{K => V};
+                        (K = pool, V, Acc) when is_atom(V) -> Acc#{K => V};
+                        (K = idle_from, V, Acc) when is_integer(V) -> Acc#{K => V};
+                        (K = image, V, Acc) when is_binary(V) -> Acc#{K => V};
+                        (K = role, V, Acc) when is_binary(V) -> Acc#{K => V};
+                        (K = hypervisor, V, Acc) when is_binary(V) -> Acc#{K => V};
+                        (K = desc, V, Acc) when is_binary(V) -> Acc#{K => V};
+                        (K = cert_verify, V, Acc) when is_atom(V) -> Acc#{K => V};
+                        (K = forward_creds, V, Acc) when is_atom(V) -> Acc#{K => V};
+                        (K = cert_hostname, V, Acc) when is_binary(V) -> Acc#{K => V};
+                        (_, _, Acc) -> Acc
+                    end, HM0, CM),
+                    HM2 = HM1#{last_update => T},
+                    M1 = M0#{Ip => HM2},
+                    S1 = S0#?MODULE{meta = M1},
+                    {S1, ok, []};
+                _ ->
+                    {S0, {error, not_found}, []}
+            end;
         _ ->
-            {S0, {error, not_found}, []}
+            {S0, {error, invalid_host}, []}
     end;
 
 apply(_Meta, {enable_host, T, Ip}, S0 = #?MODULE{meta = M0}) ->

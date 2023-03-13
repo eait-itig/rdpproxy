@@ -106,6 +106,7 @@
             {err_refused, <<"Host not listening for RDP, contact %HELPDESK%">>},
             {err_cert, <<"Host has an invalid certificate, contact %HELPDESK%">>},
             {err_credssp_req, <<"Host requires CredSSP, contact %HELPDESK%">>},
+            {err_other, <<"Error contacting host, contact %HELPDESK%">>},
 
             %%
             %% Helpdesk email, used in some error messages
@@ -134,6 +135,15 @@
                 %{branch, {'if', group, [1,5,21,...]}, [
                 %    {allow, netmask, "1.2.3.4", 24}
                 %]},
+
+                %%
+                %% Allow certs with a certain OU in a given slot
+                %%
+                %% Note that for admin_acl and pool ACLs, certificate rules
+                %% can only match if Smartcard auth was used to log in (so
+                %% a PIN check and full certificate validation has happened).
+                %%
+                %{allow, cert, piv_card_auth, dn_prefix, [{ou, <<"itig">>}]},
 
                 %%
                 %% Default-deny
@@ -308,7 +318,7 @@
                 %% Duo for everybody else!
                 %%
                 {deny, everybody}
-            ]},
+            ]}
         ]},
         {smartcard, [
             %%

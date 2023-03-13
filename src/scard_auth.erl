@@ -58,17 +58,26 @@
 
 check(SC0) ->
     case rdpdr_scard:list_groups(SC0) of
-        {ok, [Group0 | _], SC1} ->
-            {ok, Readers, SC2} = rdpdr_scard:list_readers(Group0, SC1),
-            check_rdr(Readers, SC2);
+        {ok, Groups, SC1} ->
+            check_groups(Groups ++ ["SCard$DefaultReaders", ""], SC1);
         _ ->
-            case rdpdr_scard:list_readers("SCard$DefaultReaders", SC0) of
-                {ok, Readers, SC1} ->
-                    check_rdr(Readers, SC1);
-                _ ->
-                    {ok, Readers, SC1} = rdpdr_scard:list_readers("", SC0),
-                    check_rdr(Readers, SC1)
-            end
+            check_groups(["SCard$DefaultReaders", ""], SC0)
+    end.
+
+check_groups([], SC0) ->
+    rdpdr_scard:close(SC0),
+    {error, no_scard_found};
+check_groups([Group | Rest], SC0) ->
+    case rdpdr_scard:list_readers(Group, SC0) of
+        {ok, undefined, SC1} ->
+            lager:debug("group ~s, readers undefined!", [Group]),
+            check_groups(Rest, SC1);
+        {ok, Readers, SC1} ->
+            lager:debug("group ~s, readers = ~999p", [Group, Readers]),
+            check_rdr(Readers, SC1);
+        Err ->
+            lager:debug("group ~s, err = ~999p", [Group, Err]),
+            check_groups(Rest, SC0)
     end.
 
 cert_to_pubkey(#'OTPCertificate'{} = Cert) ->
@@ -136,7 +145,8 @@ fetch_dp_names(DP, [{uniformResourceIdentifier, "http"++_ = URL} | Rest]) ->
                 CL = #'CertificateList'{} ->
                     [{DP, {Body, CL}, {Body, CL}} | fetch_dp_names(DP, Rest)]
             end;
-        _ ->
+        Err ->
+            lager:debug("error getting CRL ~s: ~999p", [URL, Err]),
             fetch_dp_names(DP, Rest)
     end;
 fetch_dp_names(DP, [_ | Rest]) ->

@@ -63,7 +63,7 @@
     pool_errors/1
     ]).
 
--export([print_prefs/1]).
+-export([print_prefs/1, format_reltime/1, format_reltime/3]).
 
 help([]) ->
     io:format("usage: rdpproxy-admin <cmd> <subcmd> [args]\n"
@@ -1153,7 +1153,7 @@ format_reltime(Time, Flavour, AbsOnly) ->
     if
         (Delta > 12*3600) or AbsOnly ->
             calendar:system_time_to_rfc3339(Time, [
-                {time_designator, $ },
+                {time_designator, $\s},
                 {unit, second}]);
         true ->
             format_deltatime(Delta, Flavour)

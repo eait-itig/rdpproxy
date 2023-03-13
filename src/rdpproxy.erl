@@ -93,7 +93,8 @@ init(_Args) ->
     FrontendSups = lists:map(fun ({Name, ConfigList}) ->
         Port = proplists:get_value(port, ConfigList, 3389),
         #{id => list_to_atom("frontend_sup_" ++ atom_to_list(Name)),
-          start => {rdp_server_sup, start_link, [Port, {frontend, Name}]},
+          start => {rdp_server_sup, start_link,
+            [Port, {rdp_lvgl_server, {frontend, [Name]}}]},
           type => supervisor}
     end, Listeners),
 

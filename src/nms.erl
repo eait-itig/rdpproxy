@@ -135,7 +135,7 @@ do_signed_req(Method, Uri, Params, #?MODULE{gun = Gun, host = Host, signer = Sig
             {ok, Body0} = gun:await_body(Gun, Req),
             Body1 = case RHdrs of
                 #{<<"content-type">> := <<"application/json">>} ->
-                    jsx:decode(Body0, [return_maps]);
+                    jsx:decode(Body0, [return_maps, {labels, atom}]);
                 _ -> Body0
             end,
             {ok, Status, Body1};

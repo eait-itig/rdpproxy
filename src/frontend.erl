@@ -72,7 +72,8 @@ register_metrics() ->
     intercept = true :: boolean(),
     matched_sessid = false :: boolean(),
     connid :: binary() | undefined,
-    t0 :: integer()
+    t0 :: integer(),
+    ui_fsm :: undefined | pid()
     }).
 
 init(Peer) ->
@@ -123,15 +124,16 @@ handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
             {accept, SslOpts, S#?MODULE{connid = ConnId}}
     end.
 
-init_ui(Srv, S = #?MODULE{subs = [], listener = L, connid = ConnId}) ->
-    {ok, Ui} = ui_fsm_sup:start_ui(Srv, L),
+init_ui({Srv, Inst}, S = #?MODULE{subs = [], listener = L, connid = ConnId}) ->
+    {W, H, _} = rdp_server:get_canvas(Srv),
+    {ok, Ui} = ui_fsm_sup:start_ui(Srv, L, Inst, {W, H}),
     lager:debug("frontend spawned ui_fsm ~p", [Ui]),
     Tsuds = rdp_server:get_tsuds(Srv),
     Caps = rdp_server:get_caps(Srv),
     TSInfo = rdp_server:get_ts_info(Srv),
     conn_ra:annotate(ConnId, #{tsuds => Tsuds, ts_caps => Caps,
         ts_info => TSInfo#ts_info{password = snip}, ui_fsm => Ui}),
-    {ok, S}.
+    {ok, S#?MODULE{ui_fsm = Ui}}.
 
 handle_event({subscribe, Pid}, _Srv, S = #?MODULE{subs = Subs}) ->
     {ok, S#?MODULE{subs = [Pid | Subs]}};
@@ -368,7 +370,7 @@ debug_print_data(Bin) ->
             ok
     end.
 
-terminate(_Reason, #?MODULE{listener = L, t0 = T0, backend = undefined}) ->
+terminate(_Reason, #?MODULE{listener = L, t0 = T0, ui_fsm = Fsm, backend = undefined}) ->
     T1 = erlang:system_time(second),
     Dur = T1 - T0,
     prometheus_histogram:observe(rdp_frontend_connection_duration_seconds,
