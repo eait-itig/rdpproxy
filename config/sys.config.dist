@@ -387,6 +387,44 @@
         ]}
     ]},
 
+    {rdp_lvgl, [
+        %%
+        %% The LVGL NIF will fork children to handle running LVGL code. Each
+        %% child can handle multiple display instances at once. It is possible
+        %% for displays which are running in the same child to block each
+        %% others' rendering to some extent, and rendering is single-threaded
+        %% within each child, so it is important to limit the maximum number
+        %% of displays per child.
+        %%
+        %% Recommended range: 8-32
+        %%
+        {displays_per_child, 16},
+
+        %%
+        %% Maximum number of children to fork, and initial number to pre-fork at
+        %% startup. If no children with spare display slots are available, we
+        %% will fork new children up to child_procs_max. If we are already at
+        %% child_procs_max, then lv:setup() will start returning errors.
+        %%
+        {child_procs_max, 8},
+        {child_procs_init, 2},
+
+        %%
+        %% Maximum resolution of a single display. Display framebuffers are
+        %% all allocated in advance at maximum resolution, so this controls the
+        %% memory consumption of the NIF directly.
+        %%
+        {display_max_res, {3840, 2160}},
+
+        %%
+        %% Size of command and event rings which we use to exchange data with
+        %% the child processes, in bytes.
+        %%
+        %% Recommended value: 16k (16384 bytes)
+        %%
+        {ring_size, 16384}
+    ]},
+
     {lager, [
         {handlers, [
             {lager_console_backend, [{level, debug}]},
