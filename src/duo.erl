@@ -61,6 +61,10 @@ register_metrics() ->
         {labels, [result]},
         {help, "The result field from Duo preauth replies"}]),
     prometheus_counter:new([
+        {name, duo_auth_results_total},
+        {labels, [result]},
+        {help, "The result field from Duo auth replies"}]),
+    prometheus_counter:new([
         {name, duo_auth_methods_total},
         {labels, [method]},
         {help, "Duo auth methods attempted"}]),
@@ -195,15 +199,31 @@ handle_call({auth, Args}, _From, S = #?MODULE{}) ->
         _ -> ok
     end,
     case do_signed_req(post, <<"/auth/v2/auth">>, Args, S) of
-        {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
-        Else -> {reply, {error, Else}, S}
+        {ok, 200, #{<<"response">> := Resp}} ->
+            case Resp of
+                #{<<"txid">> := _} -> ok;
+                #{<<"result">> := R} ->
+                    prometheus_counter:inc(duo_auth_results_total, [R]);
+                _ -> ok
+            end,
+            {reply, {ok, Resp}, S};
+        Else ->
+            {reply, {error, Else}, S}
     end;
 
 handle_call({auth_status, TxId}, _From, S = #?MODULE{}) ->
     Args = #{<<"txid">> => TxId},
     case do_signed_req(get, <<"/auth/v2/auth_status">>, Args, S) of
-        {ok, 200, #{<<"response">> := Resp}} -> {reply, {ok, Resp}, S};
-        Else -> {reply, {error, Else}, S}
+        {ok, 200, #{<<"response">> := Resp}} ->
+            case Resp of
+                #{<<"result">> := <<"waiting">>} -> ok;
+                #{<<"result">> := R} ->
+                    prometheus_counter:inc(duo_auth_results_total, [R]);
+                _ -> ok
+            end,
+            {reply, {ok, Resp}, S};
+        Else ->
+            {reply, {error, Else}, S}
     end;
 
 handle_call(check, _From, S = #?MODULE{}) ->

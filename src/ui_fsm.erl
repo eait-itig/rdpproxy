@@ -694,6 +694,7 @@ scard_disconnect(S0 = #?MODULE{piv = Piv, scard = SC0}) ->
 
 check_pin(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying PIN...", S0),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 check_pin(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -767,6 +768,7 @@ check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
 
 check_login(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying login details...", S0),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 check_login(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -813,6 +815,7 @@ split_domain(UserDomain, #?MODULE{listener = L}) ->
 
 check_mfa(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Checking Duo MFA...", S0),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
 check_mfa(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -1102,6 +1105,7 @@ mfa_choice(info, {_, {passcode, DevId, CodeText, _Btn}}, S0 = #?MODULE{}) ->
 
 mfa_auth(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying MFA details...", S0),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 mfa_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -1124,7 +1128,8 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
             },
             lager:debug("doing duo push: ~p", [Args]),
             case duo:auth(Duo, Args) of
-                {ok, #{<<"result">> := <<"deny">>}} ->
+                {ok, R = #{<<"result">> := <<"deny">>}} ->
+                    lager:debug("duo denied passcode: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = "Duo Push denied"},
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
@@ -1146,7 +1151,8 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
             },
             lager:debug("doing duo phone call: ~p", [Args]),
             case duo:auth(Duo, Args) of
-                {ok, #{<<"result">> := <<"deny">>}} ->
+                {ok, R = #{<<"result">> := <<"deny">>}} ->
+                    lager:debug("duo denied phone call: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = "Duo Phone Call denied"},
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
@@ -1170,8 +1176,10 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                 <<"passcode">> => OTP
             },
             case duo:auth(Duo, Args) of
-                {ok, #{<<"result">> := <<"deny">>}} ->
-                    S1 = S0#?MODULE{errmsg = "Duo Passcode denied"},
+                {ok, R = #{<<"result">> := <<"deny">>}} ->
+                    StatusMsg = maps:get(<<"status_msg">>, R, ""),
+                    lager:debug("duo denied passcode: ~999p", [R]),
+                    S1 = S0#?MODULE{errmsg = ["Duo Passcode denied: ", StatusMsg]},
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
                     case RememberMe of
@@ -1192,6 +1200,7 @@ mfa_async(enter, _PrevState, S0 = #?MODULE{}) ->
     {ok, BtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(BtnLbl, "Cancel"),
     {ok, BtnEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen, events = [BtnEvt]},
         [{state_timeout, 500, check}]};
 mfa_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
@@ -1202,6 +1211,9 @@ mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
     case duo:auth_status(Duo, TxId) of
         {ok, #{<<"result">> := <<"waiting">>}} ->
             {keep_state, S0, [{state_timeout, 1000, check}]};
+        {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := StatusMsg}} ->
+            S1 = S0#?MODULE{errmsg = ["Duo MFA denied: ", StatusMsg]},
+            {next_state, mfa_choice, S1};
         {ok, #{<<"result">> := <<"deny">>}} ->
             S1 = S0#?MODULE{errmsg = "Duo MFA denied"},
             {next_state, mfa_choice, S1};
@@ -1972,6 +1984,7 @@ nms_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
 
 alloc_handle(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Allocating handle...", S0),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, start}]};
 alloc_handle(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -2075,6 +2088,7 @@ alloc_waiting(info, {allocated_session, Pid, Hdl}, S0 = #?MODULE{allocpid = Pid}
 
 redir(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Transferring connection...", S0),
+    do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 500, redir}]};
 
 redir(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
