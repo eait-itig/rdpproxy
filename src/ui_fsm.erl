@@ -365,7 +365,7 @@ make_waiting_screen(Text, S0 = #?MODULE{inst = Inst, sty = Sty}) ->
     ok = lv_obj:add_style(Screen, ScreenStyle),
     {ok, Spinner} = lv_spinner:create(Screen, 1000, 90),
     ok = lv_obj:set_size(Spinner, {100, 100}),
-    ok = lv_scr:load_anim(Inst, Screen, fade_in, 100, 0, true),
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
     {ok, Lbl} = lv_label:create(Screen),
     ok = lv_label:set_text(Lbl, Text),
     ok = lv_obj:add_style(Lbl, InstrStyle),
@@ -586,7 +586,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
 
     Evts1 = [BtnEvent, UAcEvent, AcEvent | Evts0],
 
-    ok = lv_scr:load_anim(Inst, Screen, fade_in, 500, 0, true),
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
@@ -1047,7 +1047,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{creds = Creds, duodevs = Devs,
 
     %% TODO: add yubikey and u2f devices?
 
-    ok = lv_scr:load_anim(Inst, Screen, fade_in, 500, 0, true),
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
@@ -1289,7 +1289,7 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{duotx = DuoTx, duo = Duo,
 
     Evts = [CodeInpEvt, MethodBtnEvt, CancelEvt],
 
-    ok = lv_scr:load_anim(Inst, Screen, fade_in, 500, 0, true),
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
@@ -1562,7 +1562,7 @@ pool_choice(state_timeout, check, S0 = #?MODULE{uinfo = UInfo, sty = Sty,
                 [PoolEvt | Acc]
             end, Evts0, Pools),
 
-            ok = lv_scr:load_anim(Inst, Screen, fade_in, 500, 0, true),
+            ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
             ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
@@ -1758,7 +1758,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
     Evts1 = [CancelEvt | Evts0],
 
-    ok = lv_scr:load_anim(Inst, Screen, fade_in, 500, 0, true),
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
@@ -1772,22 +1772,25 @@ pool_host_choice(info, {_, {select_host, IP}}, S0 = #?MODULE{hdl = Hdl0}) ->
 
 nms_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Loading computer list from NMS...", S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 nms_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-nms_choice(state_timeout, check, S0 = #?MODULE{nms = Nms, creds = Creds,
+nms_choice(state_timeout, check, S0 = #?MODULE{nms = Nms, creds = Creds}) ->
+    #{username := U} = Creds,
+    Devs0 = case nms:get_user_hosts(Nms, U) of
+        {ok, D} ->
+            {keep_state_and_data, [{state_timeout, 200, {menu, D}}]};
+        Err ->
+            lager:debug("failed to get user hosts from nms: ~p", [Err]),
+            {keep_state_and_data, [{state_timeout, 200, check}]}
+    end;
+nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{nms = Nms, creds = Creds,
                                                sty = Sty, inst = Inst,
                                                listener = L}) ->
     #{title := TitleStyle, instruction := InstrStyle,
       item_title := ItemTitleStyle, item_title_faded := ItemTitleFadedStyle,
       role := RoleStyle} = Sty,
     #{username := U} = Creds,
-    Devs0 = case nms:get_user_hosts(Nms, U) of
-        {ok, D} -> D;
-        Err ->
-            lager:debug("failed to get user hosts from nms: ~p", [Err]),
-            []
-    end,
 
     Now = erlang:system_time(second),
     Devs1 = lists:map(fun (Dev0) ->
@@ -1959,7 +1962,7 @@ nms_choice(state_timeout, check, S0 = #?MODULE{nms = Nms, creds = Creds,
             [CancelEvt | Evts0]
     end,
 
-    ok = lv_scr:load_anim(Inst, Screen, fade_in, 500, 0, true),
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
@@ -1985,7 +1988,7 @@ nms_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
 alloc_handle(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Allocating handle...", S0),
     do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, start}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, start}]};
 alloc_handle(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 alloc_handle(state_timeout, start, S0 = #?MODULE{pool = Pool, hdl = Hdl}) ->
@@ -2099,11 +2102,10 @@ redir(state_timeout, redir, S0 = #?MODULE{srv = Srv, hdl = Hdl, listener = L}) -
     lager:debug("sending ts_redir"),
     rdp_server:send_redirect(Srv, Cookie, SessId,
         rdpproxy:config([frontend, L, hostname], <<"localhost">>)),
-    {keep_state_and_data, [{state_timeout, 50, close}]};
+    {keep_state_and_data, [{state_timeout, 500, close}]};
 
-redir(state_timeout, close, S0 = #?MODULE{srv = Srv}) ->
-    rdp_server:close(Srv),
-    keep_state_and_data.
+redir(state_timeout, close, S0 = #?MODULE{}) ->
+    {stop, normal, S0}.
 
 -if(0).
 
