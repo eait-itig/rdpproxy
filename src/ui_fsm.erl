@@ -128,7 +128,6 @@ start_link(Frontend, L, Inst, {W, H}) ->
     srv :: rdp_server:server(),
     listener :: atom(),
     mref :: reference(),
-    amenufsm :: pid(),
     res :: lv:point(),
     inst :: lv:instance(),
     peer :: undefined | binary(),
@@ -190,7 +189,6 @@ init([Srv, L, Inst, {W, H}]) ->
             ok = gen_fsm:send_event(Pid, {subscribe, self()}),
             MRef = monitor(process, Pid),
             Styles = make_styles(Inst, {W, H}),
-            %{ok, AdminMenuFSM} = admin_menu_fsm:start_link(Srv, Inst),
             {ok, PinChars} = lv:make_buffer(Inst, <<"0123456789", 0>>),
             {ok, loading, #?MODULE{mref = MRef, srv = Srv, listener = L,
                                    inst = Inst, res = {W,H}, sty = Styles,
@@ -306,7 +304,7 @@ do_ping_annotate(#?MODULE{srv = F = {FPid, _}}) ->
     end,
     conn_ra:annotate(FPid, #{avg_ping => AvgPing}).
 
-check_scard(S = #?MODULE{srv = F}) ->
+check_scard(#?MODULE{srv = F}) ->
     case rdp_server:get_vchan_pid(F, rdpdr_fsm) of
         {ok, RdpDr} ->
             case rdpdr_fsm:get_devices(RdpDr) of
@@ -358,7 +356,7 @@ make_screen(#?MODULE{inst = Inst, res = {W, H}, sty = Sty}) ->
     ok = lv_img:set_src(Logo,
         rdp_lvgl_server:find_image_path(rdpproxy,
             rdpproxy:config([ui, logo], "uq-logo.png"))),
-    {ok, {LogoW, _LogoH}} = lv_obj:get_size(Logo),
+    {ok, {_LogoW, _LogoH}} = lv_obj:get_size(Logo),
 
     {ok, Flex} = lv_obj:create(Inst, Screen),
     ok = lv_obj:add_style(Flex, FlexStyle),
@@ -372,7 +370,7 @@ make_screen(#?MODULE{inst = Inst, res = {W, H}, sty = Sty}) ->
     end,
     {Screen, Flex}.
 
-make_waiting_screen(Text, S0 = #?MODULE{inst = Inst, sty = Sty}) ->
+make_waiting_screen(Text, #?MODULE{inst = Inst, sty = Sty}) ->
     #{screen := ScreenStyle, instruction := InstrStyle} = Sty,
     {ok, Screen} = lv_scr:create(Inst),
     ok = lv_obj:add_style(Screen, ScreenStyle),
@@ -421,7 +419,7 @@ make_plain_group(TopLevel, #?MODULE{inst = Inst, sty = Sty}) ->
     InnerFlex.
 
 %% @private
-dead(enter, _PrevState, S0 = #?MODULE{}) ->
+dead(enter, _PrevState, #?MODULE{}) ->
     {keep_state_and_data, [{state_timeout, 0, die}]};
 dead(state_timeout, die, S0 = #?MODULE{}) ->
     {stop, normal, S0}.
@@ -496,7 +494,7 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
     S3 = S2#?MODULE{creds = Creds1},
 
     Fsm = self(),
-    Checker = spawn(fun() ->
+    spawn(fun() ->
         Res = check_scard(S3),
         Fsm ! {scard_result, Res}
     end),
@@ -520,7 +518,7 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
 %% @private
 login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
                                        cinfo = CInfo}) ->
-    #{row := RowStyle, title := TitleStyle, subtitle := SubtitleStyle,
+    #{title := TitleStyle, subtitle := SubtitleStyle,
       instruction := InstrStyle, group := GroupStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
@@ -541,14 +539,15 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
     ok = lv_label:set_text(Instr, [rdpproxy:config([ui, instruction_login])]),
     ok = lv_obj:add_style(Instr, InstrStyle),
 
-    case S0 of
-        #?MODULE{errmsg = undefined} -> ok;
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
         #?MODULE{errmsg = ErrMsg} ->
             {ok, ErrOuter} = lv_obj:create(Inst, Flex),
             ok = lv_obj:add_style(ErrOuter, GroupStyle),
             {ok, ErrLbl} = lv_label:create(ErrOuter),
             ok = lv_label:set_text(ErrLbl, ErrMsg),
-            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2))
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
     end,
 
     Evts0 = lists:foldl(fun
@@ -621,7 +620,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             ok
     end,
 
-    {keep_state, S0#?MODULE{screen = Screen, events = Evts1,
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
                             widgets = #{flex => Flex, inp => InpGroup}}};
 
 login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
@@ -795,8 +794,7 @@ check_login(state_timeout, check, S0 = #?MODULE{creds = #{username := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
 check_login(state_timeout, check, S0 = #?MODULE{creds = #{password := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
-check_login(state_timeout, check, S0 = #?MODULE{creds = Creds0, srv = Srv,
-                                                listener = L}) ->
+check_login(state_timeout, check, S0 = #?MODULE{creds = Creds0, srv = Srv}) ->
     #{username := Username, password := Password, domain := Domain} = Creds0,
     {FPid, _} = Srv,
     Creds1 = Creds0#{session => FPid},
@@ -824,7 +822,7 @@ check_login(state_timeout, check, S0 = #?MODULE{creds = Creds0, srv = Srv,
 split_domain(UserDomain, #?MODULE{listener = L}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config(
         [frontend, L, domains], [<<".">>]),
-    {Domain, Username} = case binary:split(UserDomain, <<$\\>>) of
+    case binary:split(UserDomain, <<$\\>>) of
         [D, U] -> case lists:member(D, ValidDomains) of
             true -> {D, U};
             false -> {DefaultDomain, U}
@@ -838,7 +836,7 @@ check_mfa(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
 check_mfa(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, srv = Srv, uinfo = UInfo0}) ->
+check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
     #{username := Username} = Creds,
     #?MODULE{peer = Peer, cinfo = CardInfo, uinfo = UInfo0} = S0,
     UInfo1 = UInfo0#{card_info => CardInfo, client_ip => Peer},
@@ -910,8 +908,7 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
             end
     end.
 
-mfa_choice(enter, _PrevState, S0 = #?MODULE{creds = Creds, duodevs = Devs,
-                                            sty = Sty, cinfo = CInfo,
+mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                                             inst = Inst}) ->
     #{row := RowStyle, group := GroupStyle, title := TitleStyle,
       instruction := InstrStyle} = Sty,
@@ -930,18 +927,19 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{creds = Creds, duodevs = Devs,
     ok = lv_span:set_text(Instr, [$\n, rdpproxy:config([ui, instruction_mfa])]),
     ok = lv_span:set_style(Instr, InstrStyle),
 
-    case S0 of
-        #?MODULE{errmsg = undefined} -> ok;
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
         #?MODULE{errmsg = ErrMsg} ->
             {ok, ErrOuter} = lv_obj:create(Inst, Flex),
             ok = lv_obj:add_style(ErrOuter, GroupStyle),
             {ok, ErrLbl} = lv_label:create(ErrOuter),
             ok = lv_label:set_text(ErrLbl, ErrMsg),
-            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2))
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
     end,
 
     Evts0 = lists:foldl(fun (Dev, Acc0) ->
-        #{<<"device">> := Id, <<"type">> := Type} = Dev,
+        #{<<"device">> := Id} = Dev,
         Name = case Dev of
             #{<<"display_name">> := N} -> N;
             #{<<"name">> := N} -> N;
@@ -955,7 +953,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{creds = Creds, duodevs = Devs,
                 [<<"push">>, <<"sms">>, <<"phone">>, <<"mobile_otp">>]
         end,
 
-        Acc1 = lists:foldl(fun
+        lists:foldl(fun
             (<<"push">>, DevAcc0) ->
                 DevFlex = make_group(Flex, 16#f101, S0),
                 {ok, Row} = lv_obj:create(Inst, DevFlex),
@@ -1074,7 +1072,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{creds = Creds, duodevs = Devs,
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
-    {keep_state, S0#?MODULE{screen = Screen, events = Evts1,
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
                             rmbrchk = RememberCheck}};
 
 mfa_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
@@ -1195,7 +1193,7 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                 {ok, #{<<"txid">> := TxId}} ->
                     {next_state, mfa_async, S0#?MODULE{duotx = TxId}}
             end;
-        #{method := otp, device := DevId, otp := OTP} ->
+        #{method := otp, otp := OTP} ->
             Args = #{
                 <<"username">> => U,
                 <<"ipaddr">> => Peer,
@@ -1265,11 +1263,8 @@ mfa_async(info, {_, cancel}, S0 = #?MODULE{}) ->
     S1 = S0#?MODULE{errmsg = "Cancelled", duo = Duo},
     {next_state, mfa_choice, S1}.
 
-mfa_push_code(enter, _PrevState, S0 = #?MODULE{duotx = DuoTx, duo = Duo,
-                                               creds = Creds, sty = Sty,
-                                               inst = Inst}) ->
-    #{row := RowStyle, group := GroupStyle, title := TitleStyle,
-      instruction := InstrStyle} = Sty,
+mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
+    #{row := RowStyle, title := TitleStyle, instruction := InstrStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
@@ -1515,8 +1510,8 @@ manual_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 manual_host(info, {_, cancel}, S0 = #?MODULE{rstate = RState}) ->
     {next_state, RState, S0}.
 
-process_acl(ConfigName, S0 = #?MODULE{creds = Creds, uinfo = UInfo0,
-                                      cinfo = CInfo, peer = ClientIP}) ->
+process_acl(ConfigName, #?MODULE{creds = Creds, uinfo = UInfo0,
+                                 cinfo = CInfo, peer = ClientIP}) ->
     ACL = rdpproxy:config([ui, ConfigName], [{deny, everybody}]),
     Now = erlang:system_time(second),
     % Always include the client IP as well as the basic user info from KRB5
@@ -1536,8 +1531,7 @@ pool_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 pool_choice(state_timeout, check, S0 = #?MODULE{uinfo = UInfo, sty = Sty,
                                                 inst = Inst}) ->
-    #{group := GroupStyle, row := RowStyle, title := TitleStyle,
-      instruction := InstrStyle} = Sty,
+    #{title := TitleStyle, instruction := InstrStyle} = Sty,
 
     {ok, Pools} = session_ra:get_pools_for(UInfo),
 
@@ -1609,17 +1603,6 @@ pool_choice(info, {_, {pool, ID}}, S0 = #?MODULE{}) ->
     S1 = S0#?MODULE{pool = ID},
     {next_state, pool_host_choice, S1}.
 
-create_itig_button(Screen) ->
-    {ok, ItigBtn} = lv_btn:create(Screen),
-    {ok, ItigGearImg} = lv_img:create(ItigBtn),
-    ok = lv_img:set_src(ItigGearImg, settings),
-    {ok, ItigBtnLbl} = lv_label:create(ItigBtn),
-    ok = lv_label:set_text(ItigBtnLbl, "ITIG menu"),
-    ok = lv_obj:align(ItigBtnLbl, left_mid, {20, 0}),
-    ok = lv_obj:add_flag(ItigBtn, ignore_layout),
-    ok = lv_obj:align(ItigBtn, top_right, {-10, 10}),
-    ItigBtn.
-
 pool_host_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Loading computer list...", S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
@@ -1651,7 +1634,7 @@ pool_host_choice(state_timeout, check, S0 = #?MODULE{pool = Pool, creds = Creds}
                 end
             end, Devs0),
             Devs1 = lists:map(fun (Dev) ->
-                #{ip := Ip, handles := HDs, report_state := {St, _When},
+                #{handles := HDs, report_state := {St, _When},
                   role := Role, alloc_history := AQ} = Dev,
                 OtherUserHDs = lists:filter(fun
                     (#{user := U2}) when (U2 =:= U) -> false;
@@ -1808,18 +1791,18 @@ nms_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 nms_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-nms_choice(state_timeout, check, S0 = #?MODULE{nms = Nms, creds = Creds}) ->
+nms_choice(state_timeout, check, #?MODULE{nms = Nms, creds = Creds}) ->
     #{username := U} = Creds,
-    Devs0 = case nms:get_user_hosts(Nms, U) of
+    case nms:get_user_hosts(Nms, U) of
         {ok, D} ->
             {keep_state_and_data, [{state_timeout, 200, {menu, D}}]};
         Err ->
             lager:debug("failed to get user hosts from nms: ~p", [Err]),
             {keep_state_and_data, [{state_timeout, 200, check}]}
     end;
-nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{nms = Nms, creds = Creds,
-                                               sty = Sty, inst = Inst,
-                                               listener = L}) ->
+nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
+                                                       sty = Sty, inst = Inst,
+                                                       listener = L}) ->
     #{title := TitleStyle, instruction := InstrStyle,
       item_title := ItemTitleStyle, item_title_faded := ItemTitleFadedStyle,
       role := RoleStyle} = Sty,
@@ -2130,7 +2113,7 @@ redir(enter, _PrevState, S0 = #?MODULE{}) ->
 redir(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
-redir(state_timeout, redir, S0 = #?MODULE{srv = Srv, hdl = Hdl, listener = L}) ->
+redir(state_timeout, redir, #?MODULE{srv = Srv, hdl = Hdl, listener = L}) ->
     #{handle := Cookie, sessid := SessId} = Hdl,
     lager:debug("sending ts_redir"),
     rdp_server:send_redirect(Srv, Cookie, SessId,
