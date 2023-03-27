@@ -46,6 +46,7 @@
     callback_mode/0
     ]).
 -export([
+    dead/3,
     loading/3,
     login/3,
     check_login/3,
@@ -182,14 +183,19 @@ start_link(Frontend, L, Inst, {W, H}) ->
 init([Srv, L, Inst, {W, H}]) ->
     {Pid, _} = Srv,
     lager:debug("ui_fsm for frontend ~p", [Pid]),
-    gen_fsm:send_event(Pid, {subscribe, self()}),
-    MRef = monitor(process, Pid),
-    Styles = make_styles(Inst, {W, H}),
-    %{ok, AdminMenuFSM} = admin_menu_fsm:start_link(Srv, Inst),
-    {ok, PinChars} = lv:make_buffer(Inst, <<"0123456789", 0>>),
-    {ok, loading, #?MODULE{mref = MRef, srv = Srv, listener = L,
-                           inst = Inst, res = {W,H}, sty = Styles,
-                           pinchars = PinChars}}.
+    case process_info(Pid) of
+        undefined ->
+            {ok, dead, #?MODULE{}};
+        _ ->
+            ok = gen_fsm:send_event(Pid, {subscribe, self()}),
+            MRef = monitor(process, Pid),
+            Styles = make_styles(Inst, {W, H}),
+            %{ok, AdminMenuFSM} = admin_menu_fsm:start_link(Srv, Inst),
+            {ok, PinChars} = lv:make_buffer(Inst, <<"0123456789", 0>>),
+            {ok, loading, #?MODULE{mref = MRef, srv = Srv, listener = L,
+                                   inst = Inst, res = {W,H}, sty = Styles,
+                                   pinchars = PinChars}}
+    end.
 
 make_styles(Inst, {W, H}) ->
     {ok, Scr} = lv_style:create(Inst),
@@ -264,8 +270,15 @@ make_styles(Inst, {W, H}) ->
 callback_mode() -> [state_functions, state_enter].
 
 %% @private
-terminate(_Why, _State, #?MODULE{}) ->
-    ok.
+terminate(Reason, State, #?MODULE{duo = undefined, nms = undefined}) ->
+    lager:debug("ui_fsm dying from state ~s due to ~999p", [State, Reason]),
+    ok;
+terminate(Reason, State, S0 = #?MODULE{duo = Duo}) when not (Duo =:= undefined) ->
+    duo:stop(Duo),
+    terminate(Reason, State, S0#?MODULE{duo = undefined});
+terminate(Reason, State, S0 = #?MODULE{nms = Nms}) when not (Nms =:= undefined) ->
+    nms:stop(Nms),
+    terminate(Reason, State, S0#?MODULE{nms = undefined}).
 
 %% @private
 code_change(_OldVsn, OldState, S0, _Extra) ->
@@ -406,6 +419,12 @@ make_plain_group(TopLevel, #?MODULE{inst = Inst, sty = Sty}) ->
     ok = lv_obj:set_scroll_dir(InnerFlex, [vertical]),
 
     InnerFlex.
+
+%% @private
+dead(enter, _PrevState, S0 = #?MODULE{}) ->
+    {keep_state_and_data, [{state_timeout, 0, die}]};
+dead(state_timeout, die, S0 = #?MODULE{}) ->
+    {stop, normal, S0}.
 
 %% @private
 loading(enter, _PrevState, S0 = #?MODULE{}) ->
@@ -855,7 +874,8 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
             {next_state, check_shell, S0};
         {ok, #{<<"result">> := <<"enroll">>}} ->
-            S1 = S0#?MODULE{errmsg = <<"Duo MFA required but not enrolled">>},
+            S1 = S0#?MODULE{errmsg = <<"Duo MFA required but not enrolled.\n"
+                "Visit auth.uq.edu.au in a web browser to set up.">>},
             {next_state, login, S1};
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("duo bypass for ~p", [Username]),
@@ -874,6 +894,9 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
             S1 = S0#?MODULE{errmsg = Msg},
             lager:debug("duo deny for ~p: ~p (id = ~p)", [Username, Msg, DuoId]),
             {next_state, login, S1};
+        {error, {error, timeout}} ->
+            lager:debug("timed out doing duo preauth, trying again"),
+            {keep_state_and_data, [{state_timeout, 100, preauth}]};
         Else ->
             lager:debug("duo preauth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
             case remember_ra:check({DuoId, Username}) of
@@ -881,7 +904,7 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
                     lager:debug("skipping duo for ~p due to remember me", [Username]),
                     {next_state, check_shell, S0};
                 false ->
-                    Msg = iolist_to_binary(io_lib:format("~999p", [Else])),
+                    Msg = iolist_to_binary(io_lib:format("Error contacting Duo MFA:\n~p", [Else])),
                     S1 = S0#?MODULE{errmsg = Msg},
                     {next_state, login, S1}
             end
@@ -1134,9 +1157,13 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
                     {next_state, mfa_push_code, S0#?MODULE{duotx = undefined}};
+                {error, {error, timeout}} ->
+                    lager:debug("duo auth call timed out, retrying"),
+                    {keep_state_and_data, [{state_timeout, 500, check}]};
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
-                    S1 = S0#?MODULE{errmsg = "Error contacting Duo API"},
+                    Msg = io_lib:format("Error contacting Duo API:\n~p", [Err]),
+                    S1 = S0#?MODULE{errmsg = Msg},
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"txid">> := TxId}} ->
                     {next_state, mfa_push_code, S0#?MODULE{duotx = TxId}}
@@ -1175,6 +1202,7 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                 <<"factor">> => <<"passcode">>,
                 <<"passcode">> => OTP
             },
+            lager:debug("doing duo passcode"),
             case duo:auth(Duo, Args) of
                 {ok, R = #{<<"result">> := <<"deny">>}} ->
                     StatusMsg = maps:get(<<"status_msg">>, R, ""),
@@ -1187,6 +1215,9 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                         true -> ok = remember_ra:remember({DuoId, U})
                     end,
                     {next_state, check_shell, S0};
+                {error, {error, timeout}} ->
+                    lager:debug("duo auth call timed out, retrying"),
+                    {keep_state_and_data, [{state_timeout, 500, check}]};
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     S1 = S0#?MODULE{errmsg = "Error contacting Duo API"},
@@ -1218,6 +1249,7 @@ mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
             S1 = S0#?MODULE{errmsg = "Duo MFA denied"},
             {next_state, mfa_choice, S1};
         {ok, #{<<"result">> := <<"allow">>}} ->
+            lager:debug("duo allowed auth, proceeding"),
             #?MODULE{duoid = DuoId} = S0,
             case RememberMe of
                 false -> ok;
@@ -1251,9 +1283,9 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{duotx = DuoTx, duo = Duo,
 
     {ok, Instr} = lv_span:new_span(Text),
     ok = lv_span:set_text(Instr, [$\n, "Additional confirmation is required "
-        "with Duo Push. Please open the Duo App on your phone or tablet "
-        "and check for a 4-digit code before accepting the Push. Enter "
-        "the code below, then press Accept on your device."]),
+        "with Duo Push.\n\n - Open the Duo App on your phone or tablet.\n"
+        " - Check for a 4-digit code before accepting the Push.\n - Enter "
+        "the code below, then press Accept on your device.\n"]),
     ok = lv_span:set_style(Instr, InstrStyle),
 
     Group = make_group(Flex, 16#f084, S0),
@@ -1308,6 +1340,7 @@ mfa_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
         {WantCode, _} ->
             {next_state, mfa_async, S0};
         _ ->
+            lager:debug("duo push verification code incorrect"),
             #?MODULE{inst = Inst, screen = Screen, sty = Sty} = S0,
             #{group := GroupStyle} = Sty,
             {ok, Flex} = lv_obj:get_child(Screen, 1),
@@ -3927,16 +3960,6 @@ handle_info({scard_result, _}, State, S = #?MODULE{}) ->
 handle_info(Msg, State, S = #?MODULE{}) ->
     ?MODULE:State(Msg, S).
 
-%% @private
-terminate(_Reason, _State, #?MODULE{duo = undefined, nms = undefined}) ->
-    ok;
-terminate(_Reason, _State, #?MODULE{duo = Duo, nms = Nms}) ->
-    duo:stop(Duo),
-    case Nms of
-        undefined -> ok;
-        _ -> nms:stop(Nms)
-    end,
-    ok.
 
 %% @private
 % default handler
