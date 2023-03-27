@@ -624,6 +624,7 @@ match_rule(#{user := U, card_info := #{slots := SlotMap}}, _T,
         _ -> [maps:get(Slot, SlotMap, #{})]
     end,
     match_slots_rule(Slots, Field, Value1);
+match_rule(#{user := U}, _T, {_, cert, _, _, _}) -> no_match;
 match_rule(#{user := U}, _T, {_, user, U}) -> match;
 match_rule(#{user := U}, T, {_, user, U, TimeExp}) -> match_timeexp(T, TimeExp);
 match_rule(#{user := _U}, _T, {_, user, _}) -> no_match;

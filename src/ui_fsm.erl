@@ -1510,10 +1510,7 @@ manual_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 manual_host(info, {_, cancel}, S0 = #?MODULE{rstate = RState}) ->
     {next_state, RState, S0}.
 
-process_acl(ConfigName, #?MODULE{creds = Creds, uinfo = UInfo0,
-                                 cinfo = CInfo, peer = ClientIP}) ->
-    ACL = rdpproxy:config([ui, ConfigName], [{deny, everybody}]),
-    Now = erlang:system_time(second),
+uinfo(#?MODULE{creds = Creds, uinfo = UInfo0, cinfo = CInfo, peer = ClientIP}) ->
     % Always include the client IP as well as the basic user info from KRB5
     UInfo1 = UInfo0#{client_ip => ClientIP},
     % Only include the card_info if we used smartcard auth
@@ -1521,19 +1518,22 @@ process_acl(ConfigName, #?MODULE{creds = Creds, uinfo = UInfo0,
         #{slot := _, pin := _} -> UInfo1#{card_info => CInfo};
         _ -> UInfo1
     end,
-    lager:debug("~999p: ~999p", [UInfo2, ACL]),
-    session_ra:process_rules(UInfo2, Now, ACL).
+    UInfo2.
+
+process_acl(ConfigName, S0 = #?MODULE{}) ->
+    ACL = rdpproxy:config([ui, ConfigName], [{deny, everybody}]),
+    Now = erlang:system_time(second),
+    session_ra:process_rules(uinfo(S0), Now, ACL).
 
 pool_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Loading pool list...", S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 pool_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-pool_choice(state_timeout, check, S0 = #?MODULE{uinfo = UInfo, sty = Sty,
-                                                inst = Inst}) ->
+pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     #{title := TitleStyle, instruction := InstrStyle} = Sty,
 
-    {ok, Pools} = session_ra:get_pools_for(UInfo),
+    {ok, Pools} = session_ra:get_pools_for(uinfo(S0)),
 
     ShowAdmin = (process_acl(admin_acl, S0) =:= allow),
     ShowNMSPool = ShowAdmin orelse (process_acl(pool_nms_acl, S0) =:= allow),
@@ -1845,7 +1845,6 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
         end,
         Dev1#{building => Building, room => Room, group => Group}
     end, Devs0),
-
     Grouped = lists:foldl(fun (Dev, Acc0) ->
         #{group := Group} = Dev,
         L0 = maps:get(Group, Acc0, []),
@@ -1887,7 +1886,61 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
 
     Groups = [recent | (maps:keys(Grouped) -- [recent])],
 
-    Evts0 = lists:foldl(fun (GroupKey, Acc) ->
+    ShowPools = (rdpproxy:config([frontend, L, mode], pool) =:= nms_choice),
+
+    Evts0 = case ShowPools of
+        false -> [];
+        true ->
+            {ok, Pools0} = session_ra:get_pools_for(uinfo(S0)),
+            Pools1 = lists:filter(fun
+                (#{id := default}) -> false;
+                (_) -> true
+            end, Pools0),
+
+            Pools2 = lists:sort(fun
+                (#{priority := A}, #{priority := B}) when (A =< B) -> true;
+                (#{title := A}, #{title := B}) when (A =< B) -> true;
+                (_, _) -> false
+            end, Pools1),
+
+            case Pools2 of
+                [] -> ok;
+                _ -> {ok, _} = lv_list:add_text(List, "Pools")
+            end,
+
+            lists:foldl(fun (Pool, Acc) ->
+                #{id := PoolId, title := PoolTitle,
+                  help_text := PoolHelpText} = Pool,
+
+                {ok, Opt} = lv_list:add_btn(List, none, none),
+
+                {ok, Icon} = lv_label:create(Opt),
+                ok = lv_obj:set_style_text_font(Icon, {"lineawesome", regular, 16}),
+                ok = lv_label:set_text(Icon, unicode:characters_to_binary([16#f247], utf8)),
+                ok = lv_obj:align(Icon, left_mid),
+                ok = lv_obj:set_size(Icon, {{percent, 2}, content}),
+
+                {ok, Label} = lv_span:create(Opt),
+                ok = lv_obj:add_flag(Label, [clickable, event_bubble]),
+                ok = lv_obj:set_size(Label, {{percent, 80}, content}),
+                ok = lv_span:set_mode(Label, break),
+
+                {ok, DevTitle} = lv_span:new_span(Label),
+                ok = lv_span:set_style(DevTitle, ItemTitleStyle),
+                ok = lv_span:set_text(DevTitle, PoolTitle),
+
+                {ok, HelpSpan} = lv_span:new_span(Label),
+                ok = lv_span:set_text(HelpSpan, [$\n, PoolHelpText]),
+                ok = lv_span:set_style(HelpSpan, RoleStyle),
+
+                ok = lv_group:add_obj(InpGroup, Opt),
+                {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
+                    {select_pool, PoolId}),
+                [DevEvt | Acc]
+            end, [], Pools2)
+    end,
+
+    Evts1 = lists:foldl(fun (GroupKey, Acc) ->
         #{GroupKey := GroupDevs} = Grouped,
         GroupHeading = case GroupKey of
             recent -> "Recently used (last 4w)";
@@ -1897,6 +1950,10 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             [] -> ok;
             _ -> {ok, _} = lv_list:add_text(List, GroupHeading)
         end,
+        GroupDevsSorted = lists:sort(fun
+            (#{hostname := A}, #{hostname := B}) when (A =< B) -> true;
+            (_, _) -> false
+        end, GroupDevs),
         lists:foldl(fun (Dev, AccAcc) ->
             #{ip := IP, hostname := Hostname, building := Building,
               room := Room, owner := Owner} = Dev,
@@ -1963,26 +2020,26 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
                 {select_host, Dev}),
             [DevEvt | AccAcc]
-        end, Acc, GroupDevs)
-    end, [], Groups),
+        end, Acc, GroupDevsSorted)
+    end, Evts0, Groups),
 
     Mode = rdpproxy:config([frontend, L, mode], pool),
-    Evts1 = case Mode of
+    Evts2 = case Mode of
         nms_choice ->
-            Evts0;
+            Evts1;
         _ ->
             {ok, CancelBtn} = lv_btn:create(Flex),
             {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
             ok = lv_label:set_text(CancelBtnLbl, "Back"),
             {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
-            [CancelEvt | Evts0]
+            [CancelEvt | Evts1]
     end,
 
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
-    {keep_state, S0#?MODULE{screen = Screen, events = Evts1}};
+    {keep_state, S0#?MODULE{screen = Screen, events = Evts2}};
 
 nms_choice(info, {_, {select_host, Dev}}, S0 = #?MODULE{nms = Nms}) ->
     #?MODULE{hdl = Hdl0} = S0,
@@ -1997,6 +2054,10 @@ nms_choice(info, {_, {select_host, Dev}}, S0 = #?MODULE{nms = Nms}) ->
     Ret = nms:wol(Nms, Hostname),
     lager:debug("wol for ~p returned ~p", [Hostname, Ret]),
     {next_state, alloc_handle, S1};
+
+nms_choice(info, {_, {select_pool, ID}}, S0 = #?MODULE{}) ->
+    S1 = S0#?MODULE{pool = ID},
+    {next_state, pool_host_choice, S1};
 
 nms_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
     {next_state, check_shell, S0}.
@@ -2879,7 +2940,8 @@ mfa({submit_otp, _DevId, Code}, S = #?MODULE{duo = Duo, root = Root, peer = Peer
             mfa(allow, S1)
     end;
 
-mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
+mfa(allow, S = #?MODULE{listener = L, duoid = DuoId}) ->
+    UInfo = uinfo(S),
     do_ping_annotate(S),
     Mode = rdpproxy:config([frontend, L, mode], pool),
     case S of
@@ -2927,7 +2989,7 @@ mfa(allow, S = #?MODULE{uinfo = UInfo, listener = L, duoid = DuoId}) ->
                     choose(setup_ui, S#?MODULE{pool = Pool})
             end;
         pool ->
-            {ok, Pools0} = session_ra:get_pools_for(UInfo),
+            {ok, Pools0} = session_ra:get_pools_for(uinfo(S0)),
             NMSAcl = rdpproxy:config([ui, pool_nms_acl], [{deny, everybody}]),
             Now = erlang:system_time(second),
             Pools1 = case session_ra:process_rules(UInfo, Now, NMSAcl) of
@@ -3552,7 +3614,7 @@ choose_pool(setup_ui, S = #?MODULE{w = W, h = H, format = Fmt}) ->
     #?MODULE{uinfo = UInfo = #{user := U}} = S,
     Pools0 = case S of
         #?MODULE{pools = undefined} ->
-            {ok, Ps} = session_ra:get_pools_for(UInfo),
+            {ok, Ps} = session_ra:get_pools_for(uinfo(S)),
             Ps;
         #?MODULE{pools = Ps} ->
             Ps
