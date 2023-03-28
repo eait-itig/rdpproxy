@@ -124,6 +124,8 @@ start_link(Frontend, L, Inst, {W, H}) ->
 
 -type msec() :: integer().
 
+-type devfilter() :: #{search => string(), mine => boolean(), shared => boolean()}.
+
 -record(?MODULE, {
     srv :: rdp_server:server(),
     listener :: atom(),
@@ -155,7 +157,11 @@ start_link(Frontend, L, Inst, {W, H}) ->
     allocpid :: undefined | pid(),
     allocmref :: undefined | reference(),
     waitstart :: undefined | msec(),
-    rstate :: undefined | atom
+    rstate :: undefined | atom,
+    devmap :: undefined | [{map(), lv:object()}],
+    filter = #{} :: devfilter(),
+    admin_custom :: undefined | lv:object(),
+    admin_custom_label :: undefined | lv_span:span()
     }).
 
     % sess :: undefined | session_ra:handle_state(),
@@ -356,17 +362,43 @@ make_screen(#?MODULE{inst = Inst, res = {W, H}, sty = Sty}) ->
     ok = lv_img:set_src(Logo,
         rdp_lvgl_server:find_image_path(rdpproxy,
             rdpproxy:config([ui, logo], "uq-logo.png"))),
-    {ok, {_LogoW, _LogoH}} = lv_obj:get_size(Logo),
+    {ok, {_LogoW, LogoH}} = lv_obj:get_size(Logo),
 
     {ok, Flex} = lv_obj:create(Inst, Screen),
     ok = lv_obj:add_style(Flex, FlexStyle),
 
     if
         (W > H) ->
-            FlexW = if (W div 3 < 500) -> 500; true -> W div 3 end,
+            FlexW = if (0.2 * W < 500) -> 500; true -> {percent, 20} end,
             ok = lv_obj:set_size(Flex, {FlexW, {percent, 100}});
         true ->
-            ok = lv_obj:set_size(Flex, {{percent, 80}, {percent, 66}})
+            FlexH = H - LogoH - 50,
+            ok = lv_obj:set_size(Flex, {{percent, 80}, FlexH})
+    end,
+    {Screen, Flex}.
+
+make_wide_screen(#?MODULE{inst = Inst, res = {W, H}, sty = Sty}) ->
+    #{flex := FlexStyle, screen := ScreenStyle} = Sty,
+    {ok, Screen} = lv_scr:create(Inst),
+    ok = lv_obj:add_style(Screen, ScreenStyle),
+
+    {ok, Logo} = lv_img:create(Screen),
+    ok = lv_img:set_src(Logo,
+        rdp_lvgl_server:find_image_path(rdpproxy,
+            rdpproxy:config([ui, logo], "uq-logo.png"))),
+    {ok, {_LogoW, LogoH}} = lv_obj:get_size(Logo),
+
+    {ok, Flex} = lv_obj:create(Inst, Screen),
+    ok = lv_obj:add_style(Flex, FlexStyle),
+
+    if
+        (W > H) ->
+            FlexW = if (0.6 * W < 600) -> 600; true -> {percent, 60} end,
+            ok = lv_obj:set_size(Flex, {FlexW, {percent, 100}});
+        true ->
+            FlexH = H - LogoH - 30,
+            FlexW = if (0.8 * W < 600) -> 600; true -> {percent, 80} end,
+            ok = lv_obj:set_size(Flex, {{percent, 80}, FlexH})
     end,
     {Screen, Flex}.
 
@@ -550,7 +582,32 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             S0#?MODULE{errmsg = undefined}
     end,
 
-    Evts0 = lists:foldl(fun
+    UPwFlex = make_group(Flex, 16#f11c, S0),
+
+    {ok, UserText} = lv_textarea:create(UPwFlex),
+    ok = lv_textarea:set_one_line(UserText, true),
+    ok = lv_textarea:set_text_selection(UserText, true),
+    ok = lv_textarea:set_placeholder_text(UserText, "Username"),
+    ok = lv_group:add_obj(InpGroup, UserText),
+
+    {ok, PwText} = lv_textarea:create(UPwFlex),
+    ok = lv_textarea:set_one_line(PwText, true),
+    ok = lv_textarea:set_password_mode(PwText, true),
+    ok = lv_textarea:set_text_selection(PwText, true),
+    ok = lv_textarea:set_placeholder_text(PwText, "Password"),
+    ok = lv_group:add_obj(InpGroup, PwText),
+
+    {ok, Btn} = lv_btn:create(UPwFlex),
+    {ok, BtnLbl} = lv_label:create(Btn),
+    ok = lv_label:set_text(BtnLbl, "Login"),
+
+    {ok, BtnEvent, _} = lv_event:setup(Btn, pressed, {login, UserText, PwText}),
+    {ok, UAcEvent, _} = lv_event:setup(UserText, ready, {focus, PwText}),
+    {ok, AcEvent, _} = lv_event:setup(PwText, ready, {login, UserText, PwText}),
+
+    Evts0 = [BtnEvent, UAcEvent, AcEvent],
+
+    Evts1 = lists:foldl(fun
         ({Slot, #{valid := true, upn := [UPN | _]}}, Acc) ->
             CardFlex = make_group(Flex, 16#f2c2, S0),
             {ok, UserLbl} = lv_label:create(CardFlex),
@@ -577,47 +634,18 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             [YkBtnEvent, YkAcEvent | Acc];
         (_Slot, Acc) ->
             Acc
-    end, [], maps:to_list(maps:get(slots, CInfo, #{}))),
-
-    UPwFlex = make_group(Flex, 16#f11c, S0),
-
-    {ok, UserText} = lv_textarea:create(UPwFlex),
-    ok = lv_textarea:set_one_line(UserText, true),
-    ok = lv_textarea:set_text_selection(UserText, true),
-    ok = lv_textarea:set_placeholder_text(UserText, "Username"),
-    ok = lv_group:add_obj(InpGroup, UserText),
-
-    {ok, PwText} = lv_textarea:create(UPwFlex),
-    ok = lv_textarea:set_one_line(PwText, true),
-    ok = lv_textarea:set_password_mode(PwText, true),
-    ok = lv_textarea:set_text_selection(PwText, true),
-    ok = lv_textarea:set_placeholder_text(PwText, "Password"),
-    ok = lv_group:add_obj(InpGroup, PwText),
-
-    {ok, Btn} = lv_btn:create(UPwFlex),
-    {ok, BtnLbl} = lv_label:create(Btn),
-    ok = lv_label:set_text(BtnLbl, "Login"),
-
-    {ok, BtnEvent, _} = lv_event:setup(Btn, pressed, {login, UserText, PwText}),
-    {ok, UAcEvent, _} = lv_event:setup(UserText, ready, {focus, PwText}),
-    {ok, AcEvent, _} = lv_event:setup(PwText, ready, {login, UserText, PwText}),
-
-    Evts1 = [BtnEvent, UAcEvent, AcEvent | Evts0],
+    end, Evts0, maps:to_list(maps:get(slots, CInfo, #{}))),
 
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
     case Creds of
-        #{username := Username} when (length(Evts0) == 0) ->
+        #{username := Username} ->
             ok = lv_textarea:set_text(UserText, Username),
             ok = lv_group:focus_obj(PwText);
-        #{username := Username} ->
-            ok = lv_textarea:set_text(UserText, Username);
-        _ when (length(Evts0) == 0) ->
-            ok = lv_group:focus_obj(UserText);
         _ ->
-            ok
+            ok = lv_group:focus_obj(UserText)
     end,
 
     {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
@@ -631,7 +659,6 @@ login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
     Evts1 = lists:foldl(fun
         ({Slot, #{valid := true, upn := [UPN | _]}}, Acc) ->
             CardFlex = make_group(Flex, 16#f2c2, S0),
-            ok = lv_obj:move_to_index(CardFlex, 2),
             {ok, UserLbl} = lv_label:create(CardFlex),
             ok = lv_label:set_text(UserLbl, UPN),
 
@@ -1543,7 +1570,7 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
             {next_state, pool_host_choice, S0#?MODULE{pool = ID}};
 
         _ ->
-            {Screen, Flex} = make_screen(S0),
+            {Screen, Flex} = make_wide_screen(S0),
             {ok, InpGroup} = lv_group:create(Inst),
 
             {ok, Text} = lv_span:create(Flex),
@@ -1684,7 +1711,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
     #{item_title := ItemTitleStyle, title := TitleStyle,
       instruction := InstrStyle, role := RoleStyle} = Sty,
 
-    {Screen, Flex} = make_screen(S0),
+    {Screen, Flex} = make_wide_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
     {ok, Text} = lv_span:create(Flex),
@@ -1805,7 +1832,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
                                                        listener = L}) ->
     #{title := TitleStyle, instruction := InstrStyle,
       item_title := ItemTitleStyle, item_title_faded := ItemTitleFadedStyle,
-      role := RoleStyle} = Sty,
+      role := RoleStyle, row := RowStyle} = Sty,
     #{username := U} = Creds,
 
     Now = erlang:system_time(second),
@@ -1851,7 +1878,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
         Acc0#{Group => L0 ++ [Dev]}
     end, #{recent => []}, Devs1),
 
-    {Screen, Flex} = make_screen(S0),
+    {Screen, Flex} = make_wide_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
     {ok, Text} = lv_span:create(Flex),
@@ -1867,29 +1894,80 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
         instruction_choose])]),
     ok = lv_span:set_style(Instr, InstrStyle),
 
-    case Devs1 of
-        [] ->
-            EmptyGrp = make_plain_group(Flex, S0),
-            {ok, EmptyText} = lv_span:create(EmptyGrp),
-            ok = lv_obj:set_size(EmptyText, {{percent, 80}, content}),
-            ok = lv_span:set_mode(EmptyText, break),
+    {ok, FilterRow} = lv_obj:create(Inst, Flex),
+    ok = lv_obj:add_style(FilterRow, RowStyle),
 
-            {ok, EmptySpan} = lv_span:new_span(EmptyText),
-            ok = lv_span:set_text(EmptySpan, get_msg(no_machines, S0));
-        _ ->
-            ok
-    end,
+    {ok, Filter} = lv_textarea:create(FilterRow),
+    ok = lv_textarea:set_one_line(Filter, true),
+    ok = lv_textarea:set_text_selection(Filter, true),
+    ok = lv_textarea:set_placeholder_text(Filter, "search"),
+    ok = lv_group:add_obj(InpGroup, Filter),
+
+    {ok, FiltEvt, _} = lv_event:setup(Filter, value_changed,
+        {update_filter, search, Filter}),
+
+    {ok, Mine} = lv_checkbox:create(FilterRow),
+    ok = lv_obj:set_style_text_color(Mine, lv_color:palette(white)),
+    ok = lv_checkbox:set_text(Mine, "Owned by me"),
+    ok = lv_checkbox:check(Mine),
+
+    {ok, MineEvt, _} = lv_event:setup(Mine, value_changed,
+        {update_filter, mine, Mine}),
+
+    {ok, Shared} = lv_checkbox:create(FilterRow),
+    ok = lv_obj:set_style_text_color(Shared, lv_color:palette(white)),
+    ok = lv_checkbox:set_text(Shared, "Shared with others"),
+    ok = lv_checkbox:check(Shared),
+
+    {ok, SharedEvt, _} = lv_event:setup(Shared, value_changed,
+        {update_filter, shared, Shared}),
+
+    Evts0 = [FiltEvt, MineEvt, SharedEvt],
 
     {ok, List} = lv_list:create(Flex),
-    ok = lv_obj:set_size(List, {{percent, 100}, content}),
-    ok = lv_obj:set_style_max_height(List, {percent, 70}),
+    ok = lv_obj:set_size(List, {{percent, 100}, {percent, 70}}),
 
     Groups = [recent | (maps:keys(Grouped) -- [recent])],
 
     ShowPools = (rdpproxy:config([frontend, L, mode], pool) =:= nms_choice),
+    ShowAdmin = (process_acl(admin_acl, S0) =:= allow),
 
-    Evts0 = case ShowPools of
-        false -> [];
+    {Evts1, AdminCustom, AdminCustomLabel} = case ShowAdmin of
+        false -> {Evts0, undefined, undefined};
+        true ->
+            {ok, AdminOpt} = lv_list:add_btn(List, none, none),
+            ok = lv_obj:add_flag(AdminOpt, hidden),
+
+            {ok, AdminIcon} = lv_label:create(AdminOpt),
+            ok = lv_obj:set_style_text_font(AdminIcon, {"lineawesome", regular, 16}),
+            ok = lv_label:set_text(AdminIcon, unicode:characters_to_binary([16#f044], utf8)),
+            ok = lv_obj:align(AdminIcon, left_mid),
+            ok = lv_obj:set_size(AdminIcon, {{percent, 2}, content}),
+
+            {ok, AdminLabel} = lv_span:create(AdminOpt),
+            ok = lv_obj:add_flag(AdminLabel, [clickable, event_bubble]),
+            ok = lv_obj:set_size(AdminLabel, {{percent, 80}, content}),
+            ok = lv_span:set_mode(AdminLabel, break),
+
+            {ok, Tpl} = lv_span:new_span(AdminLabel),
+            ok = lv_span:set_text(Tpl, "Connect directly to "),
+            ok = lv_span:set_style(Tpl, RoleStyle),
+
+            {ok, CustomHostTxt} = lv_span:new_span(AdminLabel),
+            ok = lv_span:set_text(CustomHostTxt, "blah"),
+            ok = lv_span:set_style(CustomHostTxt, ItemTitleStyle),
+
+            {ok, Suffix} = lv_span:new_span(AdminLabel),
+            ok = lv_span:set_text(Suffix, " (admin only)"),
+            ok = lv_span:set_style(Suffix, RoleStyle),
+
+            {ok, AdminEvt, _} = lv_event:setup(AdminOpt, pressed,
+                {custom_host, Filter}),
+            {[AdminEvt | Evts0], AdminOpt, CustomHostTxt}
+    end,
+
+    Evts2 = case ShowPools of
+        false -> Evts1;
         true ->
             {ok, Pools0} = session_ra:get_pools_for(uinfo(S0)),
             Pools1 = lists:filter(fun
@@ -1937,10 +2015,10 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
                 {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
                     {select_pool, PoolId}),
                 [DevEvt | Acc]
-            end, [], Pools2)
+            end, Evts1, Pools2)
     end,
 
-    Evts1 = lists:foldl(fun (GroupKey, Acc) ->
+    {Evts3, DevMap} = lists:foldl(fun (GroupKey, {EvtAcc, DevMapAcc}) ->
         #{GroupKey := GroupDevs} = Grouped,
         GroupHeading = case GroupKey of
             recent -> "Recently used (last 4w)";
@@ -1954,7 +2032,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             (#{hostname := A}, #{hostname := B}) when (A =< B) -> true;
             (_, _) -> false
         end, GroupDevs),
-        lists:foldl(fun (Dev, AccAcc) ->
+        lists:foldl(fun (Dev, {EvtAccAcc, DevMapAccAcc}) ->
             #{ip := IP, hostname := Hostname, building := Building,
               room := Room, owner := Owner} = Dev,
             DevIcon = case Owner of
@@ -2019,27 +2097,29 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             ok = lv_group:add_obj(InpGroup, Opt),
             {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
                 {select_host, Dev}),
-            [DevEvt | AccAcc]
-        end, Acc, GroupDevsSorted)
-    end, Evts0, Groups),
+            {[DevEvt | EvtAccAcc], [{Dev, Opt} | DevMapAccAcc]}
+        end, {EvtAcc, DevMapAcc}, GroupDevsSorted)
+    end, {Evts2, []}, Groups),
 
     Mode = rdpproxy:config([frontend, L, mode], pool),
-    Evts2 = case Mode of
+    Evts4 = case Mode of
         nms_choice ->
-            Evts1;
+            Evts3;
         _ ->
             {ok, CancelBtn} = lv_btn:create(Flex),
             {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
             ok = lv_label:set_text(CancelBtnLbl, "Back"),
             {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
-            [CancelEvt | Evts1]
+            [CancelEvt | Evts3]
     end,
 
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
-    {keep_state, S0#?MODULE{screen = Screen, events = Evts2}};
+    {keep_state, S0#?MODULE{screen = Screen, events = Evts4, devmap = DevMap,
+                            admin_custom = AdminCustom,
+                            admin_custom_label = AdminCustomLabel}};
 
 nms_choice(info, {_, {select_host, Dev}}, S0 = #?MODULE{nms = Nms}) ->
     #?MODULE{hdl = Hdl0} = S0,
@@ -2059,8 +2139,81 @@ nms_choice(info, {_, {select_pool, ID}}, S0 = #?MODULE{}) ->
     S1 = S0#?MODULE{pool = ID},
     {next_state, pool_host_choice, S1};
 
+nms_choice(info, {_, {update_filter, search, Txt}}, S0 = #?MODULE{filter = F0}) ->
+    {ok, Search} = lv_textarea:get_text(Txt),
+    F1 = case Search of
+        <<>> -> maps:remove(search, F0);
+        _ -> F0#{search => Search}
+    end,
+    case S0 of
+        #?MODULE{admin_custom = undefined} -> ok;
+        #?MODULE{admin_custom = Custom, admin_custom_label = Lbl} ->
+            case Search of
+                <<>> ->
+                    ok = lv_obj:add_flag(Custom, hidden);
+                _ ->
+                    ok = lv_span:set_text(Lbl, Search),
+                    ok = lv_obj:clear_flag(Custom, hidden)
+            end
+    end,
+    S1 = S0#?MODULE{filter = F1},
+    filter_devmap(S1),
+    {keep_state, S1};
+nms_choice(info, {_, {update_filter, Prop, Check}}, S0 = #?MODULE{filter = F0}) ->
+    {ok, Checked} = lv_checkbox:is_checked(Check),
+    F1 = F0#{Prop => Checked},
+    S1 = S0#?MODULE{filter = F1},
+    filter_devmap(S1),
+    {keep_state, S1};
+
+nms_choice(info, {_, {custom_host, Inp}}, S0 = #?MODULE{}) ->
+    {ok, Text} = lv_textarea:get_text(Inp),
+    S1 = S0#?MODULE{hostname = Text},
+    {next_state, manual_host, S1};
+
 nms_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
     {next_state, check_shell, S0}.
+
+filter_devmap(#?MODULE{creds = Creds, filter = F, devmap = DevMap}) ->
+    #{username := U} = Creds,
+    {ToShow, ToHide} = lists:partition(fun ({Dev, Obj}) ->
+        match_filter(U, Dev, F)
+    end, DevMap),
+    lists:foreach(fun ({_Dev, Obj}) ->
+        ok = lv_obj:clear_flag(Obj, hidden)
+    end, ToShow),
+    lists:foreach(fun ({_Dev, Obj}) ->
+        ok = lv_obj:add_flag(Obj, hidden)
+    end, ToHide).
+
+match_filter(U, Dev, F0 = #{search := Text}) ->
+    #{ip := IP, hostname := Hostname, building := Building, room := Room,
+      class := Class} = Dev,
+    RoleBin = case maps:get(role, Dev, none) of
+        none -> <<>>;
+        Role -> Role
+    end,
+    Haystack = string:to_lower(unicode:characters_to_list(
+        iolist_to_binary([IP, $\s, Hostname, $\s, RoleBin, $\s,
+            Building, $\s, Room, $\s, Class]))),
+    Needle = string:to_lower(unicode:characters_to_list(Text)),
+    case string:find(Haystack, Needle) of
+        nomatch -> false;
+        _ -> match_filter(U, Dev, maps:remove(search, F0))
+    end;
+match_filter(U, Dev, F0 = #{mine := false}) ->
+    #{owner := Owner} = Dev,
+    case Owner of
+        U -> false;
+        _ -> match_filter(U, Dev, maps:remove(mine, F0))
+    end;
+match_filter(U, Dev, F0 = #{shared := false}) ->
+    #{owner := Owner} = Dev,
+    case Owner of
+        U -> match_filter(U, Dev, maps:remove(shared, F0));
+        _ -> false
+    end;
+match_filter(_U, _Dev, _) -> true.
 
 alloc_handle(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Allocating handle...", S0),
