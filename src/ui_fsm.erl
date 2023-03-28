@@ -1961,6 +1961,8 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             ok = lv_span:set_text(Suffix, " (admin only)"),
             ok = lv_span:set_style(Suffix, RoleStyle),
 
+            ok = lv_group:add_obj(InpGroup, AdminOpt),
+
             {ok, AdminEvt, _} = lv_event:setup(AdminOpt, pressed,
                 {custom_host, Filter}),
             {[AdminEvt | Evts0], AdminOpt, CustomHostTxt}
