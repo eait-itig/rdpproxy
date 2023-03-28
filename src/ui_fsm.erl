@@ -1320,8 +1320,8 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     {ok, Instr} = lv_span:new_span(Text),
     ok = lv_span:set_text(Instr, [$\n, "Additional confirmation is required "
         "with Duo Push.\n\n - Open the Duo App on your phone or tablet.\n"
-        " - Check for a 4-digit code before accepting the Push.\n - Enter "
-        "the code below, then press Accept on your device.\n"]),
+        " - Find the 4-digit code before approving the Push.\n - Enter "
+        "the code below.\n - Then press Approve on your device.\n"]),
     ok = lv_span:set_style(Instr, InstrStyle),
 
     Group = make_group(Flex, 16#f084, S0),
