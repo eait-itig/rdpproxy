@@ -1345,6 +1345,12 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
     ok = lv_label:set_text(MethodBtnLbl, "Submit"),
 
+    {ok, Img} = lv_img:create(Screen),
+    ok = lv_img:set_src(Img,
+        rdp_lvgl_server:find_image_path(rdpproxy, "push-confirm-code.png")),
+    ok = lv_obj:add_flag(Img, ignore_layout),
+    ok = lv_obj:align(Img, bottom_right),
+
     {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
         {code, CodeText}),
     {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
