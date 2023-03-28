@@ -14,3 +14,7 @@ _build/
 log/
 etc/
 nonode@nohost/
+src/PKCS7.erl
+src/*.asn1db
+asngen/
+include/PKCS7.hrl

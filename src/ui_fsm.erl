@@ -33,6 +33,7 @@
 -include_lib("rdp_proto/include/kbd.hrl").
 -include_lib("rdp_proto/include/tsud.hrl").
 -include_lib("rdp_proto/include/rdpdr.hrl").
+-include_lib("rdpproxy/include/PKCS7.hrl").
 
 -include_lib("kernel/include/inet.hrl").
 
@@ -714,13 +715,26 @@ challenge_key(Piv, Slot, Key) ->
     Challenge = <<"rdpivy cak challenge", 0,
         (crypto:strong_rand_bytes(16))/binary>>,
     HashAlgo = case Alg of
-        rsa2048 -> sha256;
+        rsa2048 -> sha512;
         eccp256 -> sha256;
         eccp384 -> sha384;
         eccp521 -> sha512
     end,
     Hash = crypto:hash(HashAlgo, Challenge),
-    case apdu_transform:command(Piv, {sign, Slot, Alg, Hash}) of
+    Input = case Alg of
+        rsa2048 ->
+            {ok, Info} = 'PKCS7':encode('DigestInfo', #'DigestInfo'{
+                digestAlgorithm = #'AlgorithmIdentifier'{
+                    algorithm = ?'id-sha512',
+                    parameters = <<5,0>>},
+                digest = Hash}),
+            PadLen = 256 - byte_size(Info) - 3,
+            Pad = binary:copy(<<16#FF>>, PadLen),
+            <<16#00, 16#01, Pad/binary, 16#00, Info/binary>>;
+        _ ->
+            Hash
+    end,
+    case apdu_transform:command(Piv, {sign, Slot, Alg, Input}) of
         {ok, [{ok, CardSig}]} ->
             public_key:verify(Challenge, HashAlgo, CardSig, Key);
         Err ->
