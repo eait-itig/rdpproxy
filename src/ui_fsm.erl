@@ -1294,11 +1294,17 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
-    {ok, Img} = lv_img:create(Screen),
-    ok = lv_img:set_src(Img,
-        rdp_lvgl_server:find_image_path(rdpproxy, "push-confirm-code.png")),
-    ok = lv_obj:add_flag(Img, ignore_layout),
-    ok = lv_obj:align(Img, bottom_right),
+    #?MODULE{res = {W, H}} = S0,
+    if
+        (W > 1000) ->
+            {ok, Img} = lv_img:create(Screen),
+            ok = lv_img:set_src(Img, rdp_lvgl_server:find_image_path(rdpproxy,
+                "push-confirm-code.png")),
+            ok = lv_obj:add_flag(Img, ignore_layout),
+            ok = lv_obj:align(Img, bottom_right);
+        true ->
+            ok
+    end,
 
     {ok, Text} = lv_span:create(Flex),
     ok = lv_obj:set_size(Text, {{percent, 100}, content}),
