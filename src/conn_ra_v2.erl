@@ -326,7 +326,9 @@ conn_to_json(C) ->
         _ -> J9
     end,
     J11 = case C of
-        #{scard := #{slots := #{piv_card_auth := CAK, piv_auth := Auth}}} ->
+        #{scard := #{slots :=
+                 #{piv_card_auth := CAK = #{valid := true},
+                   piv_auth := Auth = #{valid := true}}}} ->
             #{dn := CakSubj, serial := CakSerial} = CAK,
             #{dn := AuthSubj, serial := AuthSerial} = Auth,
             J10#{
