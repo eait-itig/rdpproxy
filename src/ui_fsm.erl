@@ -1569,7 +1569,8 @@ pool_choice(enter, _PrevState, S0 = #?MODULE{}) ->
 pool_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
-    #{title := TitleStyle, instruction := InstrStyle} = Sty,
+    #{title := TitleStyle, instruction := InstrStyle,
+      item_title := ItemTitleStyle, role := RoleStyle} = Sty,
 
     {ok, Pools} = session_ra:get_pools_for(uinfo(S0)),
 
@@ -1603,11 +1604,25 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
             Evts0 = case ShowNMSPool of
                 true ->
                     {ok, _} = lv_list:add_text(List, "Special options"),
-                    {ok, NmsOpt} = lv_list:add_btn(List, home, "NMS"),
+                    {ok, NmsOpt} = lv_list:add_btn(List, none, none),
+
+                    {ok, NmsIcon} = lv_label:create(NmsOpt),
+                    ok = lv_obj:set_style_text_font(NmsIcon, {"lineawesome", regular, 16}),
+                    ok = lv_label:set_text(NmsIcon, unicode:characters_to_binary([16#f015], utf8)),
+                    ok = lv_obj:align(NmsIcon, left_mid),
+                    ok = lv_obj:set_size(NmsIcon, {{percent, 2}, content}),
+
+                    {ok, NmsLbl} = lv_label:create(NmsOpt),
+                    ok = lv_label:set_text(NmsLbl, "NMS"),
+                    ok = lv_obj:add_style(NmsLbl, ItemTitleStyle),
+                    ok = lv_obj:set_size(NmsLbl, {{percent, 35}, content}),
+
                     {ok, NmsSubLbl} = lv_label:create(NmsOpt),
                     ok = lv_label:set_text(NmsSubLbl,
-                        "Choose from personally-assigned hosts in EAIT NMS."),
-                    ok = lv_obj:set_size(NmsSubLbl, {{percent, 60}, content}),
+                        "Choose from hosts personally assigned to you in EAIT NMS."),
+                    ok = lv_obj:add_style(NmsSubLbl, RoleStyle),
+                    ok = lv_obj:set_size(NmsSubLbl, {{percent, 63}, content}),
+
                     ok = lv_group:add_obj(InpGroup, NmsOpt),
                     {ok, NmsEvt, _} = lv_event:setup(NmsOpt, pressed, nms_choice),
                     [NmsEvt];
@@ -1618,11 +1633,26 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
             {ok, _} = lv_list:add_text(List, "Available pools"),
             Evts1 = lists:foldl(fun (PoolInfo, Acc) ->
                 #{id := ID, title := PoolTitle, help_text := HelpText} = PoolInfo,
-                {ok, PoolOpt} = lv_list:add_btn(List, right, PoolTitle),
+                {ok, PoolOpt} = lv_list:add_btn(List, none, none),
+
+                {ok, PoolIcon} = lv_label:create(PoolOpt),
+                ok = lv_obj:set_style_text_font(PoolIcon, {"lineawesome", regular, 16}),
+                ok = lv_label:set_text(PoolIcon, unicode:characters_to_binary([16#f6ff], utf8)),
+                ok = lv_obj:align(PoolIcon, left_mid),
+                ok = lv_obj:set_size(PoolIcon, {{percent, 2}, content}),
+
+                {ok, PoolLbl} = lv_label:create(PoolOpt),
+                ok = lv_label:set_text(PoolLbl, PoolTitle),
+                ok = lv_obj:add_style(PoolLbl, ItemTitleStyle),
+                ok = lv_obj:set_size(PoolLbl, {{percent, 35}, content}),
+
+
                 {ok, PoolSubLbl} = lv_label:create(PoolOpt),
                 ok = lv_label:set_text(PoolSubLbl, HelpText),
-                ok = lv_obj:set_size(PoolSubLbl, {{percent, 60}, content}),
+                ok = lv_obj:set_size(PoolSubLbl, {{percent, 63}, content}),
+                ok = lv_obj:add_style(PoolSubLbl, RoleStyle),
                 ok = lv_group:add_obj(InpGroup, PoolOpt),
+
                 {ok, PoolEvt, _} = lv_event:setup(PoolOpt, pressed, {pool, ID}),
                 [PoolEvt | Acc]
             end, Evts0, Pools),
@@ -1718,9 +1748,10 @@ pool_host_choice(state_timeout, check, S0 = #?MODULE{pool = Pool, creds = Creds}
             {keep_state_and_data, [{state_timeout, 1000, check}]}
     end;
 pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
-    #?MODULE{inst = Inst} = S0,
+    #?MODULE{inst = Inst, pool = Pool} = S0,
     #{item_title := ItemTitleStyle, title := TitleStyle,
-      instruction := InstrStyle, role := RoleStyle} = Sty,
+      item_title_faded := ItemTitleFadedStyle, instruction := InstrStyle,
+      role := RoleStyle} = Sty,
 
     {Screen, Flex} = make_wide_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
@@ -1742,6 +1773,9 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
     ok = lv_obj:set_size(List, {{percent, 100}, content}),
     ok = lv_obj:set_style_max_height(List, {percent, 70}),
 
+    {ok, #{title := PoolTitle}} = session_ra:get_pool(Pool),
+    {ok, _} = lv_list:add_text(List, PoolTitle),
+
     Evts0 = lists:foldl(fun (Dev, Acc) ->
         #{ip := IP, role := Role, last_alloc := LastAlloc} = Dev,
         Desc = maps:get(desc, Dev, none),
@@ -1751,16 +1785,26 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
         {ok, Icon} = lv_label:create(Opt),
         ok = lv_obj:set_style_text_font(Icon, {"lineawesome", regular, 16}),
         ok = lv_label:set_text(Icon, unicode:characters_to_binary([16#f108], utf8)),
-        ok = lv_obj:set_size(Icon, {{percent, 3}, content}),
+        ok = lv_obj:set_size(Icon, {{percent, 2}, content}),
 
         {ok, Label} = lv_span:create(Opt),
         ok = lv_obj:add_flag(Label, clickable),
-        ok = lv_obj:set_size(Label, {{percent, 39}, content}),
+        ok = lv_obj:set_size(Label, {{percent, 44}, content}),
         ok = lv_span:set_mode(Label, break),
 
-        {ok, DevTitle} = lv_span:new_span(Label),
-        ok = lv_span:set_style(DevTitle, ItemTitleStyle),
-        ok = lv_span:set_text(DevTitle, Hostname),
+        case binary:split(Hostname, <<".">>) of
+            [HostPre, HostPost] ->
+                {ok, DevTitlePre} = lv_span:new_span(Label),
+                ok = lv_span:set_style(DevTitlePre, ItemTitleStyle),
+                ok = lv_span:set_text(DevTitlePre, HostPre),
+                {ok, DevTitlePost} = lv_span:new_span(Label),
+                ok = lv_span:set_style(DevTitlePost, ItemTitleFadedStyle),
+                ok = lv_span:set_text(DevTitlePost, [$., HostPost]);
+            [_] ->
+                {ok, DevTitle} = lv_span:new_span(Label),
+                ok = lv_span:set_style(DevTitle, ItemTitleStyle),
+                ok = lv_span:set_text(DevTitle, Hostname)
+        end,
 
         case Desc of
             none -> ok;
@@ -1789,7 +1833,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
         end,
 
         {ok, IPLabel} = lv_label:create(Opt),
-        ok = lv_obj:set_size(IPLabel, {{percent, 26}, content}),
+        ok = lv_obj:set_size(IPLabel, {{percent, 22}, content}),
         ok = lv_label:set_text(IPLabel, IP),
         ok = lv_obj:add_style(IPLabel, RoleStyle),
 
