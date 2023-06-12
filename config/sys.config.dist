@@ -325,6 +325,11 @@
             %% Path to CA certificate
             %%
             %{ca_cert, "/etc/ssl/certs/EAIT_Internal_CA.pem"},
+
+            %%
+            %% Max time to remember eboxed passwords for (sec)
+            %%
+            %{pw_cache_lifetime, 7776000},      % 90 days
         ]},
         {nms_api, [
             %%
