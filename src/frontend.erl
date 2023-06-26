@@ -97,18 +97,23 @@ retry_start_backend(N, Srv, L, HostBin, Port, _) ->
 retry_start_backend(Srv, L, HostBin, Port) ->
     retry_start_backend(2, Srv, L, HostBin, Port, none).
 
-handle_connect(Cookie, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
+handle_connect(Cookie0, Protocols, Srv, S = #?MODULE{peer = P, listener = L}) ->
     lager:debug("connect ~p to listener ~p, protocols ~p", [P, L, Protocols]),
     % HostBin = <<"130.102.79.25">>,
     % User = <<"test">>,
     % Port = 3389,
     % Sess = #{ip => <<"130.102.79.25">>, port => 3389, user => <<"test">>},
-    case session_ra:claim_handle(Cookie) of
+    Cookie1 = case Cookie0 of
+        <<"Cookie: msts=_", RCookie/binary>> -> RCookie;
+        <<"Cookie: msts=", RCookie/binary>> -> RCookie;
+        _ -> Cookie0
+    end,
+    case session_ra:claim_handle(Cookie1) of
        {ok, Sess = #{ip := HostBin, port := Port, user := User}} ->
             {PeerIp, PeerPort} = P,
             PeerStr = iolist_to_binary(inet:ntoa(PeerIp)),
             lager:debug("~p:~p: presented cookie ~p (~p), forwarding to ~p",
-                [PeerStr, PeerPort, Cookie, User, HostBin]),
+                [PeerStr, PeerPort, Cookie1, User, HostBin]),
             prometheus_counter:inc(rdp_frontend_connections_forwarded, [L]),
             {ok, ConnId} = conn_ra:register_conn(S#?MODULE.peer, Sess),
             {ok, Backend} = retry_start_backend(Srv, L, binary_to_list(HostBin), Port),

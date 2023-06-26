@@ -2388,11 +2388,19 @@ redir(enter, _PrevState, S0 = #?MODULE{}) ->
 redir(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
-redir(state_timeout, redir, #?MODULE{srv = Srv, hdl = Hdl, listener = L}) ->
+redir(state_timeout, redir, #?MODULE{srv = Srv, hdl = Hdl, listener = L, creds = C}) ->
     #{handle := Cookie, sessid := SessId} = Hdl,
+    Flags = case C of
+        #{username := _} -> [];
+        #{slot := _} -> [smartcard]
+    end,
+    Opts = #{
+        session_id => SessId,
+        cookie => <<"Cookie: msts=_", Cookie/binary>>,
+        flags => Flags
+    },
     lager:debug("sending ts_redir"),
-    rdp_server:send_redirect(Srv, Cookie, SessId,
-        rdpproxy:config([frontend, L, hostname], <<"localhost">>)),
+    rdp_server:send_redirect(Srv, Opts),
     {keep_state_and_data, [{state_timeout, 500, close}]};
 
 redir(state_timeout, close, S0 = #?MODULE{}) ->
