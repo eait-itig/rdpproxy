@@ -1873,6 +1873,10 @@ nms_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 nms_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+nms_choice(state_timeout, check, S0 = #?MODULE{nms = undefined}) ->
+    % if we got here via pool mode we might not have an NMS conn yet
+    {ok, Nms} = nms:start_link(),
+    nms_choice(state_timeout, check, S0#?MODULE{nms = Nms});
 nms_choice(state_timeout, check, #?MODULE{nms = Nms, creds = Creds}) ->
     #{username := U} = Creds,
     case nms:get_user_hosts(Nms, U) of
