@@ -2394,9 +2394,11 @@ redir(state_timeout, redir, #?MODULE{srv = Srv, hdl = Hdl, listener = L, creds =
         #{username := _} -> [];
         #{slot := _} -> [smartcard]
     end,
+    Fqdn = rdpproxy:config([frontend, L, hostname], <<"localhost">>),
     Opts = #{
         session_id => SessId,
         cookie => <<"Cookie: msts=_", Cookie/binary>>,
+        fqdn => Fqdn,
         flags => Flags
     },
     lager:debug("sending ts_redir"),
