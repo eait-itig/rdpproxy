@@ -62,7 +62,7 @@ register_metrics() ->
     ok.
 
 -define(PAST_CONN_LIMIT, 32).
--define(USER_PAST_CONN_LIMIT, 16).
+-define(USER_PAST_CONN_LIMIT, 32).
 -define(LOG_TIME_UNIT_SEC, 3600).
 
 -type auth_attempt() :: #{
@@ -597,7 +597,7 @@ apply(_Meta, {pid_to_conn_id, _T, Pid}, S0 = #?MODULE{watches = W0}) ->
             {S0, {error, not_found}, []}
     end;
 
-apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0}) ->
+apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0, users = U0}) ->
     Id = if
         is_pid(IdOrPid) ->
             case W0 of
@@ -615,14 +615,47 @@ apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0
                 (updated, _, Acc) -> Acc;
                 (peer, _, Acc) -> Acc;
                 (on_user, _, Acc) -> Acc;
+                (on_hour, _, Acc) -> Acc;
                 (auth_attempts, V, Acc) ->
                     #{auth_attempts := Attempts0} = Acc,
                     Acc#{auth_attempts => Attempts0 ++ V};
                 (K, V, Acc) -> Acc#{K => V}
             end, Conn0, Map),
             Conn2 = Conn1#{updated => T},
-            C1 = C0#{Id => Conn2},
-            S1 = S0#?MODULE{conns = C1},
+            {U1, Conn3, C1} = case {Conn0, Conn2} of
+                {#{session := #{user := User0}}, #{session := #{user := User0}}} ->
+                    {U0, Conn2, C0};
+                {#{session := #{user := User0}}, #{session := #{user := User1}}} ->
+                    #{User0 := OldUQ0, User1 := UQ0} = U0,
+                    OldUQ1 = queue:delete(Id, OldUQ0),
+                    Limit = case User1 of
+                        <<"_">> -> ?PAST_CONN_LIMIT;
+                        _ -> ?USER_PAST_CONN_LIMIT
+                    end,
+                    UQ1 = queue:in(Id, UQ0),
+                    {UQ2, CC1} = case queue:len(UQ1) of
+                        N when (N > Limit) ->
+                            {{value, OldId}, QQ} = queue:out(UQ1),
+                            case C0 of
+                                #{OldId := #{stopped := _, on_hour := false}} ->
+                                    {QQ, maps:remove(OldId, C0)};
+                                #{OldId := OldConn0} ->
+                                    OldConn1 = OldConn0#{on_user => false},
+                                    {QQ, C0#{OldId => OldConn1}};
+                                _ ->
+                                    {QQ, C0}
+                            end;
+                        _ ->
+                            {UQ1, C0}
+                    end,
+                    {U0#{User0 => OldUQ1, User1 => UQ2},
+                     Conn2#{on_user => true},
+                     CC1};
+                _ ->
+                    {U0, Conn2, C0}
+            end,
+            C2 = C1#{Id => Conn3},
+            S1 = S0#?MODULE{conns = C2, users = U1},
             {S1, ok, []};
         _ ->
             {S0, {error, not_found}, []}
