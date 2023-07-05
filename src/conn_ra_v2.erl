@@ -626,7 +626,8 @@ apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0
                 {#{session := #{user := User0}}, #{session := #{user := User0}}} ->
                     {U0, Conn2, C0};
                 {#{session := #{user := User0}}, #{session := #{user := User1}}} ->
-                    #{User0 := OldUQ0, User1 := UQ0} = U0,
+                    OldUQ0 = maps:get(User0, U0, queue:new()),
+                    UQ0 = maps:get(User1, U0, queue:new()),
                     OldUQ1 = queue:delete(Id, OldUQ0),
                     Limit = case User1 of
                         <<"_">> -> ?PAST_CONN_LIMIT;
