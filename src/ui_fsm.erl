@@ -816,6 +816,8 @@ check_login(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 check_login(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+check_login(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 check_login(state_timeout, check, S0 = #?MODULE{creds = #{username := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
 check_login(state_timeout, check, S0 = #?MODULE{creds = #{password := <<>>}}) ->
@@ -862,6 +864,8 @@ check_mfa(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
 check_mfa(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+check_mfa(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
     #{username := Username} = Creds,
     #?MODULE{peer = Peer, cinfo = CardInfo, uinfo = UInfo0} = S0,
@@ -1104,6 +1108,9 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
 mfa_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
+mfa_choice(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+
 mfa_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
     #?MODULE{creds = #{username := U}} = S0,
     Creds1 = #{username => U},
@@ -1156,6 +1163,8 @@ mfa_auth(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 mfa_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+mfa_auth(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                                              peer = Peer, duoid = DuoId}) ->
     #{username := U, duo := DuoCreds} = Creds,
@@ -1260,6 +1269,8 @@ mfa_async(enter, _PrevState, S0 = #?MODULE{}) ->
         [{state_timeout, 500, check}]};
 mfa_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+mfa_async(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
     #?MODULE{creds = #{username := U, duo := DuoCreds}} = S0,
     RememberMe = maps:get(remember_me, DuoCreds, false),
@@ -1363,6 +1374,9 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
 mfa_push_code(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
+mfa_push_code(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+
 mfa_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
     #?MODULE{duotx = DuoTx} = S0,
     #{duo := #{method := push, code := WantCode}} = Creds,
@@ -1421,6 +1435,8 @@ check_shell(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 check_shell(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+check_shell(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 check_shell(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
     Mode = rdpproxy:config([frontend, L, mode], pool),
     case Mode of
@@ -1545,6 +1561,8 @@ manual_host(state_timeout, check, S0 = #?MODULE{hostname = HostText0}) ->
     end;
 manual_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+manual_host(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 manual_host(info, {_, cancel}, S0 = #?MODULE{rstate = RState}) ->
     {next_state, RState, S0}.
 
@@ -1568,6 +1586,8 @@ pool_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 pool_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+pool_choice(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     #{title := TitleStyle, instruction := InstrStyle,
       item_title := ItemTitleStyle, role := RoleStyle} = Sty,
@@ -1676,6 +1696,8 @@ pool_host_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 pool_host_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+pool_host_choice(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 pool_host_choice(state_timeout, check, S0 = #?MODULE{pool = Pool, creds = Creds}) ->
     #{username := U} = Creds,
     case session_ra:get_pool(Pool) of
@@ -1873,6 +1895,8 @@ nms_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 nms_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+nms_choice(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
 nms_choice(state_timeout, check, S0 = #?MODULE{nms = undefined}) ->
     % if we got here via pool mode we might not have an NMS conn yet
     {ok, Nms} = nms:start_link(),
