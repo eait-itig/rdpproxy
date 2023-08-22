@@ -64,7 +64,7 @@ get_user_hosts(N, Username) ->
     get_user_hosts(N, Username, 3).
 
 get_user_hosts(N, Username, Retries) ->
-    case gen_server:call(N, {get_user_hosts, Username}) of
+    case gen_server:call(N, {get_user_hosts, Username}, infinity) of
         {error, {error, timeout}} ->
             case Retries of
                 1 -> {error, timeout};
@@ -75,11 +75,11 @@ get_user_hosts(N, Username, Retries) ->
 
 -spec wol(client(), hostname()) -> {ok, binary()} | {error, term()}.
 wol(N, Hostname) ->
-    gen_server:call(N, {wol, Hostname}).
+    gen_server:call(N, {wol, Hostname}, infinity).
 
 -spec bump_count(client(), username(), binary()) -> {ok, binary()} | {error, term()}.
 bump_count(N, Username, Ip) ->
-    gen_server:call(N, {bump_count, Username, Ip}).
+    gen_server:call(N, {bump_count, Username, Ip}, infinity).
 
 -record(?MODULE, {gun, host, signer}).
 
@@ -97,7 +97,30 @@ init(_) ->
     Signer = http_signature_signer:new(SigKey1, <<"rsa-sha256">>,
         [<<"date">>, <<"host">>, <<"(request-target)">>]),
 
-    {ok, Gun} = gun:open(Host, 443),
+    Timeout = 3000,
+    TOpts0 = [{verify, verify_peer}],
+    TOpts1 = case erlang:function_exported(public_key, cacerts_get, 0) of
+        true ->
+            CACerts = public_key:cacerts_get(),
+            CADers = [Der || {cert, Der, _} <- CACerts],
+            TOpts0 ++ [{cacerts, CADers}];
+        false ->
+            TOpts0
+    end,
+    Opts = #{
+        connect_timeout => Timeout,
+        tls_handshake_timeout => Timeout,
+        domain_lookup_timeout => Timeout,
+        retry => 1,
+        tcp_opts => [
+            {send_timeout, Timeout},
+            {send_timeout_close, true},
+            {keepalive, true}
+        ],
+        transport => tls,
+        tls_opts => TOpts1
+        },
+    {ok, Gun} = gun:open(Host, 443, Opts),
 
     {ok, #?MODULE{gun = Gun, host = Host, signer = Signer}}.
 
@@ -127,7 +150,7 @@ do_signed_req(Method, Uri, Params, #?MODULE{gun = Gun, host = Host, signer = Sig
     SReq = http_signature:sign(Signer, Method, Uri, Hdrs1),
     #{headers := Hdrs2} = SReq,
     Req = gun:request(Gun, MethodBin, Uri, maps:to_list(Hdrs2), Body),
-    case gun:await(Gun, Req, 3000) of
+    case gun:await(Gun, Req, 30000) of
         {response, fin, Status, _Headers} ->
             {ok, Status};
         {response, nofin, Status, Headers} ->

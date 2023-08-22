@@ -109,6 +109,11 @@
             {err_other, <<"Error contacting host, contact %HELPDESK%">>},
 
             %%
+            %% Text for the host edit screen
+            %%
+            {title_edit_host, <<"Edit computer">>},
+
+            %%
             %% Helpdesk email, used in some error messages
             %%
             {helpdesk, <<"helpdesk@eait.uq.edu.au">>},

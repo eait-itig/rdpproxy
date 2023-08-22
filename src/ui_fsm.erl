@@ -64,7 +64,8 @@
     mfa_push_code/3,
     alloc_handle/3,
     alloc_waiting/3,
-    redir/3
+    redir/3,
+    editing_host/3
     ]).
 
 -export([
@@ -127,6 +128,19 @@ start_link(Frontend, L, Inst, {W, H}) ->
 
 -type devfilter() :: #{search => string(), mine => boolean(), shared => boolean()}.
 
+-type nms_host_info() :: #{
+    hostname => binary(),
+    owner => binary(),
+    ip => binary(),
+    building => binary(),
+    room => binary(),
+    class => binary(),
+    role => binary(),
+    desc => binary(),
+    last_alloc => integer(),
+    group => binary()
+    }.
+
 -record(?MODULE, {
     srv :: rdp_server:server(),
     listener :: atom(),
@@ -162,7 +176,8 @@ start_link(Frontend, L, Inst, {W, H}) ->
     devmap :: undefined | [{map(), lv:object()}],
     filter = #{} :: devfilter(),
     admin_custom :: undefined | lv:object(),
-    admin_custom_label :: undefined | lv_span:span()
+    admin_custom_label :: undefined | lv_span:span(),
+    edit_host :: undefined | nms_host_info()
     }).
 
     % sess :: undefined | session_ra:handle_state(),
@@ -1581,6 +1596,100 @@ process_acl(ConfigName, S0 = #?MODULE{}) ->
     Now = erlang:system_time(second),
     session_ra:process_rules(uinfo(S0), Now, ACL).
 
+editing_host(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, edit_host = Dev}) ->
+    #{title := TitleStyle, role := RoleStyle, row := RowStyle,
+      group := GroupStyle, flex := FlexStyle} = Sty,
+    ShowAdmin = (process_acl(admin_acl, S0) =:= allow),
+
+    #{hostname := Hostname, ip := IP} = Dev,
+    Desc = maps:get(desc, Dev, <<>>),
+
+    {Screen, Flex} = make_screen(S0),
+    {ok, InpGroup} = lv_group:create(Inst),
+
+    {ok, Text} = lv_span:create(Flex),
+    ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+    ok = lv_span:set_mode(Text, break),
+
+    {ok, Title} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Title, rdpproxy:config([ui, title_edit_host])),
+    ok = lv_span:set_style(Title, TitleStyle),
+
+    {ok, Form} = lv_obj:create(Inst, Flex),
+    ok = lv_obj:add_style(Form, FlexStyle),
+    ok = lv_obj:add_style(Form, GroupStyle),
+    ok = lv_obj:set_scrollbar_mode(Form, off),
+
+    {ok, HostnameRow} = lv_obj:create(Inst, Form),
+    ok = lv_obj:add_style(HostnameRow, RowStyle),
+    {ok, HostnameLabel} = lv_label:create(HostnameRow),
+    ok = lv_obj:set_size(HostnameLabel, {{percent, 30}, content}),
+    ok = lv_label:set_text(HostnameLabel, <<"Hostname">>),
+    {ok, HostnameEdit} = lv_label:create(HostnameRow),
+    ok = lv_label:set_text(HostnameEdit, Hostname),
+
+    {ok, IPRow} = lv_obj:create(Inst, Form),
+    ok = lv_obj:add_style(IPRow, RowStyle),
+    {ok, IPLabel} = lv_label:create(IPRow),
+    ok = lv_obj:set_size(IPLabel, {{percent, 30}, content}),
+    ok = lv_label:set_text(IPLabel, <<"IP address">>),
+    {ok, IPEdit} = lv_label:create(IPRow),
+    ok = lv_label:set_text(IPEdit, IP),
+
+    {ok, DescRow} = lv_obj:create(Inst, Form),
+    ok = lv_obj:add_style(DescRow, RowStyle),
+    {ok, DescLabel} = lv_label:create(DescRow),
+    ok = lv_obj:set_size(DescLabel, {{percent, 30}, content}),
+    ok = lv_label:set_text(DescLabel, <<"Friendly name">>),
+    {ok, DescEdit} = lv_textarea:create(DescRow),
+    ok = lv_textarea:set_one_line(DescEdit, true),
+    ok = lv_textarea:set_text_selection(DescEdit, true),
+    ok = lv_textarea:set_text(DescEdit, Desc),
+    ok = lv_obj:set_size(DescEdit, {{percent, 60}, content}),
+    ok = lv_group:add_obj(InpGroup, DescEdit),
+
+    {ok, BtnRow} = lv_obj:create(Inst, Form),
+    ok = lv_obj:add_style(BtnRow, RowStyle),
+
+    {ok, SaveBtn} = lv_btn:create(BtnRow),
+    {ok, SaveBtnLbl} = lv_label:create(SaveBtn),
+    ok = lv_label:set_text(SaveBtnLbl, "Save"),
+
+    {ok, CancelBtn} = lv_btn:create(BtnRow),
+    {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
+    ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
+
+    {ok, SaveBtnEvt, _} = lv_event:setup(SaveBtn, pressed,
+        {save, [{desc, DescEdit}]}),
+    {ok, CancelBtnEvt, _} = lv_event:setup(CancelBtn, pressed,
+        cancel),
+
+    Evts = [SaveBtnEvt, CancelBtnEvt],
+
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+    ok = lv_indev:set_group(Inst, keyboard, InpGroup),
+
+    {keep_state, S0#?MODULE{screen = Screen, events = Evts}};
+editing_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+editing_host(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+editing_host(info, {_, cancel}, S0 = #?MODULE{}) ->
+    {next_state, nms_choice, S0};
+editing_host(info, {_, {save, FieldMap}}, S0 = #?MODULE{edit_host = Dev0}) ->
+    #{ip := IP, hostname := Hostname} = Dev0,
+    _ = session_ra:create_host(#{pool => default,
+                                 ip => IP,
+                                 hostname => Hostname}),
+    M0 = #{ip => IP, hostname => Hostname},
+    M1 = lists:foldl(fun ({Field, EditWidget}, Acc) ->
+        {ok, Value} = lv_textarea:get_text(EditWidget),
+        Acc#{Field => Value}
+    end, M0, FieldMap),
+    _ = session_ra:update_host(M1),
+    {next_state, nms_choice, S0}.
+
 pool_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Loading pool list...", S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
@@ -1814,27 +1923,27 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
         ok = lv_obj:set_size(Label, {{percent, 44}, content}),
         ok = lv_span:set_mode(Label, break),
 
+        {HNPrefix, HNSuffix, HNStyle} = case Desc of
+            none -> {[], [], ItemTitleStyle};
+            <<>> -> {[], [], ItemTitleStyle};
+            _ ->
+                {ok, DescSpan} = lv_span:new_span(Label),
+                ok = lv_span:set_text(DescSpan, [Desc]),
+                ok = lv_span:set_style(DescSpan, ItemTitleStyle),
+                {[$\s, $(], [$)], ItemTitleFadedStyle}
+        end,
         case binary:split(Hostname, <<".">>) of
             [HostPre, HostPost] ->
                 {ok, DevTitlePre} = lv_span:new_span(Label),
-                ok = lv_span:set_style(DevTitlePre, ItemTitleStyle),
-                ok = lv_span:set_text(DevTitlePre, HostPre),
+                ok = lv_span:set_style(DevTitlePre, HNStyle),
+                ok = lv_span:set_text(DevTitlePre, [HNPrefix, HostPre]),
                 {ok, DevTitlePost} = lv_span:new_span(Label),
                 ok = lv_span:set_style(DevTitlePost, ItemTitleFadedStyle),
-                ok = lv_span:set_text(DevTitlePost, [$., HostPost]);
+                ok = lv_span:set_text(DevTitlePost, [$., HostPost, HNSuffix]);
             [_] ->
                 {ok, DevTitle} = lv_span:new_span(Label),
-                ok = lv_span:set_style(DevTitle, ItemTitleStyle),
-                ok = lv_span:set_text(DevTitle, Hostname)
-        end,
-
-        case Desc of
-            none -> ok;
-            <<>> -> ok;
-            _ ->
-                {ok, DescSpan} = lv_span:new_span(Label),
-                ok = lv_span:set_text(DescSpan, [$\n, Desc]),
-                ok = lv_span:set_style(DescSpan, RoleStyle)
+                ok = lv_span:set_style(DevTitle, HNStyle),
+                ok = lv_span:set_text(DevTitle, [HNPrefix, Hostname, HNSuffix])
         end,
         case Role of
             none -> ok;
@@ -1922,7 +2031,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
     Devs1 = lists:map(fun (Dev0) ->
         #{ip := IP} = Dev0,
         Dev1 = case session_ra:get_host(IP) of
-            {ok, #{role := Role, alloc_history := AQ}} ->
+            {ok, #{role := Role, alloc_history := AQ} = DMD} ->
                 OurAllocs = lists:filter(fun
                     (#{user := U2}) when (U2 =:= U) -> true;
                     (_) -> false
@@ -1940,7 +2049,13 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
                     is_binary(Role) -> Role;
                     is_atom(Role) -> atom_to_binary(Role, latin1)
                 end,
-                Dev0#{role => RoleBin, last_alloc => LastAlloc};
+                Dev11 = Dev0#{role => RoleBin, last_alloc => LastAlloc},
+                case DMD of
+                    #{desc := Desc} when byte_size(Desc) > 0 ->
+                        Dev11#{desc => Desc};
+                    _ ->
+                        Dev11
+                end;
             _ ->
                 Dev0
         end,
@@ -2125,6 +2240,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
                 _ -> 16#f233
             end,
             Role = maps:get(role, Dev, none),
+            Desc = maps:get(desc, Dev, none),
             {ok, Opt} = lv_list:add_btn(List, none, none),
 
             {ok, Icon} = lv_label:create(Opt),
@@ -2135,21 +2251,30 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
 
             {ok, Label} = lv_span:create(Opt),
             ok = lv_obj:add_flag(Label, [clickable, event_bubble]),
-            ok = lv_obj:set_size(Label, {{percent, 44}, content}),
+            ok = lv_obj:set_size(Label, {{percent, 40}, content}),
             ok = lv_span:set_mode(Label, break),
 
+            {HNPrefix, HNSuffix, HNStyle} = case Desc of
+                none -> {[], [], ItemTitleStyle};
+                <<>> -> {[], [], ItemTitleStyle};
+                _ ->
+                    {ok, DescSpan} = lv_span:new_span(Label),
+                    ok = lv_span:set_text(DescSpan, [Desc]),
+                    ok = lv_span:set_style(DescSpan, ItemTitleStyle),
+                    {[$\s, $(], [$)], ItemTitleFadedStyle}
+            end,
             case binary:split(Hostname, <<".">>) of
                 [HostPre, HostPost] ->
                     {ok, DevTitlePre} = lv_span:new_span(Label),
-                    ok = lv_span:set_style(DevTitlePre, ItemTitleStyle),
-                    ok = lv_span:set_text(DevTitlePre, HostPre),
+                    ok = lv_span:set_style(DevTitlePre, HNStyle),
+                    ok = lv_span:set_text(DevTitlePre, [HNPrefix, HostPre]),
                     {ok, DevTitlePost} = lv_span:new_span(Label),
                     ok = lv_span:set_style(DevTitlePost, ItemTitleFadedStyle),
-                    ok = lv_span:set_text(DevTitlePost, [$., HostPost]);
+                    ok = lv_span:set_text(DevTitlePost, [$., HostPost, HNSuffix]);
                 [_] ->
                     {ok, DevTitle} = lv_span:new_span(Label),
-                    ok = lv_span:set_style(DevTitle, ItemTitleStyle),
-                    ok = lv_span:set_text(DevTitle, Hostname)
+                    ok = lv_span:set_style(DevTitle, HNStyle),
+                    ok = lv_span:set_text(DevTitle, [HNPrefix, Hostname, HNSuffix])
             end,
 
             case Role of
@@ -2175,14 +2300,22 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             end,
 
             {ok, IPLabel} = lv_label:create(Opt),
-            ok = lv_obj:set_size(IPLabel, {{percent, 22}, content}),
+            ok = lv_obj:set_size(IPLabel, {{percent, 19}, content}),
             ok = lv_label:set_text(IPLabel, IP),
             ok = lv_obj:add_style(IPLabel, RoleStyle),
+
+            {ok, EditBtn} = lv_btn:create(Opt),
+            ok = lv_obj:set_style_opa(EditBtn, 0.5),
+            {ok, EditIcon} = lv_label:create(EditBtn),
+            ok = lv_obj:set_style_text_font(EditIcon, {"lineawesome", regular, 16}),
+            ok = lv_label:set_text(EditIcon, unicode:characters_to_binary([16#f044], utf8)),
 
             ok = lv_group:add_obj(InpGroup, Opt),
             {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
                 {select_host, Dev}),
-            {[DevEvt | EvtAccAcc], [{Dev, Opt} | DevMapAccAcc]}
+            {ok, EditEvt, _} = lv_event:setup(EditBtn, pressed,
+                {edit_host, Dev}),
+            {[DevEvt, EditEvt | EvtAccAcc], [{Dev, Opt} | DevMapAccAcc]}
         end, {EvtAcc, DevMapAcc}, GroupDevsSorted)
     end, {Evts2, []}, Groups),
 
@@ -2205,6 +2338,10 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
     {keep_state, S0#?MODULE{screen = Screen, events = Evts4, devmap = DevMap,
                             admin_custom = AdminCustom,
                             admin_custom_label = AdminCustomLabel}};
+
+nms_choice(info, {_, {edit_host, Dev}}, S0 = #?MODULE{}) ->
+    S1 = S0#?MODULE{edit_host = Dev},
+    {next_state, editing_host, S1};
 
 nms_choice(info, {_, {select_host, Dev}}, S0 = #?MODULE{nms = Nms}) ->
     #?MODULE{hdl = Hdl0} = S0,
@@ -2278,8 +2415,12 @@ match_filter(U, Dev, F0 = #{search := Text}) ->
         none -> <<>>;
         Role -> Role
     end,
+    DescBin = case maps:get(desc, Dev, none) of
+        none -> <<>>;
+        Desc -> Desc
+    end,
     Haystack = string:to_lower(unicode:characters_to_list(
-        iolist_to_binary([IP, $\s, Hostname, $\s, RoleBin, $\s,
+        iolist_to_binary([IP, $\s, Hostname, $\s, RoleBin, $\s, DescBin, $\s,
             Building, $\s, Room, $\s, Class]))),
     Needle = string:to_lower(unicode:characters_to_list(Text)),
     case string:find(Haystack, Needle) of

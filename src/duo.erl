@@ -77,13 +77,13 @@ stop(D) ->
     gen_server:call(D, stop).
 
 preauth(D, Args = #{}) ->
-    gen_server:call(D, {preauth, Args}).
+    gen_server:call(D, {preauth, Args}, infinity).
 
 auth(D, Args = #{}) ->
-    gen_server:call(D, {auth, Args}).
+    gen_server:call(D, {auth, Args}, infinity).
 
 auth_status(D, TxId) ->
-    gen_server:call(D, {auth_status, TxId}).
+    gen_server:call(D, {auth_status, TxId}, infinity).
 
 -record(?MODULE, {gun, host, ikey, skey}).
 
@@ -92,7 +92,30 @@ init(_) ->
     IKey = proplists:get_value(integration_key, DuoConfig),
     SKey = proplists:get_value(secret_key, DuoConfig),
     ApiHost = proplists:get_value(api_host, DuoConfig),
-    {ok, Gun} = gun:open(ApiHost, 443),
+    Timeout = 10000,
+    TOpts0 = [{verify, verify_peer}],
+    TOpts1 = case erlang:function_exported(public_key, cacerts_get, 0) of
+        true ->
+            CACerts = public_key:cacerts_get(),
+            CADers = [Der || {cert, Der, _} <- CACerts],
+            TOpts0 ++ [{cacerts, CADers}];
+        false ->
+            TOpts0
+    end,
+    Opts = #{
+        connect_timeout => Timeout,
+        tls_handshake_timeout => Timeout,
+        domain_lookup_timeout => Timeout,
+        retry => 1,
+        tcp_opts => [
+            {send_timeout, Timeout},
+            {send_timeout_close, true},
+            {keepalive, true}
+        ],
+        transport => tls,
+        tls_opts => TOpts1
+        },
+    {ok, Gun} = gun:open(ApiHost, 443, Opts),
     {ok, #?MODULE{gun = Gun, host = ApiHost, ikey = IKey, skey = SKey}}.
 
 terminate(_Reason, _S = #?MODULE{gun = Gun}) ->

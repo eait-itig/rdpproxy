@@ -495,6 +495,7 @@ host_get([Ip]) ->
                             format_reltime(LastRep)
                     end
             end,
+            FriendlyName = maps:get(desc, Host, <<>>),
             RepStateTxt = io_lib:format("~w (~s)",
                 [RepState, format_reltime(RepChanged)]),
             io:format("IP            ~s\n", [RealIp]),
@@ -503,6 +504,7 @@ host_get([Ip]) ->
             io:format("ENABLED       ~p\n", [Ena]),
             io:format("IMAGE         ~s\n", [Img]),
             io:format("ROLE          ~s\n", [Role]),
+            io:format("FRNDLY NAME   ~s\n", [FriendlyName]),
             io:format("LAST REPORT   ~s\n", [LastRepTxt]),
             io:format("REPORT STATE  ~s\n", [RepStateTxt]),
             io:format("CERT VERIFY   ~s\n", [CertVerify]),
