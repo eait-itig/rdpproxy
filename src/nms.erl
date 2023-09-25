@@ -98,7 +98,11 @@ init(_) ->
         [<<"date">>, <<"host">>, <<"(request-target)">>]),
 
     Timeout = 3000,
-    TOpts0 = [{verify, verify_peer}],
+    TOpts0 = [
+        {verify, verify_peer},
+        {customize_hostname_check, [{match_fun,
+            public_key:pkix_verify_hostname_match_fun(https)}]}
+        ],
     TOpts1 = case erlang:function_exported(public_key, cacerts_get, 0) of
         true ->
             TOpts0 ++ [{cacerts, public_key:cacerts_get()}];
