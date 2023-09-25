@@ -602,7 +602,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
     {ok, BtnLbl} = lv_label:create(Btn),
     ok = lv_label:set_text(BtnLbl, "Login"),
 
-    {ok, BtnEvent, _} = lv_event:setup(Btn, pressed, {login, UserText, PwText}),
+    {ok, BtnEvent, _} = lv_event:setup(Btn, short_clicked, {login, UserText, PwText}),
     {ok, UAcEvent, _} = lv_event:setup(UserText, ready, {focus, PwText}),
     {ok, AcEvent, _} = lv_event:setup(PwText, ready, {login, UserText, PwText}),
 
@@ -627,7 +627,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             {ok, CardBtnLbl} = lv_label:create(CardBtn),
             ok = lv_label:set_text(CardBtnLbl, "Login"),
 
-            {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, pressed,
+            {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
                 {login_pin, Slot, PinText}),
             {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
                 {login_pin, Slot, PinText}),
@@ -676,7 +676,7 @@ login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
             {ok, CardBtnLbl} = lv_label:create(CardBtn),
             ok = lv_label:set_text(CardBtnLbl, "Login"),
 
-            {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, pressed,
+            {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
                 {login_pin, Slot, PinText}),
             {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
                 {login_pin, Slot, PinText}),
@@ -1010,7 +1010,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                 {ok, MethodBtn} = lv_btn:create(Row),
                 {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
                 ok = lv_label:set_text(MethodBtnLbl, "Duo Push"),
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
+                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {push, Id}),
 
                 [MethodBtnEvt | DevAcc0];
@@ -1025,7 +1025,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                 {ok, MethodBtn} = lv_btn:create(Row),
                 {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
                 ok = lv_label:set_text(MethodBtnLbl, "Send SMS codes"),
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
+                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {sms_codes, Id, MethodBtn}),
                 [MethodBtnEvt | DevAcc0];
             (<<"phone">>, DevAcc0) ->
@@ -1039,7 +1039,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                 {ok, MethodBtn} = lv_btn:create(Row),
                 {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
                 ok = lv_label:set_text(MethodBtnLbl, "Phone call"),
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
+                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {call, Id}),
                 [MethodBtnEvt | DevAcc0];
             (<<"mobile_otp">>, DevAcc0) ->
@@ -1065,7 +1065,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
 
                 {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
                     {passcode, Id, CodeText, MethodBtn}),
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
+                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {passcode, Id, CodeText, MethodBtn}),
 
                 [CodeInpEvt, MethodBtnEvt | DevAcc0];
@@ -1090,7 +1090,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
 
                 {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
                     {passcode, Id, CodeText, MethodBtn}),
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
+                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {passcode, Id, CodeText, MethodBtn}),
 
                 [CodeInpEvt, MethodBtnEvt | DevAcc0];
@@ -1108,7 +1108,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
-    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     Evts1 = [CancelEvt | Evts0],
 
     %% TODO: add yubikey and u2f devices?
@@ -1278,7 +1278,7 @@ mfa_async(enter, _PrevState, S0 = #?MODULE{}) ->
     {ok, CancelBtn} = lv_btn:create(Screen),
     {ok, BtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(BtnLbl, "Cancel"),
-    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen, events = [BtnEvt]},
         [{state_timeout, 500, check}]};
@@ -1370,13 +1370,13 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
 
     {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
         {code, CodeText}),
-    {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, pressed,
+    {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
         {code, CodeText}),
 
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
-    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
 
     Evts = [CodeInpEvt, MethodBtnEvt, CancelEvt],
 
@@ -1492,7 +1492,7 @@ manual_host(enter, PrevState, S0 = #?MODULE{hostname = HN, inst = Inst,
     {ok, CancelBtn} = lv_btn:create(Screen),
     {ok, BtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(BtnLbl, "Cancel"),
-    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
 
     {ok, ErrGrp} = lv_obj:create(Inst, Screen),
     ok = lv_obj:set_size(ErrGrp, {{percent, 30}, content}),
@@ -1659,9 +1659,9 @@ editing_host(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, edit_host 
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
 
-    {ok, SaveBtnEvt, _} = lv_event:setup(SaveBtn, pressed,
+    {ok, SaveBtnEvt, _} = lv_event:setup(SaveBtn, short_clicked,
         {save, [{desc, DescEdit}]}),
-    {ok, CancelBtnEvt, _} = lv_event:setup(CancelBtn, pressed,
+    {ok, CancelBtnEvt, _} = lv_event:setup(CancelBtn, short_clicked,
         cancel),
 
     Evts = [SaveBtnEvt, CancelBtnEvt],
@@ -1753,7 +1753,7 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
                     ok = lv_obj:set_size(NmsSubLbl, {{percent, 63}, content}),
 
                     ok = lv_group:add_obj(InpGroup, NmsOpt),
-                    {ok, NmsEvt, _} = lv_event:setup(NmsOpt, pressed, nms_choice),
+                    {ok, NmsEvt, _} = lv_event:setup(NmsOpt, short_clicked, nms_choice),
                     [NmsEvt];
                 false ->
                     []
@@ -1782,7 +1782,7 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
                 ok = lv_obj:add_style(PoolSubLbl, RoleStyle),
                 ok = lv_group:add_obj(InpGroup, PoolOpt),
 
-                {ok, PoolEvt, _} = lv_event:setup(PoolOpt, pressed, {pool, ID}),
+                {ok, PoolEvt, _} = lv_event:setup(PoolOpt, short_clicked, {pool, ID}),
                 [PoolEvt | Acc]
             end, Evts0, Pools),
 
@@ -1975,7 +1975,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
                 Acc;
             _ ->
                 ok = lv_group:add_obj(InpGroup, Opt),
-                {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
+                {ok, DevEvt, _} = lv_event:setup(Opt, short_clicked,
                     {select_host, IP}),
                 [DevEvt | Acc]
         end
@@ -1984,7 +1984,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(CancelBtnLbl, "Back"),
-    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     Evts1 = [CancelEvt | Evts0],
 
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
@@ -2161,7 +2161,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
 
             ok = lv_group:add_obj(InpGroup, AdminOpt),
 
-            {ok, AdminEvt, _} = lv_event:setup(AdminOpt, pressed,
+            {ok, AdminEvt, _} = lv_event:setup(AdminOpt, short_clicked,
                 {custom_host, Filter}),
             {[AdminEvt | Evts0], AdminOpt, CustomHostTxt}
     end,
@@ -2212,7 +2212,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
                 ok = lv_span:set_style(HelpSpan, RoleStyle),
 
                 ok = lv_group:add_obj(InpGroup, Opt),
-                {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
+                {ok, DevEvt, _} = lv_event:setup(Opt, short_clicked,
                     {select_pool, PoolId}),
                 [DevEvt | Acc]
             end, Evts1, Pools2)
@@ -2311,9 +2311,9 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             ok = lv_label:set_text(EditIcon, unicode:characters_to_binary([16#f044], utf8)),
 
             ok = lv_group:add_obj(InpGroup, Opt),
-            {ok, DevEvt, _} = lv_event:setup(Opt, pressed,
+            {ok, DevEvt, _} = lv_event:setup(Opt, short_clicked,
                 {select_host, Dev}),
-            {ok, EditEvt, _} = lv_event:setup(EditBtn, pressed,
+            {ok, EditEvt, _} = lv_event:setup(EditBtn, short_clicked,
                 {edit_host, Dev}),
             {[DevEvt, EditEvt | EvtAccAcc], [{Dev, Opt} | DevMapAccAcc]}
         end, {EvtAcc, DevMapAcc}, GroupDevsSorted)
@@ -2327,7 +2327,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
             {ok, CancelBtn} = lv_btn:create(Flex),
             {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
             ok = lv_label:set_text(CancelBtnLbl, "Back"),
-            {ok, CancelEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+            {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
             [CancelEvt | Evts3]
     end,
 
@@ -2471,7 +2471,7 @@ alloc_waiting(enter, _PrevState, S0 = #?MODULE{hdl = Hdl, sty = Sty,
     {ok, CancelBtn} = lv_btn:create(Screen),
     {ok, BtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(BtnLbl, "Cancel"),
-    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, pressed, cancel),
+    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
 
     {ok, ErrGrp} = lv_obj:create(Inst, Screen),
     ok = lv_obj:set_size(ErrGrp, {{percent, 30}, content}),
