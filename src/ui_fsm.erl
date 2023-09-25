@@ -226,9 +226,17 @@ make_styles(Inst, {W, H}) ->
 
     {ok, Flex} = lv_style:create(Inst),
     ok = lv_style:set_flex_flow(Flex, column),
-    ok = lv_style:set_flex_align(Flex, center, start, if (W > H) -> start; true -> center end),
+    ok = lv_style:set_flex_align(Flex, if (W > H) -> center; true -> start end,
+        start, if (W > H) -> start; true -> center end),
     ok = lv_style:set_bg_opa(Flex, 0),
     ok = lv_style:set_border_opa(Flex, 0),
+
+    {ok, XFlex} = lv_style:create(Inst),
+    ok = lv_style:set_flex_flow(XFlex, column),
+    ok = lv_style:set_flex_align(XFlex, if (W > H) -> start; true -> center end,
+        start, start),
+    ok = lv_style:set_bg_opa(XFlex, 0),
+    ok = lv_style:set_border_opa(XFlex, 0),
 
     {ok, Row} = lv_style:create(Inst),
     ok = lv_style:set_flex_flow(Row, row),
@@ -284,7 +292,7 @@ make_styles(Inst, {W, H}) ->
     #{screen => Scr, flex => Flex, group => Group, group_divider => Divider,
       row => Row, title => Title, subtitle => Subtitle,
       instruction => Instruction, item_title => ItemTitle,
-      item_title_faded => ItemTitleFaded, role => Role}.
+      item_title_faded => ItemTitleFaded, role => Role, xflex => XFlex}.
 
 %% @private
 callback_mode() -> [state_functions, state_enter].
@@ -412,7 +420,7 @@ make_wide_screen(#?MODULE{inst = Inst, res = {W, H}, sty = Sty}) ->
             FlexW = if (0.6 * W < 600) -> 600; true -> {percent, 60} end,
             ok = lv_obj:set_size(Flex, {FlexW, {percent, 100}});
         true ->
-            FlexH = H - LogoH - 30,
+            FlexH = H - LogoH - 50,
             FlexW = if (0.8 * W < 600) -> 600; true -> {percent, 80} end,
             ok = lv_obj:set_size(Flex, {FlexW, FlexH})
     end,
@@ -431,11 +439,12 @@ make_waiting_screen(Text, #?MODULE{inst = Inst, sty = Sty}) ->
     Screen.
 
 make_group(TopLevel, Symbol, #?MODULE{inst = Inst, sty = Sty}) ->
-    #{flex := FlexStyle, group := GroupStyle, group_divider := DivStyle} = Sty,
+    #{xflex := FlexStyle, group := GroupStyle, group_divider := DivStyle} = Sty,
 
     {ok, Outer} = lv_obj:create(Inst, TopLevel),
     ok = lv_obj:add_style(Outer, GroupStyle),
     ok = lv_obj:set_scrollbar_mode(Outer, off),
+    ok = lv_obj:clear_flag(Outer, [scrollable]),
 
     {ok, Sym} = lv_label:create(Outer),
     ok = lv_obj:set_style_text_font(Sym, {"lineawesome", regular, 20}),
@@ -445,7 +454,7 @@ make_group(TopLevel, Symbol, #?MODULE{inst = Inst, sty = Sty}) ->
     {ok, InnerFlex} = lv_obj:create(Inst, Outer),
     ok = lv_obj:add_style(InnerFlex, FlexStyle),
     ok = lv_obj:add_style(InnerFlex, DivStyle),
-    ok = lv_obj:set_size(InnerFlex, {{percent, 100}, content}),
+    ok = lv_obj:set_size(InnerFlex, {{percent, 95}, content}),
     ok = lv_obj:align(InnerFlex, top_left, {30, 0}),
     ok = lv_obj:set_scroll_dir(InnerFlex, [vertical]),
 
