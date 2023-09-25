@@ -1919,7 +1919,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
         ok = lv_obj:set_size(Icon, {{percent, 2}, content}),
 
         {ok, Label} = lv_span:create(Opt),
-        ok = lv_obj:add_flag(Label, clickable),
+        ok = lv_obj:add_flag(Label, [clickable, event_bubble]),
         ok = lv_obj:set_size(Label, {{percent, 44}, content}),
         ok = lv_span:set_mode(Label, break),
 
