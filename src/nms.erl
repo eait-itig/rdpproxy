@@ -101,9 +101,7 @@ init(_) ->
     TOpts0 = [{verify, verify_peer}],
     TOpts1 = case erlang:function_exported(public_key, cacerts_get, 0) of
         true ->
-            CACerts = public_key:cacerts_get(),
-            CADers = [Der || {cert, Der, _} <- CACerts],
-            TOpts0 ++ [{cacerts, CADers}];
+            TOpts0 ++ [{cacerts, public_key:cacerts_get()}];
         false ->
             TOpts0
     end,
@@ -118,7 +116,8 @@ init(_) ->
             {keepalive, true}
         ],
         transport => tls,
-        tls_opts => TOpts1
+        tls_opts => TOpts1,
+        supervise => false
         },
     {ok, Gun} = gun:open(Host, 443, Opts),
 
