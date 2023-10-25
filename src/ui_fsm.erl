@@ -2366,8 +2366,10 @@ nms_choice(info, {_, {select_host, Dev}}, S0 = #?MODULE{nms = Nms}) ->
     lager:debug("wol for ~p returned ~p", [Hostname, Ret]),
     {next_state, alloc_handle, S1};
 
-nms_choice(info, {_, {select_pool, ID}}, S0 = #?MODULE{}) ->
-    S1 = S0#?MODULE{pool = ID},
+nms_choice(info, {_, {select_pool, ID}}, S0 = #?MODULE{hdl = Hdl0}) ->
+    Hdl1 = maps:remove(ip, maps:remove(port, Hdl0)),
+    lager:debug("user chose pool ~p", [ID]),
+    S1 = S0#?MODULE{pool = ID, hdl = Hdl1},
     {next_state, pool_host_choice, S1};
 
 nms_choice(info, {_, {update_filter, search, Txt}}, S0 = #?MODULE{filter = F0}) ->
