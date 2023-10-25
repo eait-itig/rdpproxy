@@ -1559,7 +1559,7 @@ manual_host(state_timeout, check, S0 = #?MODULE{hostname = HostText0}) ->
                 end
             end, AllHosts),
             case {ExactHosts, PrefixHosts} of
-                {[Dev | _], _} ->
+                {[Dev], _} ->
                     nms_choice(info, {a, {select_host, Dev}}, S0);
                 {[], [Dev]} ->
                     nms_choice(info, {a, {select_host, Dev}}, S0);
