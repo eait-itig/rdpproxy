@@ -235,8 +235,9 @@ handle_raw_data(Bin, _Srv,
                         ts_info => TsInfo0#ts_info{password = snip}
                     }),
 
-                    #?MODULE{session = #{user := User, ip := IP,
-                        password := Password, domain := Domain}} = S,
+                    #?MODULE{session = EncSess} = S,
+                    #{user := User, ip := IP, password := Password,
+                      domain := Domain} = session_ra:decrypt_handle(EncSess),
                     ForwardEna = case session_ra:get_host(IP) of
                         {ok, #{forward_creds := Setting}} ->
                             Setting;

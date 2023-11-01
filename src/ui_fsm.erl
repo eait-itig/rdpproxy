@@ -124,6 +124,8 @@ start_link(Frontend, L, Inst, {W, H}) ->
 
 -type creds() :: password_creds() | smartcard_creds().
 
+-type encrypted_creds() :: map().
+
 -type msec() :: integer().
 
 -type devfilter() :: #{search => string(), mine => boolean(), shared => boolean()}.
@@ -154,7 +156,7 @@ start_link(Frontend, L, Inst, {W, H}) ->
     widgets = #{} :: #{atom() => lv:object()},
     events = [] :: [lv:event()],
     creds = #{} :: creds(),
-    hdl :: undefined | session_ra:handle_state(),
+    hdl = #{} :: session_ra:handle_state(),
     uinfo :: undefined | session_ra:user_info(),
     cinfo :: undefined | scard_auth:card_info(),
     piv :: undefined | pid(),
@@ -533,7 +535,7 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
         <<>> -> Creds0;
         _ -> Creds0#{password => P}
     end,
-    S3 = S2#?MODULE{creds = Creds1},
+    S3 = S2#?MODULE{creds = encrypt_creds(Creds1)},
 
     Fsm = self(),
     spawn(fun() ->
@@ -710,13 +712,13 @@ login(info, {_, {login, UserText, PwText}}, S0 = #?MODULE{}) ->
     {ok, UserDomain} = lv_textarea:get_text(UserText),
     {ok, Password} = lv_textarea:get_text(PwText),
     {Domain, Username} = split_domain(UserDomain, S0),
-    S1 = S0#?MODULE{creds = #{username => Username, password => Password,
-                              domain => Domain}},
+    C0 = #{username => Username, password => Password, domain => Domain},
+    S1 = S0#?MODULE{creds = encrypt_creds(C0)},
     {next_state, check_login, S1};
 
 login(info, {_, {login_pin, Slot, PinText}}, S0 = #?MODULE{}) ->
     {ok, Pin} = lv_textarea:get_text(PinText),
-    S1 = S0#?MODULE{creds = #{slot => Slot, pin => Pin}},
+    S1 = S0#?MODULE{creds = encrypt_creds(#{slot => Slot, pin => Pin})},
     {next_state, check_pin, S1}.
 
 challenge_key(Piv, Slot, Key) ->
@@ -770,20 +772,16 @@ check_pin(state_timeout, check, S0 = #?MODULE{creds = #{pin := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"PIN required">>}};
 check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
                                               cinfo = CInfo, listener = L}) ->
-    #{slot := Slot, pin := PIN} = Creds0,
+    #{slot := Slot, pin := PIN} = decrypt_creds(Creds0),
     #{slots := #{piv_card_auth := CAKSlot, Slot := SlotInfo}} = CInfo,
     #{pubkey := CAK} = CAKSlot,
     #{pubkey := PubKey, upn := [UPN | _]} = SlotInfo,
     [Username, _Domain] = string:split(UPN, "@"),
     [DefaultDomain | _] = rdpproxy:config([frontend, L, domains], [<<".">>]),
-    Hdl0 = #{user => iolist_to_binary(Username),
-             domain => iolist_to_binary(DefaultDomain),
-             password => <<>>,
-             tgts => #{}},
     Creds1 = Creds0#{username => iolist_to_binary(Username),
                      domain => iolist_to_binary(DefaultDomain)},
     UInfo = #{user => iolist_to_binary(Username), groups => []},
-    S1 = S0#?MODULE{hdl = Hdl0, creds = Creds1, uinfo = UInfo},
+    S1 = S0#?MODULE{creds = Creds1, uinfo = UInfo},
     ok = apdu_transform:begin_transaction(Piv),
     {ok, [{ok, _}]} = apdu_transform:command(Piv, select),
     case challenge_key(Piv, piv_card_auth, CAK) of
@@ -799,7 +797,11 @@ check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
                             prometheus_counter:inc(smartcard_auths_total),
                             #?MODULE{srv = {FPid, _}} = S0,
                             conn_ra:annotate(FPid, #{
-                                session => Hdl0#{ip => undefined},
+                                session => #{
+                                    user => iolist_to_binary(Username),
+                                    domain => iolist_to_binary(DefaultDomain),
+                                    ip => undefined
+                                    },
                                 duo_preauth => <<"bypass">>
                                 }),
                             S2 = scard_disconnect(S1#?MODULE{screen = Screen}),
@@ -846,23 +848,21 @@ check_login(state_timeout, check, S0 = #?MODULE{creds = #{username := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
 check_login(state_timeout, check, S0 = #?MODULE{creds = #{password := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
-check_login(state_timeout, check, S0 = #?MODULE{creds = Creds0, srv = Srv}) ->
+check_login(state_timeout, check, S0 = #?MODULE{creds = ECreds, srv = Srv}) ->
+    Creds0 = decrypt_creds(ECreds),
     #{username := Username, password := Password, domain := Domain} = Creds0,
     {FPid, _} = Srv,
-    Creds1 = Creds0#{session => FPid},
-
-    case krb_auth:authenticate(Creds1) of
+    case krb_auth:authenticate(Creds0) of
         {true, UInfo, Tgts} ->
             lager:debug("auth for ~s succeeded!", [Username]),
-            Hdl0 = #{user => Username, domain => Domain, password => Password,
-                     tgts => Tgts},
             conn_ra:annotate(FPid, #{
-                session => Hdl0#{ip => undefined, password => snip,
-                                 tgts => snip},
-                duo_preauth => <<"bypass">>
+                session => #{ip => undefined, password => snip,
+                    tgts => snip, user => Username, domain => Domain}
                 }),
-            S1 = scard_disconnect(S0#?MODULE{hdl = Hdl0, uinfo = UInfo}),
-            {next_state, check_mfa, S1};
+            S1 = S0#?MODULE{creds = encrypt_creds(Creds0#{tgts => Tgts}),
+                            uinfo = UInfo},
+            S2 = scard_disconnect(S1),
+            {next_state, check_mfa, S2};
 
         false ->
             lager:debug("auth for ~s failed", [Username]),
@@ -1471,18 +1471,14 @@ check_shell(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
                 {none, _, _} ->
                     {next_state, nms_choice, S0};
                 {Hostname, Opts, _} ->
-                    #?MODULE{creds = Creds0, hdl = Hdl0} = S0,
+                    #?MODULE{creds = Creds0} = S0,
                     Creds1 = case lists:member(no_forward_creds, Opts) of
                         true ->
                             maps:remove(tgts, maps:remove(password, Creds0));
                         false ->
                             Creds0
                     end,
-                    Hdl1 = case lists:member(no_forward_creds, Opts) of
-                        true -> Hdl0#{password => <<>>};
-                        false -> Hdl0
-                    end,
-                    S1 = S0#?MODULE{creds = Creds1, hdl = Hdl1,
+                    S1 = S0#?MODULE{creds = Creds1,
                                     hostname = Hostname},
                     {next_state, manual_host, S1}
             end;
@@ -2458,9 +2454,22 @@ alloc_handle(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, start}]};
 alloc_handle(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-alloc_handle(state_timeout, start, S0 = #?MODULE{pool = Pool, hdl = Hdl}) ->
+alloc_handle(state_timeout, start, S0 = #?MODULE{pool = Pool, creds = ECreds,
+                                                 hdl = Hdl0}) ->
     T0 = erlang:system_time(millisecond),
-    {ok, AllocPid} = host_alloc_fsm:start(Pool, Hdl),
+    Creds = decrypt_creds(ECreds),
+    #{username := Username, domain := Domain} = Creds,
+    Hdl1 = Hdl0#{user => Username, domain => Domain},
+    Hdl2 = case Creds of
+        #{password := Password} -> Hdl1#{password => Password};
+        _ -> Hdl1#{password => <<>>}
+    end,
+    Hdl3 = case Creds of
+        #{tgts := Tgts} -> Hdl2#{tgts => Tgts};
+        _ -> Hdl2#{tgts => #{}}
+    end,
+    EHdl = session_ra:encrypt_handle(Hdl3),
+    {ok, AllocPid} = host_alloc_fsm:start(Pool, EHdl),
     MRef = erlang:monitor(process, AllocPid),
     S1 = S0#?MODULE{allocpid = AllocPid, allocmref = MRef,
                     waitstart = T0},
@@ -2639,3 +2648,77 @@ get_key_nullable(Key, Map, NullValue) ->
         null -> NullValue;
         Other -> Other
     end.
+
+-type encrypted() :: binary().
+
+-spec encrypt(binary(), binary()) -> encrypted().
+encrypt(D, MacExtraData) ->
+    #{keys := KeyList} = maps:from_list(application:get_env(rdpproxy, ra, [])),
+    {KeyRef, KeyNum} = lists:last(KeyList),
+    Iv = crypto:strong_rand_bytes(16),
+    Key = <<KeyNum:128/big>>,
+    DLen = byte_size(D),
+    PadLen = 16 - (DLen rem 16),
+    DPad = <<D/binary, PadLen:PadLen/big-unit:8>>,
+    DEnc = crypto:crypto_one_time(aes_128_cbc, Key, Iv, DPad, true),
+    DMac = crypto:mac(hmac, sha256, Key,
+        <<KeyRef:16/big, Iv/binary, MacExtraData/binary, DEnc/binary>>),
+    <<KeyRef:16/big,
+      (byte_size(Iv)):16/big, Iv/binary,
+      (byte_size(DEnc)):16/big, DEnc/binary,
+      (byte_size(DMac)):16/big, DMac/binary>>.
+
+-spec decrypt(encrypted(), binary()) -> binary().
+decrypt(Crypted, MacExtraData) ->
+    <<KeyRef:16/big,
+      IvLen:16/big, Iv:IvLen/binary,
+      DEncLen:16/big, DEnc:DEncLen/binary,
+      DMacLen:16/big, DMac:DMacLen/binary>> = Crypted,
+    #{keys := KeyList} = maps:from_list(application:get_env(rdpproxy, ra, [])),
+    KeyMap = maps:from_list(KeyList),
+    #{KeyRef := KeyNum} = KeyMap,
+    Key = <<KeyNum:128/big>>,
+    OurMac = crypto:mac(hmac, sha256, Key,
+        <<KeyRef:16/big, Iv/binary, MacExtraData/binary, DEnc/binary>>),
+    OurMac = DMac,
+    DPad = crypto:crypto_one_time(aes_128_cbc, Key, Iv, DEnc, false),
+    PadLen = binary:last(DPad),
+    DLen = byte_size(DPad) - PadLen,
+    <<D:DLen/binary, PadLen:PadLen/big-unit:8>> = DPad,
+    D.
+
+-spec encrypt_creds(creds()) -> encrypted_creds().
+encrypt_creds(C0 = #{username := U, password := Pw, tgts := Tgts}) ->
+    Pid = term_to_binary(self()),
+    PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
+    TgtsCrypt = encrypt(term_to_binary(Tgts), <<Pid/binary, U/binary>>),
+    C0#{password => PwCrypt, tgts => TgtsCrypt, encrypted => true};
+encrypt_creds(C0 = #{username := U, password := Pw}) ->
+    Pid = term_to_binary(self()),
+    PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
+    C0#{password => PwCrypt, encrypted => true};
+encrypt_creds(C0 = #{slot := Slot, pin := PIN}) ->
+    Pid = term_to_binary(self()),
+    SlotBin = term_to_binary(Slot),
+    PINCrypt = encrypt(PIN, <<Pid/binary, SlotBin/binary>>),
+    C0#{pin => PINCrypt, encrypted => true};
+encrypt_creds(#{encrypted := true}) -> error(already_encrypted);
+encrypt_creds(C0 = #{}) -> C0#{encrypted => true}.
+
+-spec decrypt_creds(encrypted_creds()) -> creds().
+decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt, tgts := TgtsCrypt}) ->
+    Pid = term_to_binary(self()),
+    Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
+    Tgts = binary_to_term(decrypt(TgtsCrypt, <<Pid/binary, U/binary>>)),
+    maps:remove(encrypted, C0#{password => Pw, tgts => Tgts});
+decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt}) ->
+    Pid = term_to_binary(self()),
+    Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
+    maps:remove(encrypted, C0#{password => Pw});
+decrypt_creds(C0 = #{encrypted := true, slot := Slot, pin := PINCrypt}) ->
+    Pid = term_to_binary(self()),
+    SlotBin = term_to_binary(Slot),
+    PIN = decrypt(PINCrypt, <<Pid/binary, SlotBin/binary>>),
+    maps:remove(encrypted, C0#{pin => PIN});
+decrypt_creds(C0 = #{encrypted := true}) -> C0;
+decrypt_creds(_) -> error(not_encrypted).

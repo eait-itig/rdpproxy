@@ -48,6 +48,7 @@
 -export([host_error/2]).
 -export([annotate_prefs/4, sort_prefs/4, pref_compare/3, sort_prefs_raw/4]).
 -export([process_rules/3, match_timeexp/2]).
+-export([allocate_encrypted/2, encrypt_handle/1, decrypt_handle/1]).
 -export([register_metrics/0]).
 
 -define(ALPHA, {$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
@@ -195,21 +196,13 @@ get_host(Ip) ->
         Else -> Else
     end.
 
--spec claim_handle(handle()) -> {ok, handle_state_plain()} | {error, not_found} | {error, bad_hdl_state} | ra_error().
+-spec claim_handle(handle()) -> {ok, handle_state()} | {error, not_found} | {error, bad_hdl_state} | ra_error().
 claim_handle(Hdl) ->
     Pid = self(),
     T = erlang:system_time(second),
     case ra:process_command(?MODULE, {claim_handle, T, Hdl, Pid}) of
         {ok, {ok, Data}, _Leader} ->
-            #{ip := Ip, user := User, password := PwCrypt, tgts := TgtsCrypt} = Data,
-            Pw = decrypt(PwCrypt, <<Hdl/binary, Ip/binary, User/binary>>),
-            Tgts = case TgtsCrypt of
-                none -> none;
-                _ ->
-                    binary_to_term(decrypt(
-                        TgtsCrypt, <<Hdl/binary, Ip/binary, User/binary>>))
-            end,
-            {ok, Data#{password => Pw, tgts => Tgts}};
+            {ok, Data};
         {ok, {conflict, OtherPid}, _Leader} ->
             exit(OtherPid, kill),
             timer:sleep(500),
@@ -217,6 +210,44 @@ claim_handle(Hdl) ->
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
+
+-spec encrypt_handle(handle_state_plain()) -> handle_state().
+encrypt_handle(HD0 = #{handle := Hdl, ip := Ip, user := User, password := Pw, tgts := Tgts}) ->
+    PwCrypt = encrypt(Pw, <<Hdl/binary, Ip/binary, User/binary>>),
+    TgtsCrypt = case Tgts of
+        none -> none;
+        _ -> encrypt(
+            term_to_binary(Tgts), <<Hdl/binary, Ip/binary, User/binary>>)
+    end,
+    HD0#{password => PwCrypt, tgts => TgtsCrypt};
+encrypt_handle(HD0 = #{ip := Ip, user := User, password := Pw, tgts := Tgts}) ->
+    PwCrypt = encrypt(Pw, <<Ip/binary, User/binary>>),
+    TgtsCrypt = case Tgts of
+        none -> none;
+        _ -> encrypt(
+            term_to_binary(Tgts), <<Ip/binary, User/binary>>)
+    end,
+    HD0#{password => PwCrypt, tgts => TgtsCrypt}.
+
+-spec decrypt_handle(handle_state()) -> handle_state_plain().
+decrypt_handle(HD0 = #{handle := Hdl, ip := Ip, user := User, password := PwCrypt, tgts := TgtsCrypt}) ->
+    Pw = decrypt(PwCrypt, <<Hdl/binary, Ip/binary, User/binary>>),
+    Tgts = case TgtsCrypt of
+        none -> none;
+        _ ->
+            binary_to_term(decrypt(
+                TgtsCrypt, <<Hdl/binary, Ip/binary, User/binary>>))
+    end,
+    HD0#{password => Pw, tgts => Tgts};
+decrypt_handle(HD0 = #{ip := Ip, user := User, password := PwCrypt, tgts := TgtsCrypt}) ->
+    Pw = decrypt(PwCrypt, <<Ip/binary, User/binary>>),
+    Tgts = case TgtsCrypt of
+        none -> none;
+        _ ->
+            binary_to_term(decrypt(
+                TgtsCrypt, <<Ip/binary, User/binary>>))
+    end,
+    HD0#{password => Pw, tgts => Tgts}.
 
 -spec get_handle(handle()) -> {ok, handle_state_nopw()} | {error, not_found} | ra_error().
 get_handle(Hdl) ->
@@ -311,6 +342,16 @@ allocate(Hdl, HD0) ->
             term_to_binary(Tgts), <<Hdl/binary, Ip/binary, User/binary>>)
     end,
     HD1 = HD0#{password => PwCrypt, sessid => Id, tgts => TgtsCrypt},
+    case ra:process_command(?MODULE, {allocate, T, Hdl, HD1}) of
+        {ok, Res, _Leader} -> Res;
+        Else -> Else
+    end.
+
+-spec allocate_encrypted(handle(), handle_state()) -> {ok, handle_state()} | {error, not_found} | ra_error().
+allocate_encrypted(Hdl, HD0) ->
+    T = erlang:system_time(second),
+    Id = crypto:rand_uniform(0, 1 bsl 31),
+    HD1 = HD0#{sessid => Id},
     case ra:process_command(?MODULE, {allocate, T, Hdl, HD1}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else

@@ -54,10 +54,14 @@ init([From, Pool, Sess = #{user := U}]) ->
         sess = Sess}, 0}.
 
 reserve_pool(timeout, S = #?MODULE{pool = Pool, sess = Sess}) ->
-    #{user := U, password := Pw, domain := D, tgts := Tgts} = Sess,
+    #{user := U, password := Pw, domain := D, tgts := Tgts}
+        = session_ra:decrypt_handle(Sess),
     case session_ra:reserve(Pool, U) of
         {ok, Hdl, HD0} ->
-            Sess1 = HD0#{password => Pw, tgts => Tgts, domain => D},
+            % Re-encrypt the handle now that we know its final ID (this gets it
+            % ready to give to session_ra:allocate_encrypted).
+            Sess1 = session_ra:encrypt_handle(
+                HD0#{password => Pw, tgts => Tgts, domain => D}),
             S1 = S#?MODULE{sess = Sess1, hdl = Hdl, retries = 3, errs = 0},
             {next_state, probe, S1, 0};
         {error, no_hosts} ->
@@ -66,9 +70,11 @@ reserve_pool(timeout, S = #?MODULE{pool = Pool, sess = Sess}) ->
     end.
 
 reserve_ip(timeout, S = #?MODULE{sess = Sess}) ->
-    #{ip := Ip, user := U, password := Pw, tgts := Tgts, domain := D} = Sess,
+    #{ip := Ip, user := U, password := Pw, tgts := Tgts, domain := D}
+        = session_ra:decrypt_handle(Sess),
     {ok, Hdl, HD0} = session_ra:reserve_ip(U, Ip),
-    Sess1 = HD0#{password => Pw, domain => D, tgts => Tgts},
+    Sess1 = session_ra:encrypt_handle(
+        HD0#{password => Pw, domain => D, tgts => Tgts}),
     S1 = S#?MODULE{sess = Sess1, hdl = Hdl, retries = unlimited, errs = 0},
     {next_state, probe, S1, 0}.
 
@@ -136,7 +142,7 @@ probe(timeout, S = #?MODULE{sess = Sess, hdl = Hdl, retries = R0, errs = E0}) ->
     end.
 
 save_cookie(timeout, S = #?MODULE{sess = Sess0, hdl = Hdl}) ->
-    {ok, Sess1} = session_ra:allocate(Hdl, Sess0),
+    {ok, Sess1} = session_ra:allocate_encrypted(Hdl, Sess0),
     #{ip := Ip, user := U} = Sess1,
     lager:debug("allocated session on ~p for user ~p, cookie: ~p",
         [Ip, U, Hdl]),
