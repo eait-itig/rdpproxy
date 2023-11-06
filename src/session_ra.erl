@@ -227,6 +227,14 @@ encrypt_handle(HD0 = #{ip := Ip, user := User, password := Pw, tgts := Tgts}) ->
         _ -> encrypt(
             term_to_binary(Tgts), <<Ip/binary, User/binary>>)
     end,
+    HD0#{password => PwCrypt, tgts => TgtsCrypt};
+encrypt_handle(HD0 = #{user := User, password := Pw, tgts := Tgts}) ->
+    PwCrypt = encrypt(Pw, <<User/binary>>),
+    TgtsCrypt = case Tgts of
+        none -> none;
+        _ -> encrypt(
+            term_to_binary(Tgts), <<User/binary>>)
+    end,
     HD0#{password => PwCrypt, tgts => TgtsCrypt}.
 
 -spec decrypt_handle(handle_state()) -> handle_state_plain().
@@ -246,6 +254,15 @@ decrypt_handle(HD0 = #{ip := Ip, user := User, password := PwCrypt, tgts := Tgts
         _ ->
             binary_to_term(decrypt(
                 TgtsCrypt, <<Ip/binary, User/binary>>))
+    end,
+    HD0#{password => Pw, tgts => Tgts};
+decrypt_handle(HD0 = #{user := User, password := PwCrypt, tgts := TgtsCrypt}) ->
+    Pw = decrypt(PwCrypt, <<User/binary>>),
+    Tgts = case TgtsCrypt of
+        none -> none;
+        _ ->
+            binary_to_term(decrypt(
+                TgtsCrypt, <<User/binary>>))
     end,
     HD0#{password => Pw, tgts => Tgts}.
 
