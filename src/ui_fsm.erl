@@ -615,7 +615,8 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
 
     {ok, BtnEvent, _} = lv_event:setup(Btn, short_clicked, {login, UserText, PwText}),
     {ok, UAcEvent, _} = lv_event:setup(UserText, ready, {focus, PwText}),
-    {ok, AcEvent, _} = lv_event:setup(PwText, ready, {login, UserText, PwText}),
+    {ok, AcEvent, _} = lv_event:setup(PwText, ready, {wait_release,
+        {login, UserText, PwText}}),
 
     Evts0 = [BtnEvent, UAcEvent, AcEvent],
 
@@ -641,7 +642,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
                 {login_pin, Slot, PinText}),
             {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
-                {login_pin, Slot, PinText}),
+                {wait_release, {login_pin, Slot, PinText}}),
 
             [YkBtnEvent, YkAcEvent | Acc];
         (_Slot, Acc) ->
@@ -690,7 +691,7 @@ login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
             {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
                 {login_pin, Slot, PinText}),
             {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
-                {login_pin, Slot, PinText}),
+                {wait_release, {login_pin, Slot, PinText}}),
 
             [YkBtnEvent, YkAcEvent | Acc];
         (_Slot, Acc) ->
@@ -704,7 +705,12 @@ login(info, {scard_result, _}, #?MODULE{}) ->
 login(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
-login(info, {_, {focus, Field}}, S0 = #?MODULE{}) ->
+login(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
+    login(info, {Ref, Evt}, S0);
+
+login(info, {_, {focus, Field}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
     ok = lv_group:focus_obj(Field),
     {keep_state, S0};
 
@@ -1073,7 +1079,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                 ok = lv_label:set_text(MethodBtnLbl, "Submit"),
 
                 {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
-                    {passcode, Id, CodeText, MethodBtn}),
+                    {wait_release, {passcode, Id, CodeText, MethodBtn}}),
                 {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {passcode, Id, CodeText, MethodBtn}),
 
@@ -1098,7 +1104,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                 ok = lv_label:set_text(MethodBtnLbl, "Submit"),
 
                 {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
-                    {passcode, Id, CodeText, MethodBtn}),
+                    {wait_release, {passcode, Id, CodeText, MethodBtn}}),
                 {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
                     {passcode, Id, CodeText, MethodBtn}),
 
@@ -1131,6 +1137,10 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
 
 mfa_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+
+mfa_choice(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
+    mfa_choice(info, {Ref, Evt}, S0);
 
 mfa_choice(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
@@ -1378,7 +1388,7 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     ok = lv_label:set_text(MethodBtnLbl, "Submit"),
 
     {ok, CodeInpEvt, _} = lv_event:setup(CodeText, ready,
-        {code, CodeText}),
+        {wait_release, {code, CodeText}}),
     {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
         {code, CodeText}),
 
@@ -1397,6 +1407,10 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
 
 mfa_push_code(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+
+mfa_push_code(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
+    mfa_push_code(info, {Ref, Evt}, S0);
 
 mfa_push_code(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
