@@ -1339,18 +1339,6 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
-    #?MODULE{res = {W, H}} = S0,
-    if
-        (W > 1000) ->
-            {ok, Img} = lv_img:create(Screen),
-            ok = lv_img:set_src(Img, rdp_lvgl_server:find_image_path(rdpproxy,
-                "push-confirm-code.png")),
-            ok = lv_obj:add_flag(Img, ignore_layout),
-            ok = lv_obj:align(Img, bottom_right);
-        true ->
-            ok
-    end,
-
     {ok, Text} = lv_span:create(Flex),
     ok = lv_obj:set_size(Text, {{percent, 100}, content}),
     ok = lv_span:set_mode(Text, break),
@@ -1396,6 +1384,19 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
+
+    #?MODULE{res = {W, H}} = S0,
+    if
+        (W >= 1600) ->
+            {ok, Img} = lv_img:create(Screen),
+            ok = lv_img:set_src(Img, rdp_lvgl_server:find_image_path(rdpproxy,
+                "push-confirm-code.png")),
+            ok = lv_obj:add_flag(Img, ignore_layout),
+            ok = lv_obj:align(Img, bottom_right),
+            ok = lv_obj:move_background(Img);
+        true ->
+            ok
+    end,
 
     Evts = [CodeInpEvt, MethodBtnEvt, CancelEvt],
 
