@@ -67,6 +67,7 @@
 -export_types([pool_config/0, user_info/0]).
 
 -type sid() :: [integer()].
+-type sort_vsn() :: integer().
 
 gen_key(0) -> [];
 gen_key(N) ->
@@ -480,7 +481,9 @@ decrypt(Crypted, MacExtraData) ->
     {V, netmask, string(), integer(), time_expr()} |
     {V, cert, any | nist_piv:slot(), upn, binary()} |
     {V, cert, any | nist_piv:slot(), cn, user | binary()} |
-    {V, cert, any | nist_piv:slot(), dn_prefix, []}.
+    {V, cert, any | nist_piv:slot(), dn_prefix, []} |
+    {V, pool_available, atom(), gt | lt | gte | lte, integer()} |
+    {V, pool_available, atom(), gt | lt | gte | lte, integer(), time_expr()}.
 
 dn_name_to_oid(cn) -> ?'id-at-commonName';
 dn_name_to_oid(dc) -> ?'id-domainComponent';
@@ -658,20 +661,41 @@ match_slots_rule([Slot | Rest], Field, Value) ->
         no_match -> match_slots_rule(Rest, Field, Value)
     end.
 
--spec match_rule(user_info(), time(), acl_entry()) -> match | no_match.
-match_rule(_UInfo, _T, {_, everybody}) -> match;
-match_rule(_UInfo, T, {_, everybody, TimeExp}) -> match_timeexp(T, TimeExp);
-match_rule(#{client_ip := IP}, _T, {_, netmask, Net, MaskLen}) ->
+-type acl_context() :: #{
+    time => time(),
+    pool_availability => poolavmap()
+    }.
+
+-spec match_rule(user_info(), acl_context(), acl_entry()) -> match | no_match.
+match_rule(_UInfo, _Ctx, {_, everybody}) -> match;
+match_rule(_UInfo, #{time := T}, {_, everybody, TimeExp}) -> match_timeexp(T, TimeExp);
+match_rule(UInfo, Ctx = #{time := T}, {V, pool_available, Pool, Cond, N, TimeExp}) ->
+    case match_timeexp(T, TimeExp) of
+        match -> match_rule(UInfo, Ctx, {V, pool_available, Pool, Cond, N});
+        no_match -> no_match
+    end;
+match_rule(_UInfo, #{pool_availability := PA}, {_, pool_available, Pool, Cond, N}) ->
+    case PA of
+        #{Pool := Av} ->
+            case Cond of
+                gte -> if (Av >= N) -> match; true -> no_match end;
+                lte -> if (Av =< N) -> match; true -> no_match end;
+                gt -> if (Av > N) -> match; true -> no_match end;
+                lt -> if (Av < N) -> match; true -> no_match end
+            end;
+        _ -> no_match
+    end;
+match_rule(#{client_ip := IP}, _Ctx, {_, netmask, Net, MaskLen}) ->
     case match_ip_mask(IP, Net, MaskLen) of
         true -> match;
         _ -> no_match
     end;
-match_rule(#{client_ip := IP}, T, {_, netmask, Net, MaskLen, TimeExp}) ->
+match_rule(#{client_ip := IP}, #{time := T}, {_, netmask, Net, MaskLen, TimeExp}) ->
     case match_ip_mask(IP, Net, MaskLen) of
         true -> match_timeexp(T, TimeExp);
         _ -> no_match
     end;
-match_rule(#{user := U, card_info := #{slots := SlotMap}}, _T,
+match_rule(#{user := U, card_info := #{slots := SlotMap}}, _Ctx,
            {_, cert, Slot, Field, Value0}) ->
     Value1 = case Value0 of
         user -> U;
@@ -682,49 +706,49 @@ match_rule(#{user := U, card_info := #{slots := SlotMap}}, _T,
         _ -> [maps:get(Slot, SlotMap, #{})]
     end,
     match_slots_rule(Slots, Field, Value1);
-match_rule(#{user := U}, _T, {_, cert, _, _, _}) -> no_match;
-match_rule(#{user := U}, _T, {_, user, U}) -> match;
-match_rule(#{user := U}, T, {_, user, U, TimeExp}) -> match_timeexp(T, TimeExp);
-match_rule(#{user := _U}, _T, {_, user, _}) -> no_match;
-match_rule(UInfo, T, {V, group, {sid,A,B,C}}) ->
-    match_rule(UInfo, T, {V, group, [A,B|C]});
-match_rule(UInfo, T, {V, group, {sid,A,B,C}, TimeExp}) ->
-    match_rule(UInfo, T, {V, group, [A,B|C], TimeExp});
-match_rule(#{groups := Gs}, _T, {_, group, G}) ->
+match_rule(#{user := U}, _Ctx, {_, cert, _, _, _}) -> no_match;
+match_rule(#{user := U}, _Ctx, {_, user, U}) -> match;
+match_rule(#{user := U}, #{time := T}, {_, user, U, TimeExp}) -> match_timeexp(T, TimeExp);
+match_rule(#{user := _U}, _Ctx, {_, user, _}) -> no_match;
+match_rule(UInfo, Ctx, {V, group, {sid,A,B,C}}) ->
+    match_rule(UInfo, Ctx, {V, group, [A,B|C]});
+match_rule(UInfo, Ctx, {V, group, {sid,A,B,C}, TimeExp}) ->
+    match_rule(UInfo, Ctx, {V, group, [A,B|C], TimeExp});
+match_rule(#{groups := Gs}, _Ctx, {_, group, G}) ->
     case lists:member(G, Gs) of
         true -> match;
         _ -> no_match
     end;
-match_rule(#{groups := Gs}, T, {_, group, G, TimeExp}) ->
+match_rule(#{groups := Gs}, #{time := T}, {_, group, G, TimeExp}) ->
     case lists:member(G, Gs) of
         true -> match_timeexp(T, TimeExp);
         _ -> no_match
     end;
-match_rule(_UInfo, _T, {_, group, _}) -> no_match.
+match_rule(_UInfo, _Ctx, {_, group, _}) -> no_match.
 
--spec process_rules(user_info(), time(), [acl_entry()]) -> allow | deny | no_match.
-process_rules(_UInfo, _T, []) -> no_match;
-process_rules(UInfo, T, [{branch, Rule, BranchRules} | Rest]) ->
+-spec process_rules(user_info(), acl_context(), [acl_entry()]) -> allow | deny | no_match.
+process_rules(_UInfo, _Ctx, []) -> no_match;
+process_rules(UInfo, Ctx, [{branch, Rule, BranchRules} | Rest]) ->
     'if' = element(1, Rule),
-    Match = match_rule(UInfo, T, Rule),
+    Match = match_rule(UInfo, Ctx, Rule),
     case Match of
         match ->
-            case process_rules(UInfo, T, BranchRules) of
+            case process_rules(UInfo, Ctx, BranchRules) of
                 no_match ->
-                    process_rules(UInfo, T, Rest);
+                    process_rules(UInfo, Ctx, Rest);
                 Result ->
                     Result
             end;
         no_match ->
-            process_rules(UInfo, T, Rest)
+            process_rules(UInfo, Ctx, Rest)
     end;
-process_rules(UInfo, T, [Rule | Rest]) ->
-    Match = match_rule(UInfo, T, Rule),
+process_rules(UInfo, Ctx, [Rule | Rest]) ->
+    Match = match_rule(UInfo, Ctx, Rule),
     case {Match, element(1, Rule)} of
         {match, allow} -> allow;
         {match, deny} -> deny;
         {no_match, require} -> deny;
-        _ -> process_rules(UInfo, T, Rest)
+        _ -> process_rules(UInfo, Ctx, Rest)
     end.
 
 -type pool_config() :: #{
@@ -975,9 +999,11 @@ apply(_Meta, {get_pool, Pool}, S0 = #?MODULE{pools = P0}) ->
     end;
 
 apply(_Meta, {get_pools_for, UInfo}, S0 = #?MODULE{pools = P0, last_time = T}) ->
+    PoolAv = pool_availability(?SORT_VSN, T, S0),
+    Ctx = #{time => T, pool_availability => PoolAv},
     Pools = lists:filter(fun (PD) ->
         #{acl := ACL} = PD,
-        case process_rules(UInfo, T, ACL) of
+        case process_rules(UInfo, Ctx, ACL) of
             allow -> true;
             deny -> false
         end
@@ -1428,6 +1454,16 @@ apply(_Meta, {nodeup, Node}, S0 = #?MODULE{watches = W0}) ->
 
 apply(_Meta, {nodedown, _}, S0 = #?MODULE{}) ->
     {S0, ok, []}.
+
+-type poolavmap() :: #{atom() => integer()}.
+
+-spec pool_availability(sort_vsn(), time(), #?MODULE{}) -> poolavmap().
+pool_availability(SortVsn, T, S0 = #?MODULE{pools = P0}) ->
+    maps:fold(fun (Pool, _PoolInfo, Acc) ->
+        Prefs0 = sort_prefs(SortVsn, Pool, <<>>, S0),
+        Prefs1 = filter_min_reserved(SortVsn, T, Pool, <<>>, Prefs0, S0),
+        Acc#{Pool => length(Prefs1)}
+    end, #{}, P0).
 
 state_enter(leader, #?MODULE{watches = W0}) ->
     maps:fold(fun (Pid, _Hdl, Acc) ->
@@ -1894,7 +1930,7 @@ user_existing_hosts_single(User, Pool, #?MODULE{last_time = Now, meta = M0,
     role_prio => integer()
     }.
 
--spec annotate_prefs(Vsn :: integer(), User :: username(), Pool :: atom(), #?MODULE{}) -> [host_decision_info()].
+-spec annotate_prefs(Vsn :: sort_vsn(), User :: username(), Pool :: atom(), #?MODULE{}) -> [host_decision_info()].
 annotate_prefs(N, Pool, User, #?MODULE{meta = M0, hdls = H, pools = P})
             when (N =< 4) ->
     RolePrioMap = case P of
@@ -2060,7 +2096,7 @@ pref_compare(N, A, B) when (N =< 4) ->
         (IpA > IpB) -> {false, "B ip"}
     end.
 
--spec sort_prefs(Vsn :: integer(), Pool :: atom(), User :: username(), #?MODULE{}) -> [ipstr()].
+-spec sort_prefs(Vsn :: sort_vsn(), Pool :: atom(), User :: username(), #?MODULE{}) -> [ipstr()].
 sort_prefs(1, Pool, _User, #?MODULE{meta = M, hdls = H}) ->
     SortFun = fun(IpA, IpB) ->
         #{IpA := A, IpB := B} = M,

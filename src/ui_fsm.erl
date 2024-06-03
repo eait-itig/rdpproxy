@@ -902,7 +902,8 @@ check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInf
     UInfo1 = UInfo0#{card_info => CardInfo, client_ip => Peer},
     SkipDuoACL = rdpproxy:config([duo, bypass_acl], [{deny, everybody}]),
     Now = erlang:system_time(second),
-    case session_ra:process_rules(UInfo1, Now, SkipDuoACL) of
+    UCtx = #{time => Now, pool_availability => #{}},
+    case session_ra:process_rules(UInfo1, UCtx, SkipDuoACL) of
         allow ->
             lager:debug("duo bypass for ~s", [Username]),
             {next_state, check_shell, S0};
@@ -1614,7 +1615,8 @@ uinfo(#?MODULE{creds = Creds, uinfo = UInfo0, cinfo = CInfo, peer = ClientIP}) -
 process_acl(ConfigName, S0 = #?MODULE{}) ->
     ACL = rdpproxy:config([ui, ConfigName], [{deny, everybody}]),
     Now = erlang:system_time(second),
-    session_ra:process_rules(uinfo(S0), Now, ACL).
+    Ctx = #{time => Now, pool_availability => #{}},
+    session_ra:process_rules(uinfo(S0), Ctx, ACL).
 
 editing_host(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, edit_host = Dev}) ->
     #{title := TitleStyle, role := RoleStyle, row := RowStyle,
