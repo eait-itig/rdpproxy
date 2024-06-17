@@ -440,6 +440,7 @@ proxy_watch_demand({data, Bin}, #?MODULE{server = Srv} = Data0) ->
                     rdp_server:send_raw(Srv, Bin),
                     case Data0 of
                         #?MODULE{sesshdl = undefined} -> ok;
+                        #?MODULE{sesshdl = _Hdl} when (E =:= no_error) -> ok;
                         #?MODULE{sesshdl = Hdl} ->
                             session_ra:close_handle(Hdl)
                     end,
@@ -496,6 +497,7 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan, t0 = T0}
                     % auto-reconnect we don't forward them straight through)
                     case Data of
                         #?MODULE{sesshdl = undefined} -> ok;
+                        #?MODULE{sesshdl = _Hdl} when (E =:= no_error) -> ok;
                         #?MODULE{sesshdl = Hdl} ->
                             session_ra:close_handle(Hdl)
                     end,
@@ -720,6 +722,7 @@ check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address}) -
                     conn_ra:annotate(ConnId, #{ts_error_info => E}),
                     case D of
                         #?MODULE{sesshdl = undefined} -> ok;
+                        #?MODULE{sesshdl = _Hdl} when (E =:= no_error) -> ok;
                         #?MODULE{sesshdl = Hdl} ->
                             session_ra:close_handle(Hdl)
                     end,
