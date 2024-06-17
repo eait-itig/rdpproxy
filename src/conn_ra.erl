@@ -37,7 +37,7 @@
 -export([register_conn/2, tick/0]).
 -export([get_user/1, get_all_open/0]).
 -export([annotate/2, auth_attempt/2]).
--export([pid_to_conn_id/1]).
+-export([pid_to_conn_id/1, pid_to_session_hdl/1]).
 -export([version/0, which_module/1]).
 
 version() -> 2.
@@ -84,6 +84,13 @@ get_all_open() ->
 pid_to_conn_id(Pid) ->
     Now = erlang:system_time(second),
     case ra:process_command(conn_ra, {pid_to_conn_id, Now, Pid}) of
+        {ok, Ret, _Leader} -> Ret;
+        Else -> Else
+    end.
+
+pid_to_session_hdl(Pid) ->
+    Now = erlang:system_time(second),
+    case ra:process_command(conn_ra, {pid_to_session_hdl, Now, Pid}) of
         {ok, Ret, _Leader} -> Ret;
         Else -> Else
     end.

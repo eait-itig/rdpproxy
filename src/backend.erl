@@ -178,7 +178,8 @@ probe_rx(Pid, Peer, T0, MonRef, RetVal) ->
     sharechan :: undefined | integer(),
     logon = false :: boolean(),
     t0 :: integer(),
-    connid :: undefined | binary()
+    connid :: undefined | binary(),
+    sesshdl :: undefined | binary()
     }).
 
 %% @private
@@ -314,8 +315,12 @@ initiation({pdu, #x224_cc{class = 0, dst = UsRef, rdp_status = ok} = Pkt}, #?MOD
                     {ok, ConnId} -> Data1#?MODULE{connid = ConnId};
                     _ -> Data1
                 end,
+                Data3 = case conn_ra:pid_to_session_hdl(P) of
+                    {ok, Hdl} -> Data2#?MODULE{sesshdl = Hdl};
+                    _ -> Data2
+                end,
 
-                {next_state, proxy_intercept, Data2};
+                {next_state, proxy_intercept, Data3};
 
             {error, {tls_alert, Why = {Atom, _}}} when
                         (Atom =:= unknown_ca) or (Atom =:= bad_certificate) or
@@ -433,6 +438,11 @@ proxy_watch_demand({data, Bin}, #?MODULE{server = Srv} = Data0) ->
                     session_ra:host_error(iolist_to_binary([Address]), E),
                     conn_ra:annotate(FPid, #{ts_error_info => E}),
                     rdp_server:send_raw(Srv, Bin),
+                    case Data0 of
+                        #?MODULE{sesshdl = undefined} -> ok;
+                        #?MODULE{sesshdl = Hdl} ->
+                            session_ra:close_handle(Hdl)
+                    end,
                     {next_state, proxy_watch_demand, Data0};
                 _ ->
                     rdp_server:send_raw(Srv, Bin),
@@ -481,6 +491,14 @@ proxy_watch_logon({data, Bin}, #?MODULE{server = Srv, sharechan = Chan, t0 = T0}
                 {ok, #ts_sharedata{data = #ts_set_error_info{info = E}}} ->
                     {FPid, _} = Srv,
                     lager:debug("backend error info: ~p", [E]),
+                    % we know this was the end of the session, so discard the
+                    % session handle if we had one (that way if they mistakenly
+                    % auto-reconnect we don't forward them straight through)
+                    case Data of
+                        #?MODULE{sesshdl = undefined} -> ok;
+                        #?MODULE{sesshdl = Hdl} ->
+                            session_ra:close_handle(Hdl)
+                    end,
                     IsError = case E of
                         {logoff, _} -> false;
                         {disconnect, _} -> false;
@@ -700,6 +718,11 @@ check_pkt_errors([Bin | Rest], D = #?MODULE{sharechan = Chan, addr = Address}) -
                     #?MODULE{connid = ConnId} = D,
                     lager:debug("backend error info: ~p (~Bb)", [E, byte_size(Bin)]),
                     conn_ra:annotate(ConnId, #{ts_error_info => E}),
+                    case D of
+                        #?MODULE{sesshdl = undefined} -> ok;
+                        #?MODULE{sesshdl = Hdl} ->
+                            session_ra:close_handle(Hdl)
+                    end,
                     IsError = case E of
                         {logoff, _} -> false;
                         {disconnect, _} -> false;

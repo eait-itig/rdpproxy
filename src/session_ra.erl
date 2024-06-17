@@ -41,7 +41,7 @@
 -export([create_host/1, update_host/1, enable_host/1, disable_host/1,
     delete_host/1]).
 -export([reserve/2, reserve_ip/2, allocate/2]).
--export([alloc_error/2]).
+-export([alloc_error/2, close_handle/1]).
 -export([add_session/2, status_report/2]).
 -export([get_prefs/2, get_pools_for/1]).
 -export([get_all_hosts/0, get_user_handles/1, get_host/1, get_all_handles/0]).
@@ -193,6 +193,14 @@ get_user_handles(User) ->
 -spec get_host(ipstr()) -> {ok, host_state()} | ra_error().
 get_host(Ip) ->
     case ra:process_command(?MODULE, {get_host, Ip}) of
+        {ok, Res, _Leader} -> Res;
+        Else -> Else
+    end.
+
+-spec close_handle(handle()) -> ok | {error, not_found} | ra_error().
+close_handle(Hdl) ->
+    T = erlang:system_time(second),
+    case ra:process_command(?MODULE, {close_handle, T, Hdl}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
@@ -1431,6 +1439,16 @@ apply(_Meta, {status_report, T, Ip, State}, S0 = #?MODULE{meta = M0}) ->
             {S0, {error, not_found}, []}
     end;
 
+apply(_Meta, {close_handle, T, Handle}, S0 = #?MODULE{hdls = H0}) ->
+    case H0 of
+        #{Handle := _} ->
+            S1 = kill_handle_now(Handle, S0),
+            S2 = S1#?MODULE{last_time = T},
+            {S2, ok, []};
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
 apply(_Meta, {down, Pid, noconnection}, S0 = #?MODULE{}) ->
     {S0, ok, [{monitor, node, node(Pid)}]};
 
@@ -1499,6 +1517,40 @@ kill_handle(Hdl, S0 = #?MODULE{hdls = H0, meta = M0}) ->
     M1 = M0#{Ip => HM1},
     prometheus_counter:inc(rdpproxy_handles_expired_total, [P]),
     S0#?MODULE{hdls = H1, meta = M1}.
+
+-spec kill_handle_now(handle(), #?MODULE{}) -> #?MODULE{}.
+kill_handle_now(Hdl, S0 = #?MODULE{hdls = H0, meta = M0,
+                                      hdlexp = HT0, watches = W0}) ->
+    % Find handle state
+    #{Hdl := HS0} = H0,
+    #{ip := Ip} = HS0,
+
+    % Drop the watch if any
+    W1 = case HS0 of
+        #{pid := Pid} when is_pid(Pid) ->
+            maps:remove(Pid, W0);
+        _ -> W0
+    end,
+
+    % Remove the handle from expiry tree
+    HT1 = case HS0 of
+        #{expiry := connected} -> HT0;
+        #{expiry := Exp0} ->
+            {value, ExpL0} = gb_trees:lookup(Exp0, HT0),
+            ExpL1 = ExpL0 -- [Hdl],
+            gb_trees:update(Exp0, ExpL1, HT0)
+    end,
+
+    H1 = maps:remove(Hdl, H0),
+
+    % Also remove the handle from the hosts handles list
+    #{Ip := HM0 = #{handles := HH0, pool := P}} = M0,
+    HH1 = HH0 -- [Hdl],
+    HM1 = HM0#{handles => HH1},
+    M1 = M0#{Ip => HM1},
+
+    prometheus_counter:inc(rdpproxy_handles_expired_total, [P]),
+    S0#?MODULE{hdls = H1, meta = M1, hdlexp = HT1, watches = W1}.
 
 detach_handle(Hdl, T, S0 = #?MODULE{hdls = H0, meta = M0, pools = P0,
                                     hdlexp = HT0, watches = W0}) ->

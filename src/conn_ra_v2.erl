@@ -597,6 +597,19 @@ apply(_Meta, {pid_to_conn_id, _T, Pid}, S0 = #?MODULE{watches = W0}) ->
             {S0, {error, not_found}, []}
     end;
 
+apply(_Meta, {pid_to_session_hdl, _T, Pid}, S0 = #?MODULE{conns = C0, watches = W0}) ->
+    case W0 of
+        #{Pid := Id} ->
+            case C0 of
+                #{Id := #{session := #{handle := Hdl}}} ->
+                    {S0, {ok, Hdl}, []};
+                _ ->
+                    {S0, {error, not_found}, []}
+            end;
+        _ ->
+            {S0, {error, not_found}, []}
+    end;
+
 apply(_Meta, {annotate, T, IdOrPid, Map}, S0 = #?MODULE{conns = C0, watches = W0, users = U0}) ->
     Id = if
         is_pid(IdOrPid) ->
