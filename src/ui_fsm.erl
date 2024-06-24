@@ -179,7 +179,8 @@ start_link(Frontend, L, Inst, {W, H}) ->
     filter = #{} :: devfilter(),
     admin_custom :: undefined | lv:object(),
     admin_custom_label :: undefined | lv_span:span(),
-    edit_host :: undefined | nms_host_info()
+    edit_host :: undefined | nms_host_info(),
+    disevt :: undefined | lv:event()
     }).
 
     % sess :: undefined | session_ra:handle_state(),
@@ -463,17 +464,34 @@ make_group(TopLevel, Symbol, #?MODULE{inst = Inst, sty = Sty}) ->
     InnerFlex.
 
 %% @private
-dead(enter, _PrevState, #?MODULE{}) ->
+dead(enter, _PrevState, #?MODULE{srv = undefined}) ->
     {keep_state_and_data, [{state_timeout, 0, die}]};
+dead(enter, _PrevState, #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {keep_state_and_data, [{state_timeout, 1000, die}]};
 dead(state_timeout, die, S0 = #?MODULE{}) ->
     {stop, normal, S0}.
 
 %% @private
-loading(enter, _PrevState, S0 = #?MODULE{}) ->
+loading(enter, _PrevState, S0 = #?MODULE{inst = Inst}) ->
     Screen = make_waiting_screen("Please wait...", S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 500, check}]};
+    {ok, TopLayer} = lv_disp:get_layer_top(Inst),
+
+    {ok, DisBtn} = lv_btn:create(TopLayer),
+    {ok, DisBtnLbl} = lv_label:create(DisBtn),
+    ok = lv_label:set_text(DisBtnLbl, "Disconnect"),
+    ok = lv_obj:set_size(DisBtn, {content, 30}),
+    ok = lv_obj:align(DisBtn, top_right, {-20, 20}),
+
+    {ok, DisEvt, _} = lv_event:setup(DisBtn, short_clicked, disconnect),
+
+    {keep_state, S0#?MODULE{screen = Screen, disevt = DisEvt},
+        [{state_timeout, 500, check}]};
 loading(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+loading(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
     {FPid, _} = Srv,
     {PeerIp, _PeerPort} = rdp_server:get_peer(Srv),
@@ -699,6 +717,9 @@ login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
     end, Evts0, maps:to_list(maps:get(slots, CInfo, #{}))),
     S2 = S1#?MODULE{events = Evts1},
     {keep_state, S2};
+login(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 login(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 
@@ -774,6 +795,9 @@ check_pin(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 check_pin(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+check_pin(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 check_pin(state_timeout, check, S0 = #?MODULE{creds = #{pin := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"PIN required">>}};
 check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
@@ -850,6 +874,9 @@ check_login(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 check_login(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+check_login(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 check_login(state_timeout, check, S0 = #?MODULE{creds = #{username := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
 check_login(state_timeout, check, S0 = #?MODULE{creds = #{password := <<>>}}) ->
@@ -894,6 +921,9 @@ check_mfa(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
 check_mfa(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+check_mfa(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 check_mfa(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
@@ -1139,6 +1169,10 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
 mfa_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
+mfa_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+
 mfa_choice(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
     ok = lv_indev:wait_release(Inst, keyboard),
     mfa_choice(info, {Ref, Evt}, S0);
@@ -1198,6 +1232,9 @@ mfa_auth(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 mfa_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+mfa_auth(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 mfa_auth(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
@@ -1304,6 +1341,9 @@ mfa_async(enter, _PrevState, S0 = #?MODULE{}) ->
         [{state_timeout, 500, check}]};
 mfa_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+mfa_async(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 mfa_async(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
@@ -1414,6 +1454,10 @@ mfa_push_code(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
     ok = lv_indev:wait_release(Inst, keyboard),
     mfa_push_code(info, {Ref, Evt}, S0);
 
+mfa_push_code(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+
 mfa_push_code(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 
@@ -1477,6 +1521,9 @@ check_shell(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 check_shell(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+check_shell(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 check_shell(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
     Mode = rdpproxy:config([frontend, L, mode], pool),
     case Mode of
@@ -1599,6 +1646,12 @@ manual_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 manual_host(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+manual_host(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+manual_host(info, {_, cancel}, S0 = #?MODULE{srv = Srv, rstate = check_shell}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 manual_host(info, {_, cancel}, S0 = #?MODULE{rstate = RState}) ->
     {next_state, RState, S0}.
 
@@ -1697,6 +1750,9 @@ editing_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 editing_host(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+editing_host(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 editing_host(info, {_, cancel}, S0 = #?MODULE{}) ->
     {next_state, nms_choice, S0};
 editing_host(info, {_, {save, FieldMap}}, S0 = #?MODULE{edit_host = Dev0}) ->
@@ -1719,6 +1775,9 @@ pool_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 pool_choice(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+pool_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     #{title := TitleStyle, instruction := InstrStyle,
       item_title := ItemTitleStyle, role := RoleStyle} = Sty,
@@ -1829,6 +1888,9 @@ pool_host_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}
     {stop, normal, S0};
 pool_host_choice(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+pool_host_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 pool_host_choice(state_timeout, check, S0 = #?MODULE{pool = Pool, creds = Creds}) ->
     #{username := U} = Creds,
     case session_ra:get_pool(Pool) of
@@ -2032,6 +2094,9 @@ nms_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 nms_choice(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
+nms_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 nms_choice(state_timeout, check, #?MODULE{nms = Nms, creds = Creds}) ->
     #{username := U} = Creds,
     case nms:get_user_hosts(Nms, U) of
@@ -2471,6 +2536,9 @@ alloc_handle(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, start}]};
 alloc_handle(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
+alloc_handle(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 alloc_handle(state_timeout, start, S0 = #?MODULE{pool = Pool, creds = ECreds,
                                                  hdl = Hdl0}) ->
     T0 = erlang:system_time(millisecond),
@@ -2562,6 +2630,10 @@ alloc_waiting(info, {alloc_persistent_error, AllocPid, Why},
 
 alloc_waiting(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{allocmref = MRef}) ->
     {next_state, alloc_handle, S0};
+
+alloc_waiting(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
 
 alloc_waiting(info, {allocated_session, Pid, Hdl}, S0 = #?MODULE{allocpid = Pid}) ->
     erlang:demonitor(S0#?MODULE.allocmref, [flush]),
