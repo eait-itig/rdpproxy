@@ -1966,7 +1966,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
     #?MODULE{inst = Inst, pool = Pool} = S0,
     #{item_title := ItemTitleStyle, title := TitleStyle,
       item_title_faded := ItemTitleFadedStyle, instruction := InstrStyle,
-      role := RoleStyle} = Sty,
+      role := RoleStyle, row := RowStyle} = Sty,
 
     {Screen, Flex} = make_wide_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
@@ -1984,6 +1984,18 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
         instruction_choose])]),
     ok = lv_span:set_style(Instr, InstrStyle),
 
+    {ok, FilterRow} = lv_obj:create(Inst, Flex),
+    ok = lv_obj:add_style(FilterRow, RowStyle),
+
+    {ok, Filter} = lv_textarea:create(FilterRow),
+    ok = lv_textarea:set_one_line(Filter, true),
+    ok = lv_textarea:set_text_selection(Filter, true),
+    ok = lv_textarea:set_placeholder_text(Filter, "search"),
+    ok = lv_group:add_obj(InpGroup, Filter),
+
+    {ok, FiltEvt, _} = lv_event:setup(Filter, value_changed,
+        {update_filter, search, Filter}),
+
     {ok, List} = lv_list:create(Flex),
     ok = lv_obj:set_size(List, {{percent, 100}, content}),
     ok = lv_obj:set_style_max_height(List, {percent, 70}),
@@ -1991,7 +2003,7 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
     {ok, #{title := PoolTitle}} = session_ra:get_pool(Pool),
     {ok, _} = lv_list:add_text(List, PoolTitle),
 
-    Evts0 = lists:foldl(fun (Dev, Acc) ->
+    {Evts0, DevMap} = lists:foldl(fun (Dev, {EvtAcc, DevMapAcc}) ->
         #{ip := IP, role := Role, last_alloc := LastAlloc} = Dev,
         Desc = maps:get(desc, Dev, none),
         Hostname = maps:get(hostname, Dev, IP),
@@ -2056,26 +2068,37 @@ pool_host_choice(state_timeout, {display, Devs}, S0 = #?MODULE{sty = Sty}) ->
             #{busy := true} ->
                 ok = lv_obj:add_state(Opt, disabled),
                 ok = lv_obj:set_style_opa(Opt, 0.8),
-                Acc;
+                {EvtAcc, DevMapAcc};
             _ ->
                 ok = lv_group:add_obj(InpGroup, Opt),
                 {ok, DevEvt, _} = lv_event:setup(Opt, short_clicked,
                     {select_host, IP}),
-                [DevEvt | Acc]
+                {[DevEvt | EvtAcc], [{Dev, Opt} | DevMapAcc]}
         end
-    end, [], Devs),
+    end, {[], []}, Devs),
 
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
     ok = lv_label:set_text(CancelBtnLbl, "Back"),
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
-    Evts1 = [CancelEvt | Evts0],
+    Evts1 = [FiltEvt, CancelEvt | Evts0],
 
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
-    {keep_state, S0#?MODULE{screen = Screen, events = Evts1}};
+    {keep_state, S0#?MODULE{screen = Screen, events = Evts1, devmap = DevMap,
+        filter = #{}}};
+
+pool_host_choice(info, {_, {update_filter, search, Txt}}, S0 = #?MODULE{filter = F0}) ->
+    {ok, Search} = lv_textarea:get_text(Txt),
+    F1 = case Search of
+        <<>> -> maps:remove(search, F0);
+        _ -> F0#{search => Search}
+    end,
+    S1 = S0#?MODULE{filter = F1},
+    filter_devmap(S1),
+    {keep_state, S1};
 
 pool_host_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
     {next_state, pool_choice, S0};
@@ -2423,6 +2446,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
 
     {keep_state, S0#?MODULE{screen = Screen, events = Evts4, devmap = DevMap,
+                            filter = #{},
                             admin_custom = AdminCustom,
                             admin_custom_label = AdminCustomLabel}};
 
@@ -2497,17 +2521,19 @@ filter_devmap(#?MODULE{creds = Creds, filter = F, devmap = DevMap}) ->
         ok = lv_obj:add_flag(Obj, hidden)
     end, ToHide).
 
+map_get_none(Key, Map, Default) ->
+    case maps:get(Key, Map, none) of
+        none -> Default;
+        Value -> Value
+    end.
+
 match_filter(U, Dev, F0 = #{search := Text}) ->
-    #{ip := IP, hostname := Hostname, building := Building, room := Room,
-      class := Class} = Dev,
-    RoleBin = case maps:get(role, Dev, none) of
-        none -> <<>>;
-        Role -> Role
-    end,
-    DescBin = case maps:get(desc, Dev, none) of
-        none -> <<>>;
-        Desc -> Desc
-    end,
+    #{ip := IP, hostname := Hostname} = Dev,
+    Building = map_get_none(building, Dev, <<>>),
+    Room = map_get_none(room, Dev, <<>>),
+    Class = map_get_none(class, Dev, <<>>),
+    RoleBin = map_get_none(role, Dev, <<>>),
+    DescBin = map_get_none(desc, Dev, <<>>),
     Haystack = string:to_lower(unicode:characters_to_list(
         iolist_to_binary([IP, $\s, Hostname, $\s, RoleBin, $\s, DescBin, $\s,
             Building, $\s, Room, $\s, Class]))),
