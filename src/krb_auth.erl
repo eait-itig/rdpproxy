@@ -92,7 +92,7 @@ eval_step({authenticate, Opts}, S0 = #?MODULE{uinfo = UInfo0}) ->
     OptsMap = maps:from_list(Opts),
     #{realm := N} = OptsMap,
     #{username := User, password := Password} = UInfo0,
-    Principal = [unicode:characters_to_list(User, utf8)],
+    Principal = [unicode:characters_to_binary(User, utf8)],
     {ok, Realm} = krb_realm:open(N),
     case krb_realm:authenticate(Realm, Principal, Password) of
         {ok, TGT} ->
@@ -153,9 +153,10 @@ eval_step({check_service_ticket, Opts}, S0 = #?MODULE{svctkt = SvcTkt0}) ->
         {ok, SvcTicket1 = #'Ticket'{'enc-part' = EP}} ->
             #?MODULE{uinfo = UInfo0} = S0,
             #{username := User} = UInfo0,
-            OurPrincipal = [unicode:characters_to_list(User, utf8)],
+            OurPrincipal = [unicode:characters_to_binary(User, utf8)],
             #'EncTicketPart'{cname = CName} = EP,
-            #'PrincipalName'{'name-string' = TheirPrincipal} = CName,
+            #'PrincipalName'{'name-string' = TheirPrincipal0} = CName,
+            TheirPrincipal = [unicode:characters_to_binary(X, utf8) || X <- TheirPrincipal0],
             if
                 (OurPrincipal =/= TheirPrincipal) ->
                     {error, {princ_mismatch, OurPrincipal, TheirPrincipal}};
