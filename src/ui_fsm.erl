@@ -806,7 +806,10 @@ check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
     #{slots := #{piv_card_auth := CAKSlot, Slot := SlotInfo}} = CInfo,
     #{pubkey := CAK} = CAKSlot,
     #{pubkey := PubKey, upn := [UPN | _]} = SlotInfo,
-    [Username, _Domain] = string:split(UPN, "@"),
+    case string:split(UPN, "@") of
+        [Username, _Domain] -> ok;
+        [Username] -> ok
+    end,
     [DefaultDomain | _] = rdpproxy:config([frontend, L, domains], [<<".">>]),
     Creds1 = Creds0#{username => iolist_to_binary(Username),
                      domain => iolist_to_binary(DefaultDomain)},

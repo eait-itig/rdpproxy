@@ -236,6 +236,7 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                     SI2 = SI1#{serial => Serial, dn => Subj},
                     SI3 = case get_dn_attr(Subj, ?'id-at-commonName') of
                         false -> SI2;
+                        {_Type, CN} -> SI2#{cn => CN};
                         CN -> SI2#{cn => CN}
                     end,
                     PolExts = [E || E  = #'Extension'{extnID = ID} <- Exts,
