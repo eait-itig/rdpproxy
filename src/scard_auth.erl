@@ -47,7 +47,8 @@
     upn => [binary()],
     serial => integer(),
     dn => [#'AttributeTypeAndValue'{} | term()],
-    cn => binary()
+    cn => binary(),
+    policies => [tuple()]
     }.
 
 -type card_info() :: #{
@@ -237,9 +238,29 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                         false -> SI2;
                         CN -> SI2#{cn => CN}
                     end,
-                    SI4 = SI3#{valid => true},
+                    PolExts = [E || E  = #'Extension'{extnID = ID} <- Exts,
+                                    ID =:= ?'id-ce-certificatePolicies'],
+                    SI4 = case PolExts of
+                        [#'Extension'{extnValue = PolInfos}] ->
+                            Pols = [Oid || #'PolicyInformation'{policyIdentifier = Oid} <- PolInfos],
+                            SI3#{policies => Pols};
+                        _ ->
+                            SI3
+                    end,
+                    SCardConfig = application:get_env(rdpproxy, smartcard, []),
+                    CNTrustPol = proplists:get_value(cn_upn_trust_policy,
+                        SCardConfig, false),
+                    SI5 = case lists:member(CNTrustPol, maps:get(policies, SI4, [])) of
+                        true ->
+                            UPN0 = maps:get(upn, SI4, []),
+                            CN = maps:get(cn, SI4),
+                            SI4#{upn => [CN | UPN0]};
+                        false ->
+                            SI4
+                    end,
+                    SI6 = SI5#{valid => true},
                     Slots0 = maps:get(slots, I0, #{}),
-                    Slots1 = Slots0#{Slot => SI4},
+                    Slots1 = Slots0#{Slot => SI6},
                     get_card_cert_info(Piv, Rest, I0#{slots => Slots1})
             end;
         _Err ->
