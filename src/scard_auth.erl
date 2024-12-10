@@ -253,8 +253,8 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                     SI5 = case lists:member(CNTrustPol, maps:get(policies, SI4, [])) of
                         true ->
                             UPN0 = maps:get(upn, SI4, []),
-                            CN = maps:get(cn, SI4),
-                            SI4#{upn => [CN | UPN0]};
+                            TrustedCN = maps:get(cn, SI4),
+                            SI4#{upn => [TrustedCN | UPN0]};
                         false ->
                             SI4
                     end,
