@@ -248,7 +248,7 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                             SI3
                     end,
                     SCardConfig = application:get_env(rdpproxy, smartcard, []),
-                    CNTrustPol = proplists:get_value(cn_upn_trust_policy,
+                    CNTrustPol = proplists:get_value(cn_upn_policy_id,
                         SCardConfig, false),
                     SI5 = case lists:member(CNTrustPol, maps:get(policies, SI4, [])) of
                         true ->
