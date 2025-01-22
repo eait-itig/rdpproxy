@@ -85,9 +85,11 @@ init(_Args) ->
     _ = (catch conn_ra:start()),
     _ = (catch session_ra:start()),
     _ = (catch remember_ra:start()),
+    _ = (catch scard_saved_pw_ra:start()),
     {ok, _} = timer:apply_interval(5000, conn_ra, tick, []),
     {ok, _} = timer:apply_interval(15000, session_ra, tick, []),
     {ok, _} = timer:apply_interval(30000, remember_ra, tick, []),
+    {ok, _} = timer:apply_interval(30000, scard_saved_pw_ra, tick, []),
 
     Listeners = rdpproxy:config(frontend, []),
     FrontendSups = lists:map(fun ({Name, ConfigList}) ->

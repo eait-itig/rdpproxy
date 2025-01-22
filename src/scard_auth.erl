@@ -269,8 +269,8 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
     end.
 
 check_cak(Piv, Rdr, SC0, Info0) ->
-    Info1 = get_card_cert_info(Piv, [piv_card_auth, piv_auth, {retired, 1},
-        {retired, 2}], Info0),
+    Info1 = get_card_cert_info(Piv, [piv_card_auth, piv_auth, piv_key_mgmt,
+        {retired, 1}], Info0),
     #{slots := #{piv_card_auth := #{valid := true, pubkey := PubKey,
                                     serial := Serial, dn := Subj}}} = Info1,
     challenge_slot(Piv, piv_card_auth, PubKey),
