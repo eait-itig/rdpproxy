@@ -226,7 +226,7 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                                     ID =:= ?'id-ce-subjectAltName'],
                     SI1 = case SANExts of
                         [#'Extension'{extnValue = SANs}] ->
-                            Ders = [V || {otherName, #'AnotherName'{'type-id' = ?'szOID_NT_PRINCIPAL_NAME', value = V}} <- SANs],
+                            Ders = [V || {otherName, {'INSTANCE OF', ?'szOID_NT_PRINCIPAL_NAME', V}} <- SANs],
                             Tlvs = [asn1rt_nif:decode_ber_tlv(Der) || Der <- Ders],
                             UPNs = [Str || {{_Tag, Str}, <<>>} <- Tlvs, is_binary(Str)],
                             SI0#{upn => UPNs};
