@@ -111,7 +111,7 @@ register_metrics() ->
 start_link(Frontend, L, Inst, {W, H}) ->
     gen_statem:start_link(?MODULE, [Frontend, L, Inst, {W, H}], []).
 
--type duo_choice_push() :: #{device => binary(), method => push,
+-type duo_choice_push() :: #{device => binary(), method => push | vpush,
     code => binary(), remember_me => boolean()}.
 -type duo_choice_call() :: #{device => binary(), method => call,
     remember_me => boolean()}.
@@ -279,6 +279,17 @@ make_styles(Inst, {W, H}) ->
     ok = lv_style:set_text_font(Title, {"roboto", bold, 32}),
     ok = lv_style:set_text_color(Title, lv_color:palette(white)),
 
+    {ok, VCode} = lv_style:create(Inst),
+    ok = lv_style:set_text_font(VCode, {"source code pro", bold, 16}),
+    ok = lv_style:set_bg_opa(VCode, 0.9),
+    ok = lv_style:set_bg_color(VCode, lv_color:palette(white)),
+    ok = lv_style:set_text_color(VCode, lv_color:palette(black)),
+    ok = lv_style:set_pad_left(VCode, 30),
+    ok = lv_style:set_pad_right(VCode, 30),
+    ok = lv_style:set_pad_top(VCode, 20),
+    ok = lv_style:set_pad_bottom(VCode, 20),
+    ok = lv_style:set_radius(VCode, 5),
+
     {ok, Subtitle} = lv_style:create(Inst),
     ok = lv_style:set_text_font(Subtitle, {"roboto", regular, 20}),
     ok = lv_style:set_text_color(Subtitle, lv_color:palette(white)),
@@ -302,7 +313,8 @@ make_styles(Inst, {W, H}) ->
     #{screen => Scr, flex => Flex, group => Group, group_divider => Divider,
       row => Row, title => Title, subtitle => Subtitle,
       instruction => Instruction, item_title => ItemTitle,
-      item_title_faded => ItemTitleFaded, role => Role, xflex => XFlex}.
+      item_title_faded => ItemTitleFaded, role => Role, xflex => XFlex,
+      vcode => VCode}.
 
 %% @private
 callback_mode() -> [state_functions, state_enter].
@@ -1124,7 +1136,8 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
     Args = #{
         <<"username">> => Username,
         <<"ipaddr">> => Peer,
-        <<"trusted_device_token">> => DuoId
+        <<"trusted_device_token">> => DuoId,
+        <<"client_supports_verified_push">> => <<"1">>
     },
     EnrollIsAllow = rdpproxy:config([duo, enroll_is_allow], false),
     Res = duo:preauth(Duo, Args),
@@ -1145,8 +1158,16 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("duo bypass for ~p", [Username]),
             {next_state, check_shell, S0};
-        {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs = [_Dev1 | _]}} ->
-            S1 = S0#?MODULE{duodevs = Devs},
+        {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs0 = [_Dev1 | _]} = RR} ->
+            Devs1 = case RR of
+                #{<<"verification_code">> := Code} ->
+                    % put the verification code into each device record so if
+                    % any have "push" then we can just grab it there in the next
+                    % step
+                    [D#{<<"verification_code">> => Code} || D <- Devs0];
+                _ -> Devs0
+            end,
+            S1 = S0#?MODULE{duodevs = Devs1},
             case remember_ra:check({DuoId, Username}) of
                 true ->
                     lager:debug("skipping duo for ~p due to remember me", [Username]),
@@ -1281,6 +1302,7 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
             #{<<"type">> := <<"phone">>} ->
                 [<<"push">>, <<"sms">>, <<"phone">>, <<"mobile_otp">>]
         end,
+        Code = maps:get(<<"verification_code">>, Dev, undefined),
 
         lists:foldl(fun
             (<<"push">>, DevAcc0) ->
@@ -1294,8 +1316,13 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                 {ok, MethodBtn} = lv_btn:create(Row),
                 {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
                 ok = lv_label:set_text(MethodBtnLbl, "Duo Push"),
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
-                    {push, Id}),
+                {ok, MethodBtnEvt, _} = case Code of
+                    undefined ->
+                        lv_event:setup(MethodBtn, short_clicked, {push, Id});
+                    _ ->
+                        lv_event:setup(MethodBtn, short_clicked,
+                            {push, Id, Code})
+                end,
 
                 [MethodBtnEvt | DevAcc0];
             (<<"sms">>, DevAcc0) ->
@@ -1432,6 +1459,14 @@ mfa_choice(info, {_, {push, DevId}}, S0 = #?MODULE{}) ->
     S1 = S0#?MODULE{creds = Creds1},
     {next_state, mfa_auth, S1};
 
+mfa_choice(info, {_, {push, DevId, Code}}, S0 = #?MODULE{}) ->
+    #?MODULE{creds = Creds0, rmbrchk = RmbrChk} = S0,
+    {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
+    Creds1 = Creds0#{duo => #{device => DevId, method => vpush, code => Code,
+                              remember_me => RememberMe}},
+    S1 = S0#?MODULE{creds = Creds1},
+    {next_state, mfa_auth, S1};
+
 mfa_choice(info, {_, {sms_codes, DevId, Btn}}, S0 = #?MODULE{duo = Duo}) ->
     ok = lv_obj:add_state(Btn, disabled),
     #?MODULE{creds = Creds, peer = Peer} = S0,
@@ -1480,6 +1515,36 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
     #{username := U, duo := DuoCreds} = Creds,
     RememberMe = maps:get(remember_me, DuoCreds, false),
     case DuoCreds of
+        #{method := vpush, device := DevId, code := Code} ->
+            PushInfo0 = duo_client_info(S0),
+            PushInfo1 = uri_string:compose_query(PushInfo0),
+            Args = #{
+                <<"username">> => U,
+                <<"ipaddr">> => Peer,
+                <<"factor">> => <<"push">>,
+                <<"device">> => DevId,
+                <<"async">> => <<"true">>,
+                <<"pushinfo">> => PushInfo1
+            },
+            lager:debug("doing duo vpush: ~p", [Args]),
+            case duo:auth(Duo, Args) of
+                {ok, R = #{<<"result">> := <<"deny">>}} ->
+                    lager:debug("duo denied vpush: ~999p", [R]),
+                    S1 = S0#?MODULE{errmsg = "Duo Push denied"},
+                    {next_state, mfa_choice, S1};
+                {ok, #{<<"result">> := <<"allow">>}} ->
+                    {next_state, mfa_push_code, S0#?MODULE{duotx = undefined}};
+                {error, {error, timeout}} ->
+                    lager:debug("duo auth call timed out, retrying"),
+                    {keep_state_and_data, [{state_timeout, 500, check}]};
+                Err = {error, _} ->
+                    lager:debug("duo auth error: ~999p", [Err]),
+                    Msg = io_lib:format("Error contacting Duo API:\n~p", [Err]),
+                    S1 = S0#?MODULE{errmsg = Msg},
+                    {next_state, mfa_choice, S1};
+                {ok, #{<<"txid">> := TxId}} ->
+                    {next_state, mfa_async, S0#?MODULE{duotx = TxId}}
+            end;
         #{method := push, device := DevId, code := Code} ->
             PushInfo0 = duo_client_info(S0),
             PushInfo1 = [{<<"code">>, Code} | PushInfo0],
@@ -1495,7 +1560,7 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
             lager:debug("doing duo push: ~p", [Args]),
             case duo:auth(Duo, Args) of
                 {ok, R = #{<<"result">> := <<"deny">>}} ->
-                    lager:debug("duo denied passcode: ~999p", [R]),
+                    lager:debug("duo denied push: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = "Duo Push denied"},
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
@@ -1568,15 +1633,72 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
             end
     end.
 
-mfa_async(enter, _PrevState, S0 = #?MODULE{}) ->
-    Screen = make_waiting_screen("Waiting for Duo...", S0),
-    {ok, CancelBtn} = lv_btn:create(Screen),
-    {ok, BtnLbl} = lv_label:create(CancelBtn),
-    ok = lv_label:set_text(BtnLbl, "Cancel"),
-    {ok, BtnEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
-    do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen, events = [BtnEvt]},
-        [{state_timeout, 500, check}]};
+mfa_async(enter, _PrevState, S0 = #?MODULE{creds = #{duo := DuoCreds},
+                                           sty = Sty, inst = Inst,
+                                           res = {W, H}}) ->
+    #{title := TitleStyle, instruction := InstrStyle, flex := FlexStyle,
+      screen := ScreenStyle, vcode := VCodeStyle} = Sty,
+
+    case DuoCreds of
+        #{method := vpush, code := Code} ->
+            {ok, Screen} = lv_scr:create(Inst),
+            ok = lv_obj:add_style(Screen, ScreenStyle),
+
+            {ok, Spinner} = lv_spinner:create(Screen, 1000, 90),
+            ok = lv_obj:set_size(Spinner, {100, 100}),
+
+            {ok, Flex} = lv_obj:create(Inst, Screen),
+            ok = lv_obj:add_style(Flex, FlexStyle),
+
+            if
+                (W > H) ->
+                    FlexW = if (0.2 * W < 500) -> 500; true -> {percent, 20} end,
+                    ok = lv_obj:set_size(Flex, {FlexW, {percent, 100}});
+                true ->
+                    FlexH = H - 100 - 50,
+                    ok = lv_obj:set_size(Flex, {{percent, 80}, FlexH})
+            end,
+
+            {ok, Text} = lv_span:create(Flex),
+            ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+            ok = lv_span:set_mode(Text, break),
+
+            {ok, Title} = lv_span:new_span(Text),
+            ok = lv_span:set_text(Title, "Duo Verified Push"),
+            ok = lv_span:set_style(Title, TitleStyle),
+
+            {ok, Instr} = lv_span:new_span(Text),
+            ok = lv_span:set_text(Instr, [$\n, "Enter this code on your Duo device to continue:\n"]),
+            ok = lv_span:set_style(Instr, InstrStyle),
+
+            {ok, CodeText} = lv_label:create(Flex),
+            ok = lv_obj:align(CodeText, center),
+            ok = lv_label:set_text(CodeText, [Code]),
+            ok = lv_obj:add_style(CodeText, VCodeStyle),
+
+            ok = lv_obj:align(CodeText, center),
+
+            {ok, CancelBtn} = lv_btn:create(Flex),
+            {ok, BtnLbl} = lv_label:create(CancelBtn),
+            ok = lv_label:set_text(BtnLbl, "Cancel"),
+            {ok, BtnEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
+
+            ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+            do_ping_annotate(S0),
+
+            {keep_state, S0#?MODULE{screen = Screen, events = [BtnEvt]},
+                [{state_timeout, 500, check}]};
+        _ ->
+            Screen = make_waiting_screen("Waiting for Duo...", S0),
+            {ok, CancelBtn} = lv_btn:create(Screen),
+            {ok, BtnLbl} = lv_label:create(CancelBtn),
+            ok = lv_label:set_text(BtnLbl, "Cancel"),
+            {ok, BtnEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
+            do_ping_annotate(S0),
+            {keep_state, S0#?MODULE{screen = Screen, events = [BtnEvt]},
+                [{state_timeout, 500, check}]}
+    end;
 mfa_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 mfa_async(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
