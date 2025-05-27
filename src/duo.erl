@@ -137,7 +137,10 @@ to_hex(Bin) ->
 do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = IKey, skey = SKey}) ->
     Date = http_signature_date:rfc7231(),
     MethodBin = string:uppercase(atom_to_binary(Method, utf8)),
-    Qs = uri_string:compose_query(maps:to_list(Params)),
+    Qs = case uri_string:compose_query(maps:to_list(Params)) of
+        {error, A, B} -> error({A, B, Params});
+        X -> X
+    end,
     SigningString = [
         Date, <<"\n">>,
         MethodBin, <<"\n">>,
