@@ -41,6 +41,8 @@ start() ->
     ]),
     {ok, App} = application:get_all_key(rdpproxy),
     Mods = proplists:get_value(modules, App),
+    % this is broken with our app config
+    _ = (catch prometheus_registry:deregister_collector(prometheus_mnesia_collector)),
     [Mod:register_metrics() || Mod <- Mods,
         erlang:function_exported(Mod, register_metrics, 0)],
     cowboy:start_clear(metrics_http, [{port, Port}],
