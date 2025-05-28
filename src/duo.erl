@@ -105,6 +105,7 @@ init(_) ->
             TOpts0
     end,
     Opts = #{
+        protocols => [http],
         connect_timeout => Timeout,
         tls_handshake_timeout => Timeout,
         domain_lookup_timeout => Timeout,
