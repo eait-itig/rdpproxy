@@ -255,7 +255,13 @@ get_card_cert_info(Piv, [Slot | Rest], I0) ->
                         true ->
                             UPN0 = maps:get(upn, SI4, []),
                             TrustedCN = maps:get(cn, SI4),
-                            SI4#{upn => [TrustedCN | UPN0]};
+                            case re:run(TrustedCN, "^[a-zA-Z][a-zA-Z0-9_-]+(@[a-zA-Z0-9._-]+)?$") of
+                                nomatch ->
+                                    % doesn't look like a valid upn in there, ignore it
+                                    SI4;
+                                _ ->
+                                    SI4#{upn => [TrustedCN | UPN0]}
+                            end;
                         false ->
                             SI4
                     end,
