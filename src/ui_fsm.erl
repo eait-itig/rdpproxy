@@ -1126,9 +1126,9 @@ check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInf
                     {next_state, check_shell, S0}
             end;
         deny ->
-            {keep_state, S0, [{state_timeout, 100, preauth}]}
+            {keep_state, S0, [{state_timeout, 100, {preauth, 3}}]}
     end;
-check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
+check_mfa(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                                                 duo = Duo, peer = Peer,
                                                 duoid = DuoId}) ->
     {FPid, _} = Srv,
@@ -1180,9 +1180,9 @@ check_mfa(state_timeout, preauth, S0 = #?MODULE{creds = Creds, srv = Srv,
             S1 = S0#?MODULE{errmsg = Msg},
             lager:debug("duo deny for ~p: ~p (id = ~p)", [Username, Msg, DuoId]),
             {next_state, login, S1};
-        {error, {error, timeout}} ->
+        {error, {error, timeout}} when (N > 0) ->
             lager:debug("timed out doing duo preauth, trying again"),
-            {keep_state_and_data, [{state_timeout, 100, preauth}]};
+            {keep_state_and_data, [{state_timeout, 100, {preauth, N - 1}}]};
         Else ->
             lager:debug("duo preauth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
             case remember_ra:check({DuoId, Username}) of
@@ -1502,7 +1502,7 @@ mfa_choice(info, {_, {passcode, DevId, CodeText, _Btn}}, S0 = #?MODULE{}) ->
 mfa_auth(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying MFA details...", S0),
     do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, {check, 3}}]};
 mfa_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 mfa_auth(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
@@ -1510,7 +1510,7 @@ mfa_auth(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     {next_state, dead, S0};
 mfa_auth(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
-mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
+mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                                              peer = Peer, duoid = DuoId}) ->
     #{username := U, duo := DuoCreds} = Creds,
     RememberMe = maps:get(remember_me, DuoCreds, false),
@@ -1534,9 +1534,9 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
                     {next_state, mfa_push_code, S0#?MODULE{duotx = undefined}};
-                {error, {error, timeout}} ->
+                {error, {error, timeout}} when (N > 0) ->
                     lager:debug("duo auth call timed out, retrying"),
-                    {keep_state_and_data, [{state_timeout, 500, check}]};
+                    {keep_state_and_data, [{state_timeout, 500, {check, N - 1}}]};
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     Msg = io_lib:format("Error contacting Duo API:\n~p", [Err]),
@@ -1565,9 +1565,9 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                     {next_state, mfa_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
                     {next_state, mfa_push_code, S0#?MODULE{duotx = undefined}};
-                {error, {error, timeout}} ->
+                {error, {error, timeout}} when (N > 0) ->
                     lager:debug("duo auth call timed out, retrying"),
-                    {keep_state_and_data, [{state_timeout, 500, check}]};
+                    {keep_state_and_data, [{state_timeout, 500, {check, N - 1}}]};
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     Msg = io_lib:format("Error contacting Duo API:\n~p", [Err]),
@@ -1623,9 +1623,9 @@ mfa_auth(state_timeout, check, S0 = #?MODULE{creds = Creds, duo = Duo,
                         true -> ok = remember_ra:remember({DuoId, U})
                     end,
                     {next_state, check_shell, S0};
-                {error, {error, timeout}} ->
+                {error, {error, timeout}} when (N > 0) ->
                     lager:debug("duo auth call timed out, retrying"),
-                    {keep_state_and_data, [{state_timeout, 500, check}]};
+                    {keep_state_and_data, [{state_timeout, 500, {check, N}}]};
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     S1 = S0#?MODULE{errmsg = "Error contacting Duo API"},
@@ -3057,7 +3057,7 @@ redir(state_timeout, redir, #?MODULE{srv = Srv, hdl = Hdl, listener = L, creds =
     Fqdn = rdpproxy:config([frontend, L, hostname], <<"localhost">>),
     Opts = #{
         session_id => SessId,
-        cookie => <<"Cookie: msts=_", Cookie/binary>>,
+        cookie => <<"Cookie: msts=", Cookie/binary>>,
         flags => Flags
     },
     lager:debug("sending ts_redir"),

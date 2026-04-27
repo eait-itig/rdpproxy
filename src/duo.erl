@@ -169,7 +169,7 @@ do_signed_req(Method, Path, Params, #?MODULE{gun = Gun, host = ApiHost, ikey = I
     end,
     T0 = erlang:system_time(microsecond),
     Req = gun:request(Gun, MethodBin, Uri, Hdrs1, Body),
-    case gun:await(Gun, Req, 1000) of
+    case gun:await(Gun, Req, 2000) of
         {response, fin, Status, _Headers} ->
             T1 = erlang:system_time(microsecond),
             Delta = (T1 - T0) / 1000,
