@@ -77,9 +77,9 @@
             %%
             %% Text while waiting for Duo push / call
             %%
-            {title_mfa_waiting, <<"Waiting for Duo">>},
+            {title_mfa_waiting, <<"Waiting for MFA">>},
             {instruction_mfa_waiting, <<"Please check your phone or device\n",
-                                        "for a Duo Push prompt or call...\n">>},
+                                        "for a MFA push prompt or call...\n">>},
 
             %%
             %% Text for the NMS chooser screen
@@ -279,6 +279,64 @@
                 {check_pac, [{required, true}]}
             ]}
         },
+        {mfa, [
+            %%
+            %% Enabled MFA methods. These will be attempted in order until
+            %% one succeeds or the user is rejected.
+            %%
+            %% Each of them has their own config section below with required
+            %% details for that method.
+            %%
+            %% Note that "smartcard" is both an authentication method and an
+            %% MFA method (see the config section).
+            %%
+            {methods, [smartcard, okta, duo]},
+
+            %%
+            %% ACL which can be used to allow some users or clients to
+            %% completely bypass MFA
+            %%
+            {bypass_acl, [
+                {deny, everybody}
+            ]}
+        ]},
+        {okta, [
+            %%
+            %% Details for Okta
+            %%
+            %% Create the Okta application as a "native" application with
+            %% the Interaction Code grant.
+            %%
+            %% (enable this under Settings > Account > Embedded widget
+            %% sign-in support, and then add it to the app under
+            %% Grant Type -> Advanced -> Other Grants: Interaction Code)
+            %%
+            {client_id, <<"0oa11aaa.....">>},
+            {host, <<"org.okta.com">>},
+
+            %%
+            %% We don't actually use the redirect URI but it has to match the
+            %% one on file for the application.
+            %%
+            {redirect_uri, <<"com.okta.org:/callback">>},
+
+            %%
+            %% JWK for authentication to okta APIs
+            %%
+            %% Generate with: jose_jwk:to_map(jose_jwk:generate_key(secp256r1))
+            %%
+            %% Use json:encode(maps:remove(<<"d">>, ...)) to get the JSON form
+            %% to add to the application on the Okta side
+            %%
+            {key, #{
+                <<"kid">> => <<"rdpproxy">>,
+                <<"kty">> => <<"EC">>,
+                <<"crv">> => <<"P-256">>,
+                <<"d">> => <<"9Yxbb...">>,
+                <<"x">> => <<"5Nu8e...">>,
+                <<"y">> => <<"dWlvJK-...">>
+            }},
+        ]},
         {duo, [
             %%
             %% Details for Duo 2FA
@@ -295,12 +353,38 @@
             %%
             %% Lifetime of "remember me" entries in seconds
             %%
-            {remember_time, 36000},
+            {remember_time, 36000}
+
+        ]},
+        {smartcard, [
+            %%
+            %% Path to CA certificate
+            %%
+            %{ca_cert, "/etc/ssl/certs/EAIT_Internal_CA.pem"},
 
             %%
-            %% Bypass Duo 2FA completely for users allowed by this ACL
+            %% A CA policy OID to look for when determining whether to treat
+            %% the certificate CN as a UPN or username.
             %%
-            {bypass_acl, [
+            %% Without this, only UPN subjectAltNames will be used.
+            %%
+            %{cn_upn_policy_id, {1,3,6,1,4,1,...}},
+
+            %%
+            %% Smartcard auth always accepts a certificate with a specific
+            %% UPN authenticating as that UPN exactly. The smartcard + PIN is
+            %% considered "MFA-equivalent" at auth time and MFA is skipped.
+            %%
+            %% You can also set up additional rules here for the case where the
+            %% user does not use smartcard auth (they auth with a username+pw)
+            %% but you want their smartcard to be used for MFA.
+            %%
+            %% If the rule that matches the user's smartcard here is an
+            %% {allow, cert, ...} rule, then rdpproxy will obtain a signature
+            %% from that certificate's private key to authenticate, which may
+            %% require the user's PIN.
+            %%
+            {mfa_acl, [
                 %%
                 %% Allow certs with CN=username under a specific DN tree
                 %%
@@ -320,16 +404,11 @@
                 %]},
 
                 %%
-                %% Duo for everybody else!
+                %% Keep this rule at the bottom, or everyone with a smartcard
+                %% will just skip MFA no matter who they log in as.
                 %%
                 {deny, everybody}
             ]}
-        ]},
-        {smartcard, [
-            %%
-            %% Path to CA certificate
-            %%
-            %{ca_cert, "/etc/ssl/certs/EAIT_Internal_CA.pem"},
         ]},
         {nms_api, [
             %%

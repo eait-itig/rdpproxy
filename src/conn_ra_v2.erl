@@ -86,7 +86,9 @@ register_metrics() ->
     on_user => boolean(),
     on_hour => boolean(),
     auth_attempts => [auth_attempt()],
-    duo_preauth => binary()
+    duo_preauth => binary(),
+    okta_username => binary(),
+    okta_authenticators => [#{type => atom(), name => binary()}]
     }.
 
 -type hour_num() :: integer().
@@ -361,7 +363,18 @@ conn_to_json(C) ->
             };
         _ -> J11
     end,
-    [jsx:encode(J12), $\n].
+    J13 = case C of
+        #{okta_username := User, okta_authenticators := Steps} ->
+            J12#{<<"okta">> => #{
+                 <<"username">> => User,
+                 <<"authenticators">> => [#{
+                     <<"type">> => atom_to_binary(Type, utf8),
+                     <<"name">> => Name
+                 } || #{type := Type, name := Name} <- Steps]
+            }};
+        _ -> J12
+    end,
+    [jsx:encode(J13), $\n].
 
 dn_oid_to_str(?'id-at-commonName') -> "cn";
 dn_oid_to_str(?'id-at-countryName') -> "c";

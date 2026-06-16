@@ -54,16 +54,23 @@
     login/3,
     check_login/3,
     check_mfa/3,
+    check_smartcard/3,
+    check_okta/3,
+    check_duo/3,
     check_pin/3,
-    mfa_choice/3,
-    mfa_auth/3,
-    mfa_async/3,
+    duo_choice/3,
+    duo_auth/3,
+    duo_async/3,
+    duo_push_code/3,
+    okta_enter_code/3,
+    okta_poll/3,
+    okta_select/3,
+    okta_webauthn/3,
     check_shell/3,
     manual_host/3,
     pool_choice/3,
     pool_host_choice/3,
     nms_choice/3,
-    mfa_push_code/3,
     alloc_handle/3,
     alloc_waiting/3,
     redir/3,
@@ -121,13 +128,23 @@ start_link(Frontend, L, Inst, {W, H}) ->
 -type duo_choice() :: duo_choice_push() | duo_choice_call() |
     duo_choice_otp().
 
--type password_creds() :: #{username => binary(), domain => binary(),
-    password => binary(), duo => duo_choice()}.
+-type okta_authenticator() :: #{type => webauthn | totp | push | password,
+    name => binary()}.
+-type okta_creds() :: #{remember_me => boolean(),
+    authenticators_used => [okta_authenticator()],
+    pref_username => binary()}.
+-type okta_tokens() :: #{access_token => binary(), id_token => binary()}.
 
--type smartcard_creds() :: #{slot => nist_piv:slot(), pin => binary()}.
+-type password_creds() :: #{username => binary(), domain => binary(),
+    password => binary(), duo => duo_choice(), okta => okta_creds(),
+    tgts => term(), tokens => okta_tokens()}.
+
+-type smartcard_creds() :: #{slot => nist_piv:slot(), pin => binary(),
+    tgts => term()}.
 
 -type epw_creds() :: #{slot => nist_piv:slot(), pin => binary(), epw => #{},
-    username => binary(), domain => binary(), password => binary()}.
+    username => binary(), domain => binary(), password => binary(),
+    tgts => term()}.
 
 -type creds() :: password_creds() | smartcard_creds() | epw_creds().
 
@@ -173,6 +190,8 @@ start_link(Frontend, L, Inst, {W, H}) ->
     hostname :: undefined | binary(),
     duo :: undefined | pid(),
     duoid :: undefined | binary(),
+    okta :: undefined | pid(),
+    mfa = [] :: [atom()],
     errmsg :: undefined | binary(),
     duodevs :: undefined | [map()],
     rmbrchk :: undefined | lv:checkbox(),
@@ -221,100 +240,135 @@ init([Srv, L, Inst, {W, H}]) ->
             ok = gen_fsm:send_event(Pid, {subscribe, self()}),
             MRef = monitor(process, Pid),
             Styles = make_styles(Inst, {W, H}),
-            {ok, PinChars} = lv:make_buffer(Inst, <<"0123456789", 0>>),
+            {ok, PinChars} = lv:make_cstring(Inst, <<"0123456789">>),
             {ok, loading, #?MODULE{mref = MRef, srv = Srv, listener = L,
                                    inst = Inst, res = {W,H}, sty = Styles,
                                    pinchars = PinChars}}
     end.
 
 make_styles(Inst, {W, H}) ->
-    {ok, Scr} = lv_style:create(Inst),
-    ok = lv_style:set_flex_flow(Scr, if (W > H) -> row; true -> column end),
-    ok = lv_style:set_flex_align(Scr, center, center, center),
     {R, G, B} = rdpproxy:config([ui, bg_colour], {16#48, 16#20, 16#6c}),
-    ok = lv_style:set_bg_color(Scr, lv_color:make(R, G, B)),
+    {ok, Scr} = lv_style:create(Inst, [
+        {flex_flow, if (W > H) -> row; true -> column end},
+        {flex_align, center, center, center},
+        {bg_color, lv_color:make(R, G, B)}
+        ]),
 
-    {ok, Flex} = lv_style:create(Inst),
-    ok = lv_style:set_flex_flow(Flex, column),
-    ok = lv_style:set_flex_align(Flex, if (W > H) -> center; true -> start end,
-        start, if (W > H) -> start; true -> center end),
-    ok = lv_style:set_bg_opa(Flex, 0),
-    ok = lv_style:set_border_opa(Flex, 0),
+    {ok, Flex} = lv_style:create(Inst, [
+        {flex_flow, column},
+        {flex_align, if (W > H) -> center; true -> start end,
+                     start, if (W > H) -> start; true -> center end},
+        {bg_opa, 0},
+        {border_opa, 0}
+        ]),
 
-    {ok, XFlex} = lv_style:create(Inst),
-    ok = lv_style:set_flex_flow(XFlex, column),
-    ok = lv_style:set_flex_align(XFlex, if (W > H) -> start; true -> center end,
-        start, start),
-    ok = lv_style:set_bg_opa(XFlex, 0),
-    ok = lv_style:set_border_opa(XFlex, 0),
+    {ok, XFlex} = lv_style:create(Inst, [
+        {flex_flow, column},
+        {flex_align, if (W > H) -> start; true -> center end,
+                     start, start},
+        {bg_opa, 0},
+        {border_opa, 0}
+        ]),
 
-    {ok, Row} = lv_style:create(Inst),
-    ok = lv_style:set_flex_flow(Row, row),
-    ok = lv_style:set_flex_align(Row, start, center, center),
-    ok = lv_style:set_bg_opa(Row, 0),
-    ok = lv_style:set_border_opa(Row, 0),
-    ok = lv_style:set_pad_top(Row, 0),
-    ok = lv_style:set_pad_bottom(Row, 0),
-    ok = lv_style:set_pad_left(Row, 0),
-    ok = lv_style:set_pad_right(Row, 0),
-    ok = lv_style:set_width(Row, {percent, 100}),
-    ok = lv_style:set_height(Row, content),
+    {ok, Row} = lv_style:create(Inst, [
+        {flex_flow, row},
+        {flex_align, start, center, center},
+        {bg_opa, 0},
+        {border_opa, 0},
+        {pad_all, 0},
+        {width, {percent, 100}},
+        {height, content}
+        ]),
 
-    {ok, Group} = lv_style:create(Inst),
-    ok = lv_style:set_bg_opa(Group, 0.7),
-    ok = lv_style:set_border_opa(Group, 0),
-    ok = lv_style:set_width(Group, {percent, 100}),
-    ok = lv_style:set_height(Group, content),
+    {ok, Group} = lv_style:create(Inst, [
+        {bg_opa, 0.7},
+        {border_opa, 0},
+        {width, {percent, 100}},
+        {height, content}
+        ]),
 
-    {ok, Divider} = lv_style:create(Inst),
-    ok = lv_style:set_border_side(Divider, [left]),
-    ok = lv_style:set_border_color(Divider, lv_color:palette(black)),
-    ok = lv_style:set_border_opa(Divider, 0.5),
-    ok = lv_style:set_pad_left(Divider, 10),
-    ok = lv_style:set_pad_top(Divider, 0),
-    ok = lv_style:set_pad_bottom(Divider, 0),
-    ok = lv_style:set_radius(Divider, 0),
+    {ok, Divider} = lv_style:create(Inst, [
+        {border_side, [left]},
+        {border_color, lv_color:palette(black)},
+        {border_opa, 0.5},
+        {pad_left, 10},
+        {pad_top, 0},
+        {pad_bottom, 0},
+        {radius, 0}
+        ]),
 
-    {ok, Title} = lv_style:create(Inst),
-    ok = lv_style:set_text_font(Title, {"roboto", bold, 32}),
-    ok = lv_style:set_text_color(Title, lv_color:palette(white)),
+    {ok, Title} = lv_style:create(Inst, [
+        {text_font, {"roboto", bold, 32}},
+        {text_color, lv_color:palette(white)}
+        ]),
 
-    {ok, VCode} = lv_style:create(Inst),
-    ok = lv_style:set_text_font(VCode, {"source code pro", bold, 16}),
-    ok = lv_style:set_bg_opa(VCode, 0.9),
-    ok = lv_style:set_bg_color(VCode, lv_color:palette(white)),
-    ok = lv_style:set_text_color(VCode, lv_color:palette(black)),
-    ok = lv_style:set_pad_left(VCode, 30),
-    ok = lv_style:set_pad_right(VCode, 30),
-    ok = lv_style:set_pad_top(VCode, 20),
-    ok = lv_style:set_pad_bottom(VCode, 20),
-    ok = lv_style:set_radius(VCode, 5),
+    {ok, VCode} = lv_style:create(Inst, [
+        {text_font, {"source code pro", bold, 18}},
+        {bg_opa, 0.9},
+        {bg_color, lv_color:palette(white)},
+        {text_color, lv_color:palette(black)},
+        {pad_left, 30},
+        {pad_right, 30},
+        {pad_top, 20},
+        {pad_bottom, 20},
+        {radius, 5}
+    ]),
 
-    {ok, Subtitle} = lv_style:create(Inst),
-    ok = lv_style:set_text_font(Subtitle, {"roboto", regular, 20}),
-    ok = lv_style:set_text_color(Subtitle, lv_color:palette(white)),
+    {ok, Subtitle} = lv_style:create(Inst, [
+        {text_font, {"roboto", regular, 20}},
+        {text_color, lv_color:palette(white)}
+        ]),
 
-    {ok, Instruction} = lv_style:create(Inst),
-    ok = lv_style:set_text_font(Instruction, {"montserrat", regular, 16}),
-    ok = lv_style:set_text_color(Instruction, lv_color:palette(white)),
+    {ok, Instruction} = lv_style:create(Inst, [
+        {text_font, {"montserrat", regular, 16}},
+        {text_color, lv_color:palette(white)}
+        ]),
 
-    {ok, ItemTitle} = lv_style:create(Inst),
-    ok = lv_style:set_text_font(ItemTitle, {"roboto", bold, 16}),
-    ok = lv_style:set_text_decor(ItemTitle, [underline]),
+    {ok, ItemTitle} = lv_style:create(Inst, [
+        {text_font, {"roboto", bold, 16}},
+        {text_decor, [underline]}
+        ]),
 
-    {ok, ItemTitleFaded} = lv_style:create(Inst),
-    ok = lv_style:set_text_font(ItemTitleFaded, {"roboto", bold, 16}),
-    ok = lv_style:set_text_decor(ItemTitleFaded, [underline]),
-    ok = lv_style:set_text_opa(ItemTitleFaded, 0.8),
+    {ok, ItemTitleFaded} = lv_style:create(Inst, [
+        {text_font, {"roboto", bold, 16}},
+        {text_decor, [underline]},
+        {text_opa, 0.8}
+        ]),
 
-    {ok, Role} = lv_style:create(Inst),
-    ok = lv_style:set_text_opa(Role, 0.7),
+    {ok, Role} = lv_style:create(Inst, [
+        {text_opa, 0.7}
+        ]),
+
+    {ok, Matrix} = lv_style:create(Inst, [
+        {pad_all, 6},
+        {pad_row, 6},
+        {pad_column, 6}
+    ]),
+
+    {ok, MatrixItem} = lv_style:create(Inst, [
+        {bg_opa, 1.0},
+        {bg_color, lv_color:make(16#f3f4f6)},
+        {radius, 8},
+        {border_color, lv_color:make(16#d1d5db)},
+        {border_width, 1},
+        {text_color, lv_color:make(16#111827)}
+    ]),
+
+    {ok, MatrixChItem} = lv_style:create(Inst, [
+        {bg_color, lv_color:make(16#6366f1)},
+        {text_color, lv_color:palette(white)},
+        {outline_color, lv_color:make(16#6366f1)},
+        {outline_width, 3},
+        {outline_pad, 2},
+        {outline_opa, 0.8}
+    ]),
 
     #{screen => Scr, flex => Flex, group => Group, group_divider => Divider,
       row => Row, title => Title, subtitle => Subtitle,
       instruction => Instruction, item_title => ItemTitle,
       item_title_faded => ItemTitleFaded, role => Role, xflex => XFlex,
-      vcode => VCode}.
+      vcode => VCode, matrix => Matrix, matrix_item => MatrixItem,
+      matrix_item_checked => MatrixChItem}.
 
 %% @private
 callback_mode() -> [state_functions, state_enter].
@@ -548,17 +602,32 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
 
     lager:debug("peer = ~p, duoid = ~p", [PeerIp, DuoId]),
 
-    {ok, Duo} = duo:start_link(),
     S1 = S0#?MODULE{tsudcore = TsudCore, duoid = DuoId,
-                    peer = PeerIpBin, duo = Duo},
+                    peer = PeerIpBin},
+
+    Methods = rdpproxy:config([mfa, methods], [duo]),
+    S2 = case lists:member(duo, Methods) of
+        true ->
+            {ok, Duo} = duo:start_link(),
+            S1#?MODULE{duo = Duo, mfa = Methods};
+        false ->
+            S1#?MODULE{mfa = Methods}
+    end,
+    S3 = case lists:member(okta, Methods) of
+        true ->
+            {ok, Okta} = okta:start_link(),
+            S2#?MODULE{okta = Okta};
+        false ->
+            S2
+    end,
 
     Mode = rdpproxy:config([frontend, L, mode], pool),
-    S2 = case Mode of
+    S4 = case Mode of
         nms_choice ->
             {ok, Nms} = nms:start_link(),
-            S1#?MODULE{nms = Nms};
+            S3#?MODULE{nms = Nms};
         _ ->
-            S1
+            S3
     end,
 
     {_Autologon, U, _D, P} = rdp_server:get_autologon(Srv),
@@ -572,28 +641,28 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
         <<>> -> Creds0;
         _ -> Creds0#{password => P}
     end,
-    S3 = S2#?MODULE{creds = encrypt_creds(Creds1)},
+    S5 = S4#?MODULE{creds = encrypt_creds(Creds1)},
 
     Fsm = self(),
     spawn(fun() ->
-        Res = check_scard(S3),
+        Res = check_scard(S5),
         Fsm ! {scard_result, Res}
     end),
-    S4 = receive
+    S6 = receive
         {scard_result, {ok, Piv, _Rdr, SC0, Info}} ->
             conn_ra:annotate(FPid, #{scard => Info}),
-            S3#?MODULE{cinfo = Info, piv = Piv, scard = SC0};
+            S5#?MODULE{cinfo = Info, piv = Piv, scard = SC0};
         {scard_result, _} ->
-            S3#?MODULE{cinfo = #{slots => #{}}}
+            S5#?MODULE{cinfo = #{slots => #{}}}
     after 2000 ->
-        S3#?MODULE{cinfo = #{slots => #{}}}
+        S5#?MODULE{cinfo = #{slots => #{}}}
     end,
 
     case Creds1 of
         #{username := _, password := _} ->
-            {next_state, check_login, S4};
+            {next_state, check_login, S6};
         _ ->
-            {next_state, login, S4}
+            {next_state, login, S6}
     end.
 
 %% @private
@@ -1091,28 +1160,46 @@ split_domain(UserDomain, #?MODULE{listener = L}) ->
         [U] -> {DefaultDomain, U}
     end.
 
-check_mfa(enter, _PrevState, S0 = #?MODULE{}) ->
+check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = []}) ->
+    lager:error("no mfa methods remaining, bailing"),
+    {keep_state_and_data, [{state_timeout, 0, return_to_login}]};
+check_mfa(state_timeout, return_to_login, S0 = #?MODULE{errmsg = EM}) ->
+    EM1 = case EM of
+        undefined -> <<"No MFA methods configured.">>;
+        _ -> EM
+    end,
+    {next_state, login, S0#?MODULE{errmsg = EM1}};
+check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = [NextMethod | Rest]}) ->
+    {keep_state_and_data, [{state_timeout, 0, next_method}]};
+check_mfa(state_timeout, next_method, S0 = #?MODULE{mfa = [NextMethod | Rest]}) ->
+    case NextMethod of
+        duo -> {next_state, check_duo, S0};
+        smartcard -> {next_state, check_smartcard, S0};
+        okta -> {next_state, check_okta, S0}
+    end.
+
+check_duo(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Checking Duo MFA...", S0),
     do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
-check_mfa(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+check_duo(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-check_mfa(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+check_duo(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-check_mfa(info, {scard_result, _}, #?MODULE{}) ->
+check_duo(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
-check_mfa(state_timeout, check_bypass, S0 = #?MODULE{
+check_duo(state_timeout, check_bypass, S0 = #?MODULE{
             creds = Creds = #{epw := EPW}, uinfo = UInfo0}) ->
     #{public_key := PubKey} = EPW,
     scard_saved_pw_ra:bump_password(PubKey),
     lager:debug("skipping duo due to epw saved creds"),
     {next_state, check_shell, S0};
-check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
+check_duo(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
     #{username := Username} = Creds,
     #?MODULE{peer = Peer, cinfo = CardInfo, uinfo = UInfo0} = S0,
     UInfo1 = UInfo0#{card_info => CardInfo, client_ip => Peer},
-    SkipDuoACL = rdpproxy:config([duo, bypass_acl], [{deny, everybody}]),
+    SkipDuoACL = rdpproxy:config([mfa, bypass_acl], [{deny, everybody}]),
     Now = erlang:system_time(second),
     UCtx = #{time => Now, pool_availability => #{}},
     case session_ra:process_rules(UInfo1, UCtx, SkipDuoACL) of
@@ -1122,13 +1209,13 @@ check_mfa(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInf
                              piv_key_mgmt := #{pubkey := _PubKey}}} ->
                     {next_state, offer_epw, S0};
                 _ ->
-                    lager:debug("duo bypass for ~s", [Username]),
+                    lager:debug("mfa bypass for ~s", [Username]),
                     {next_state, check_shell, S0}
             end;
         deny ->
             {keep_state, S0, [{state_timeout, 100, {preauth, 3}}]}
     end;
-check_mfa(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
+check_duo(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                                                 duo = Duo, peer = Peer,
                                                 duoid = DuoId}) ->
     {FPid, _} = Srv,
@@ -1150,11 +1237,13 @@ check_mfa(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
     case Res of
         {ok, #{<<"result">> := <<"enroll">>}} when EnrollIsAllow ->
             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
-            {next_state, check_shell, S0};
+            {next_state, check_mfa, S0};
         {ok, #{<<"result">> := <<"enroll">>}} ->
-            S1 = S0#?MODULE{errmsg = <<"Duo MFA required but not enrolled.\n"
-                "Visit auth.uq.edu.au in a web browser to set up.">>},
-            {next_state, login, S1};
+            #?MODULE{mfa = [duo | Rest]} = S0,
+            S1 = S0#?MODULE{mfa = Rest, errmsg =
+                <<"Duo MFA required but not enrolled.\n"
+                  "Visit auth.uq.edu.au in a web browser to set up.">>},
+            {next_state, check_mfa, S1};
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("duo bypass for ~p", [Username]),
             {next_state, check_shell, S0};
@@ -1174,7 +1263,7 @@ check_mfa(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                     {next_state, check_shell, S1};
                 false ->
                     lager:debug("sending ~p to duo screen", [Username]),
-                    {next_state, mfa_choice, S1}
+                    {next_state, duo_choice, S1}
             end;
         {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := Msg}} ->
             S1 = S0#?MODULE{errmsg = Msg},
@@ -1194,6 +1283,992 @@ check_mfa(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                     S1 = S0#?MODULE{errmsg = Msg},
                     {next_state, login, S1}
             end
+    end.
+
+check_smartcard(enter, _PrevState, S0 = #?MODULE{}) ->
+    Screen = make_waiting_screen("Checking Smartcard MFA...", S0),
+    do_ping_annotate(S0),
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
+check_smartcard(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+check_smartcard(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+check_smartcard(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+check_smartcard(state_timeout, check, S0 = #?MODULE{}) ->
+    #?MODULE{mfa = [smartcard | Rest]} = S0,
+    S1 = S0#?MODULE{mfa = Rest},
+    {next_state, check_mfa, S1}.
+
+check_okta(enter, _PrevState, S0 = #?MODULE{}) ->
+    Screen = make_waiting_screen("Checking Okta MFA...", S0),
+    do_ping_annotate(S0),
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
+check_okta(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+check_okta(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+check_okta(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+check_okta(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
+    #{username := Username} = Creds,
+    #?MODULE{peer = Peer, cinfo = CardInfo, uinfo = UInfo0} = S0,
+    UInfo1 = UInfo0#{card_info => CardInfo, client_ip => Peer},
+    SkipACL = rdpproxy:config([mfa, bypass_acl], [{deny, everybody}]),
+    Now = erlang:system_time(second),
+    UCtx = #{time => Now, pool_availability => #{}},
+    case session_ra:process_rules(UInfo1, UCtx, SkipACL) of
+        allow ->
+            case CardInfo of
+                #{slots := #{piv_card_auth := #{valid := true},
+                             piv_key_mgmt := #{pubkey := _PubKey}}} ->
+                    {next_state, offer_epw, S0};
+                _ ->
+                    lager:debug("mfa bypass for ~s", [Username]),
+                    {next_state, check_shell, S0}
+            end;
+        deny ->
+            {keep_state, S0, [{state_timeout, 100, {begin_auth, 3}}]}
+    end;
+check_okta(state_timeout, {begin_auth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
+                                                okta = Okta, peer = Peer,
+                                                duoid = DuoId, tsudcore = TsudCore}) ->
+    {FPid, _} = Srv,
+    #{username := Username} = Creds,
+
+    Caps = rdp_server:get_caps(Srv),
+    GeneralCap = lists:keyfind(ts_cap_general, 1, Caps),
+    [OSType, OSSubType] = GeneralCap#ts_cap_general.os,
+    [MajVer, MinVer] = TsudCore#tsud_core.version,
+
+    Meta = #{
+        login_hint => Username,
+        client_ip => Peer,
+        os_type => OSType,
+        os_subtype => OSSubType,
+        os_build => TsudCore#tsud_core.client_build,
+        rdp_version => {MajVer, MinVer},
+        device_id => binary:part(DuoId, {0,32})
+    },
+    lager:debug("okta meta = ~p", [Meta]),
+
+    case okta:begin_auth(Okta, Meta) of
+        {ok, next_steps, Steps} ->
+            okta_next(Steps, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            lager:debug("okta warnings: ~p", [Msgs]),
+            okta_next(Steps, S0);
+        {error, Msgs, next_steps, _Steps} ->
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            {next_state, login, S1};
+        {error, {error, timeout}} when (N > 0) ->
+            lager:debug("timed out doing okta begin_auth, trying again"),
+            {keep_state_and_data, [{state_timeout, 100, {begin_auth, N - 1}}]};
+        Else ->
+            lager:debug("okta begin_auth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
+            case remember_ra:check({DuoId, Username}) of
+                true ->
+                    lager:debug("skipping okta for ~p due to remember me", [Username]),
+                    {next_state, check_shell, S0};
+                false ->
+                    Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+                    S1 = S0#?MODULE{errmsg = Msg},
+                    {next_state, login, S1}
+            end
+    end.
+
+okta_add_step(Type, Name, S0 = #?MODULE{creds = Creds0}) ->
+    O0 = maps:get(okta, Creds0, #{}),
+    Steps0 = maps:get(authenticators_used, O0, []),
+    Steps1 = [#{type => Type, name => Name} | Steps0],
+    O1 = O0#{authenticators_used => Steps1},
+    Creds1 = Creds0#{okta => O1},
+    S0#?MODULE{creds = Creds1}.
+
+okta_finish(Tokens, S0 = #?MODULE{srv = {FPid,_}, creds = Creds0, duoid = DuoId}) ->
+    #{access_token := AT, id_token := IT,
+      claims := #{<<"preferred_username">> := PrefUser}} = Tokens,
+    Creds1 = decrypt_creds(Creds0),
+    O0 = maps:get(okta, Creds1, #{}),
+    RememberMe = maps:get(remember_me, O0, false),
+    U = maps:get(username, Creds1),
+    O1 = O0#{pref_username => PrefUser},
+    Creds2 = Creds1#{tokens => #{access_token => AT, id_token => IT},
+                     okta => O1},
+    Creds3 = encrypt_creds(Creds2),
+    S1 = S0#?MODULE{creds = Creds3},
+    #{authenticators_used := Steps} = O1,
+    lager:debug("okta mfa finished, auths used = ~p", [Steps]),
+    conn_ra:annotate(FPid, #{
+        okta_authenticators => Steps,
+        okta_username => PrefUser
+        }),
+    case RememberMe of
+        false -> ok;
+        true -> ok = remember_ra:remember({DuoId, U})
+    end,
+    {next_state, check_shell, S1}.
+
+okta_next(#{device_challenge_poll := _}, S0 = #?MODULE{okta = Okta}) ->
+    lager:debug("cancelling device_challenge_poll"),
+    case okta:proceed(Okta, cancel_polling) of
+        {ok, next_steps, Steps} ->
+            okta_next(Steps, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, _Steps} ->
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            {next_state, login, S1};
+        Else ->
+            lager:debug("okta else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end;
+okta_next(#{identify := _}, S0 = #?MODULE{okta = Okta, creds = Creds}) ->
+    #{username := Username} = Creds,
+    lager:debug("identifying as ~p", [Username]),
+    case okta:proceed(Okta, identify, #{identifier => Username}) of
+        {ok, next_steps, Steps} ->
+            okta_next(Steps, S0);
+        {ok, finished, Tokens} ->
+            lager:debug("okta returned auth finished after identify!?"),
+            okta_finish(Tokens, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, _Steps} ->
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            {next_state, login, S1};
+        Else ->
+            lager:debug("okta else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end;
+okta_next(#{challenge_authenticator := #{authenticator := {password,_,_}}},
+          S0 = #?MODULE{okta = Okta, creds = ECreds}) ->
+    Creds = decrypt_creds(ECreds),
+    #{password := Password} = Creds,
+    A = #{credentials => #{passcode => Password}},
+    lager:debug("submitting password"),
+    case okta:proceed(Okta, challenge_authenticator, A) of
+        {ok, next_steps, Steps} ->
+            S1 = okta_add_step(password, <<"Password">>, S0),
+            okta_next(Steps, S1);
+        {ok, finished, Tokens} ->
+            S1 = okta_add_step(password, <<"Password">>, S0),
+            okta_finish(Tokens, S1);
+        {warning, Msgs, next_steps, Steps} ->
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs,
+                okta_add_step(password, <<"Password">>, S0)),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, _Steps} ->
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            {next_state, login, S1};
+        Else ->
+            lager:debug("okta else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end;
+
+okta_next(#{challenge_authenticator := #{authenticator := {webauthn, _, _}}},
+          S0 = #?MODULE{}) ->
+    lager:debug("ready for webauthn"),
+    {next_state, okta_webauthn, S0};
+
+okta_next(#{challenge_authenticator := #{properties := Props}}, S0 = #?MODULE{}) ->
+    [credentials] = maps:keys(Props),
+    #{credentials := {object, #{properties := CredProps}}} = Props,
+    [_|_] = maps:keys(CredProps),
+    lager:debug("ready for code entry"),
+    {next_state, okta_enter_code, S0};
+
+okta_next(#{challenge_poll := _}, S0 = #?MODULE{}) ->
+    lager:debug("polling okta"),
+    {next_state, okta_poll, S0};
+
+okta_next(#{select_authenticator := _}, S0 = #?MODULE{}) ->
+    lager:debug("ready to select authenticator"),
+    {next_state, okta_select, S0}.
+
+okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
+                                             inst = Inst, srv = Srv}) ->
+    #{row := RowStyle, group := GroupStyle, title := TitleStyle,
+      instruction := InstrStyle} = Sty,
+    {Screen, Flex} = make_screen(S0),
+    {ok, InpGroup} = lv_group:create(Inst),
+
+    {ok, Text} = lv_span:create(Flex),
+    ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+    ok = lv_span:set_mode(Text, break),
+
+    {ok, Title} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Title, rdpproxy:config([ui, title_mfa])),
+    ok = lv_span:set_style(Title, TitleStyle),
+
+    {ok, Instr} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Instr, [$\n, rdpproxy:config([ui, instruction_mfa])]),
+    ok = lv_span:set_style(Instr, InstrStyle),
+
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
+        #?MODULE{errmsg = ErrMsg} ->
+            {ok, ErrOuter} = lv_obj:create(Inst, Flex),
+            ok = lv_obj:add_style(ErrOuter, GroupStyle),
+            {ok, ErrLbl} = lv_label:create(ErrOuter),
+            ok = lv_label:set_text(ErrLbl, ErrMsg),
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
+    end,
+
+    {HasWebAuthn, Ewa} = case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
+        {ok, Pid} when is_pid(Pid) ->
+            case rdpewa_fsm:list_auths(Pid) of
+                {ok, [_|_]} -> {true, Pid};
+                _ -> {false, none}
+            end;
+        _ -> {false, none}
+    end,
+
+    {ok, #{properties := #{authenticator := {choice, _, Options}}}} =
+        okta:rinfo(Okta, select_authenticator),
+
+    Evts0 = lists:foldl(fun
+        (#{authenticator := {webauthn, Com, Info}, label := Label}, Acc0) ->
+            #{device_name := DevName} = Info,
+            DevFlex = make_group(Flex, 16#f101, S0),
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, DevName, <<")">>]),
+
+            {ok, Row} = lv_obj:create(Inst, DevFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, MethodBtn} = lv_btn:create(Row),
+            {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+            ok = lv_label:set_text(MethodBtnLbl, <<"Use this device">>),
+
+            case HasWebAuthn of
+                false ->
+                    ok = lv_obj:add_state(MethodBtn, disabled),
+                    {ok, HelpLbl} = lv_label:create(DevFlex),
+                    ok = lv_label:set_text(HelpLbl, [
+                        "Enable WebAuthN redirection to use this device"]),
+                    #{role := RoleStyle} = Sty,
+                    ok = lv_obj:add_style(HelpLbl, RoleStyle),
+                    Acc0;
+                true ->
+                    Payload = #{authenticator => Label},
+                    {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                        short_clicked, {select, MethodBtn, Payload}),
+                    [MethodBtnEvt | Acc0]
+            end;
+        (#{authenticator := {app, Com, Info}, label := Label, properties := Props}, Acc0) ->
+            #{device_name := DevName} = Info,
+            #{method_type := {choice, _, MethodOpts}} = Props,
+            DevFlex = make_group(Flex, 16#f101, S0),
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, DevName, <<")">>]),
+
+            {ok, Row} = lv_obj:create(Inst, DevFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+            lists:foldl(fun (#{label := L, value := V}, Acc00) ->
+                {ok, MethodBtn} = lv_btn:create(Row),
+                {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+                ok = lv_label:set_text(MethodBtnLbl, L),
+
+                Payload = #{authenticator => {Label, #{method_type => L}}},
+                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                    short_clicked, {select, MethodBtn, Payload}),
+                [MethodBtnEvt | Acc00]
+            end, Acc0, MethodOpts);
+        (#{authenticator := {email, #{methods := [email]}, Info}, label := Label}, Acc0) ->
+            #{email := Email} = Info,
+            DevFlex = make_group(Flex, 16#f101, S0),
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, Email, <<")">>]),
+
+            {ok, Row} = lv_obj:create(Inst, DevFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, MethodBtn} = lv_btn:create(Row),
+            {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+            ok = lv_label:set_text(MethodBtnLbl, <<"Receive a code via email">>),
+
+            Payload = #{authenticator => Label},
+            {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                short_clicked, {select, MethodBtn, Payload}),
+            [MethodBtnEvt | Acc0];
+        (#{authenticator := {phone, #{methods := [sms]}, Info}, label := Label}, Acc0) ->
+            #{number := PhNum} = Info,
+            DevFlex = make_group(Flex, 16#f101, S0),
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, PhNum, <<")">>]),
+
+            {ok, Row} = lv_obj:create(Inst, DevFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, MethodBtn} = lv_btn:create(Row),
+            {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+            ok = lv_label:set_text(MethodBtnLbl, <<"Receive a code via SMS">>),
+
+            Payload = #{authenticator => Label},
+            {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                short_clicked, {select, MethodBtn, Payload}),
+            [MethodBtnEvt | Acc0];
+        (_, Acc0) ->
+            Acc0
+    end, [], Options),
+
+    {ok, CheckOuter} = lv_obj:create(Inst, Flex),
+    ok = lv_obj:add_style(CheckOuter, GroupStyle),
+
+    {ok, RememberCheck} = lv_checkbox:create(CheckOuter),
+    ok = lv_checkbox:set_text(RememberCheck, "Remember this computer (skip MFA for next 10 hours)"),
+
+    {ok, CancelBtn} = lv_btn:create(Flex),
+    {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
+    ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
+    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
+    Evts1 = [CancelEvt | Evts0],
+
+    %% TODO: add yubikey and u2f devices?
+
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+    ok = lv_indev:set_group(Inst, keyboard, InpGroup),
+
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
+                            rmbrchk = RememberCheck}};
+okta_select(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+okta_select(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+okta_select(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
+    okta_select(info, {Ref, Evt}, S0);
+okta_select(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+okta_select(info, {_, cancel}, S0 = #?MODULE{}) ->
+    #?MODULE{creds = #{username := U}} = S0,
+    Creds1 = #{username => U},
+    {next_state, login, S0#?MODULE{creds = Creds1}};
+okta_select(info, {_, {select, Btn, Payload}}, S0 = #?MODULE{}) ->
+    #?MODULE{creds = Creds0, rmbrchk = RmbrChk, okta = Okta} = S0,
+    ok = lv_obj:add_state(Btn, disabled),
+    {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
+    O0 = maps:get(okta, Creds0, #{}),
+    O1 = O0#{remember_me => RememberMe},
+    Creds1 = Creds0#{okta => O1},
+    S1 = S0#?MODULE{creds = Creds1},
+    case okta:proceed(Okta, select_authenticator, Payload) of
+        {ok, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            okta_next(Steps, S1);
+        {ok, finished, Tokens} ->
+            okta_finish(Tokens, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        Else ->
+            lager:debug("okta proceed else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S2 = S1#?MODULE{errmsg = Msg},
+            {next_state, login, S2}
+    end.
+
+okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
+    #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
+      group := GroupStyle} = Sty,
+
+    {Screen, Flex} = make_screen(S0),
+    {ok, InpGroup} = lv_group:create(Inst),
+
+    {ok, AuthInfo} = okta:ainfo(Okta),
+    {AuthType, Com, EnrollInfo} = AuthInfo,
+    #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
+    DevName = case EnrollInfo of
+        #{device_name := N} ->
+            [AuthName, <<" (">>, N, <<")">>];
+        _ ->
+            AuthName
+    end,
+
+    {ok, Rem} = okta:rinfo(Okta, challenge_authenticator),
+    #{properties := RemProps} = Rem,
+
+    {ok, Text} = lv_span:create(Flex),
+    ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+    ok = lv_span:set_mode(Text, break),
+
+    {ok, Title} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Title, ["Okta ",
+        string:titlecase(atom_to_binary(Method, utf8))]),
+    ok = lv_span:set_style(Title, TitleStyle),
+
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
+        #?MODULE{errmsg = ErrMsg} ->
+            {ok, ErrOuter} = lv_obj:create(Inst, Flex),
+            ok = lv_obj:add_style(ErrOuter, GroupStyle),
+            {ok, ErrLbl} = lv_label:create(ErrOuter),
+            ok = lv_label:set_text(ErrLbl, ErrMsg),
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
+    end,
+
+    DevFlex = make_group(Flex, 16#f101, S1),
+
+    {ok, DevLbl} = lv_label:create(DevFlex),
+    ok = lv_label:set_text(DevLbl, DevName),
+
+    {ok, Row} = lv_obj:create(Inst, DevFlex),
+    ok = lv_obj:add_style(Row, RowStyle),
+
+    {_, InpMap} = okta:mapfold_remprops(fun
+        (Path = [Name | _], {simple, FProps}, InpMap0) ->
+            Label = maps:get(label, FProps,
+                string:titlecase(atom_to_binary(Name, utf8))),
+            {ok, CodeText} = lv_textarea:create(Row),
+            ok = lv_textarea:set_one_line(CodeText, true),
+            ok = lv_textarea:set_text_selection(CodeText, true),
+            ok = lv_textarea:set_placeholder_text(CodeText, Label),
+            case Name of
+                totp ->
+                    #?MODULE{pinchars = PinChars} = S0,
+                    ok = lv_textarea:set_accepted_chars(CodeText, PinChars);
+                _ ->
+                    ok
+            end,
+            ok = lv_group:add_obj(InpGroup, CodeText),
+            {undefined, InpMap0#{Path => CodeText}};
+        (Path = [Name | _], {choice, _, Choices}, InpMap0) ->
+            Labels = [L || #{label := L} <- Choices],
+            LabelMap = maps:from_list(lists:zip(
+                lists:seq(0, length(Labels)),
+                Labels)),
+            {ok, MapBuf} = lv:make_cstring_array(Inst, Labels),
+            {ok, BtnMatrix} = lv_btnmatrix:create(Row),
+            ok = lv_btnmatrix:set_map(BtnMatrix, MapBuf),
+            ok = lv_btnmatrix:set_one_checked(BtnMatrix, true),
+            ok = lv_btnmatrix:set_btn_ctrl_all(BtnMatrix, checkable),
+            ok = lv_btnmatrix:set_btn_ctrl(BtnMatrix, 0, checked),
+
+            #{matrix := MatrixStyle, matrix_item := MatrixItemStyle,
+              matrix_item_checked := MatrixChItemStyle} = Sty,
+            ok = lv_obj:add_style(BtnMatrix, MatrixStyle),
+            ok = lv_obj:add_style(BtnMatrix, MatrixItemStyle, [items]),
+            ok = lv_obj:add_style(BtnMatrix, MatrixChItemStyle, [items, checked]),
+
+            {undefined, InpMap0#{Path => {BtnMatrix, LabelMap}}}
+    end, #{}, RemProps),
+
+    {ok, MethodBtn} = lv_btn:create(Row),
+    {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+    ok = lv_label:set_text(MethodBtnLbl, "Submit"),
+
+    {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn, short_clicked,
+        {proceed, MethodBtn, challenge_authenticator, InpMap}),
+    Evts0 = [MethodBtnEvt],
+
+    Evts1 = maps:fold(fun
+        (_Path, {_Widget, _IdxMap}, Acc) -> Acc;
+        (Path, Widget, Acc) ->
+            case lv_obj:has_class(Widget, lv_textarea) of
+                true ->
+                    {ok, Evt, _} = lv_event:setup(Widget, ready,
+                        {wait_release,
+                            {proceed, MethodBtn,
+                             challenge_authenticator, InpMap}}),
+                    [Evt | Acc];
+                false -> Acc
+            end
+    end, Evts0, InpMap),
+
+    {ok, BtnRow} = lv_obj:create(Inst, DevFlex),
+    ok = lv_obj:add_style(BtnRow, RowStyle),
+
+    Evts2 = lists:foldl(fun
+        (send, Acc) when AuthType =:= app ->
+            Acc;
+        (RType, Acc) ->
+            {ok, R = #{properties := Props}} = okta:rinfo(Okta, RType),
+            RemText = string:titlecase(atom_to_binary(RType, utf8)),
+            case maps:keys(Props) of
+                [] ->
+                    {ok, RemBtn} = lv_btn:create(BtnRow),
+                    {ok, RemLbl} = lv_label:create(RemBtn),
+                    ok = lv_label:set_text(RemLbl, RemText),
+                    {ok, RemEvt, _} = lv_event:setup(RemBtn, short_clicked,
+                        {proceed, RemBtn, RType}),
+                    [RemEvt | Acc];
+                _ ->
+                    Acc
+            end
+    end, Evts1, [cancel | Rems]),
+
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+    ok = lv_indev:set_group(Inst, keyboard, InpGroup),
+
+    do_ping_annotate(S1),
+
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts2,
+                            widgets = #{inp => InpGroup}}};
+
+okta_enter_code(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+okta_enter_code(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+okta_enter_code(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+okta_enter_code(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
+    ok = lv_obj:add_state(Btn, disabled),
+    case okta:proceed(Okta, Rem) of
+        {ok, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            okta_next(Steps, S0);
+        {ok, finished, Tokens} ->
+            okta_finish(Tokens, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        Else ->
+            lager:debug("okta proceed else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end;
+okta_enter_code(info, {_, {proceed, Btn, RemName, InpMap}}, S0 = #?MODULE{okta = Okta}) ->
+    ok = lv_obj:add_state(Btn, disabled),
+    {ok, Rem} = okta:rinfo(Okta, RemName),
+    #{properties := RemProps} = Rem,
+    {ok, {_Type, Com, _EInfo}} = okta:ainfo(Okta),
+    #{methods := [Method | _], name := AuthName} = Com,
+    Args = okta:map_remprops(fun
+        (Path, {simple, _}) ->
+            #{Path := Widget} = InpMap,
+            {ok, Text} = lv_textarea:get_text(Widget),
+            Text;
+        (Path, {choice, _, _}) ->
+            #{Path := {Widget, IdxMap}} = InpMap,
+            {ok, Idx} = lv_btnmatrix:first_btn_with_ctrl(Widget, checked),
+            #{Idx := Label} = IdxMap,
+            Label
+    end, RemProps),
+    case okta:proceed(Okta, RemName, Args) of
+        {ok, next_steps, Steps} ->
+            S1 = okta_add_step(Method, AuthName, S0),
+            ok = lv_obj:clear_state(Btn, disabled),
+            okta_next(Steps, S1);
+        {ok, finished, Tokens} ->
+            S1 = okta_add_step(Method, AuthName, S0),
+            okta_finish(Tokens, S1);
+        {warning, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_add_step(Method, AuthName, S0),
+            S2 = okta_msgs_to_errmsg(Msgs, S1),
+            okta_next(Steps, S2);
+        {error, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        Else ->
+            lager:debug("okta proceed else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end;
+okta_enter_code(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
+    okta_enter_code(info, {Ref, Evt}, S0).
+
+okta_msgs_to_errmsg(Msgs, S0 = #?MODULE{}) ->
+    Msg = iolist_to_binary([
+        ["Okta [", atom_to_binary(C, utf8), "]: ", M, "\n"]
+        || {C, M} <- Msgs]),
+    S0#?MODULE{errmsg = Msg}.
+
+
+okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
+    #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
+      vcode := VCodeStyle, group := GroupStyle} = Sty,
+    {Screen, Flex} = make_screen(S0),
+    {ok, InpGroup} = lv_group:create(Inst),
+
+    {ok, AuthInfo} = okta:ainfo(Okta),
+    {AuthType, Com, EnrollInfo} = AuthInfo,
+    #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
+    DevName = case EnrollInfo of
+        #{device_name := N} ->
+            [AuthName, <<" (">>, N, <<")">>];
+        _ ->
+            AuthName
+    end,
+
+    {ok, Text} = lv_span:create(Flex),
+    ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+    ok = lv_span:set_mode(Text, break),
+
+    {ok, Title} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Title, ["Okta ",
+        string:titlecase(atom_to_binary(Method, utf8))]),
+    ok = lv_span:set_style(Title, TitleStyle),
+
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
+        #?MODULE{errmsg = ErrMsg} ->
+            {ok, ErrOuter} = lv_obj:create(Inst, Flex),
+            ok = lv_obj:add_style(ErrOuter, GroupStyle),
+            {ok, ErrLbl} = lv_label:create(ErrOuter),
+            ok = lv_label:set_text(ErrLbl, ErrMsg),
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
+    end,
+
+    case EnrollInfo of
+        #{push_code := _} ->
+            {ok, Instr} = lv_span:new_span(Text),
+            ok = lv_span:set_text(Instr, [$\n,
+                "Additional confirmation is required.\n"
+                "\n - Open Okta Verify on your phone or tablet.\n"
+                " - Tap the number which matches below.\n\n"]),
+            ok = lv_span:set_style(Instr, InstrStyle);
+        _ ->
+            ok
+    end,
+
+    DevFlex = make_group(Flex, 16#f101, S1),
+
+    {ok, DevLbl} = lv_label:create(DevFlex),
+    ok = lv_label:set_text(DevLbl, DevName),
+
+    {ok, Row} = lv_obj:create(Inst, DevFlex),
+    ok = lv_obj:add_style(Row, RowStyle),
+
+    {ok, Spinner} = lv_spinner:create(Row, 1000, 90),
+    ok = lv_obj:set_size(Spinner, {45, 45}),
+
+    {ok, SpinLbl} = lv_label:create(Row),
+    ok = lv_label:set_text(SpinLbl, "Waiting for confirmation..."),
+
+    case EnrollInfo of
+        #{push_code := PushCode} ->
+            {ok, CodeLbl} = lv_label:create(Row),
+            ok = lv_obj:align(CodeLbl, right_mid),
+            ok = lv_label:set_text(CodeLbl, [PushCode]),
+            ok = lv_obj:add_style(CodeLbl, VCodeStyle);
+        _ ->
+            ok
+    end,
+
+    {ok, BtnRow} = lv_obj:create(Inst, DevFlex),
+    ok = lv_obj:add_style(BtnRow, RowStyle),
+
+    Evts = lists:foldl(fun (RType, Acc) ->
+        {ok, R = #{properties := Props}} = okta:rinfo(Okta, RType),
+        RemText = string:titlecase(atom_to_binary(RType, utf8)),
+        case maps:keys(Props) of
+            [] ->
+                {ok, RemBtn} = lv_btn:create(BtnRow),
+                {ok, RemLbl} = lv_label:create(RemBtn),
+                ok = lv_label:set_text(RemLbl, RemText),
+                {ok, RemEvt, _} = lv_event:setup(RemBtn, short_clicked,
+                    {proceed, RemBtn, RType}),
+                [RemEvt | Acc];
+            _ ->
+                Acc
+        end
+    end, [], [cancel | Rems]),
+
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+    do_ping_annotate(S1),
+
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts},
+        [{state_timeout, 500, poll}]};
+
+okta_poll(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+okta_poll(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+okta_poll(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+okta_poll(state_timeout, poll, S0 = #?MODULE{okta = Okta}) ->
+    {ok, PollInfo} = okta:rinfo(Okta, challenge_poll),
+    #{refresh := PollInterval} = PollInfo,
+    {ok, {_Type, Com, _EInfo}} = okta:ainfo(Okta),
+    #{methods := [Method | _], name := AuthName} = Com,
+    case okta:proceed(Okta, challenge_poll) of
+        {ok, next_steps, #{challenge_poll := #{}}} ->
+            {keep_state_and_data, [{state_timeout, PollInterval, poll}]};
+        {ok, next_steps, Steps} ->
+            S1 = okta_add_step(Method, AuthName, S0),
+            okta_next(Steps, S1);
+        {ok, finished, Tokens} ->
+            S1 = okta_add_step(Method, AuthName, S0),
+            okta_finish(Tokens, S1);
+        {warning, Msgs, next_steps, Steps} ->
+            S1 = okta_add_step(Method, AuthName, S0),
+            lager:debug("okta warning: ~p", [Msgs]),
+            S2 = okta_msgs_to_errmsg(Msgs, S1),
+            okta_next(Steps, S2);
+        {error, Msgs, next_steps, Steps} ->
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        Else ->
+            lager:debug("okta poll else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end;
+okta_poll(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
+    ok = lv_obj:add_state(Btn, disabled),
+    case okta:proceed(Okta, Rem) of
+        {ok, next_steps, #{challenge_poll := #{}}} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            keep_state_and_data;
+        {ok, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            okta_next(Steps, S0);
+        {ok, finished, Tokens} ->
+            okta_finish(Tokens, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        Else ->
+            lager:debug("okta proceed else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
+    end.
+
+okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
+    #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
+      vcode := VCodeStyle, group := GroupStyle} = Sty,
+    {Screen, Flex} = make_screen(S0),
+    {ok, InpGroup} = lv_group:create(Inst),
+
+    {ok, AuthInfo} = okta:ainfo(Okta),
+    {AuthType, Com, EnrollInfo} = AuthInfo,
+    #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
+    DevName = case EnrollInfo of
+        #{device_name := N} ->
+            [AuthName, <<" (">>, N, <<")">>];
+        _ ->
+            AuthName
+    end,
+
+    {ok, Text} = lv_span:create(Flex),
+    ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+    ok = lv_span:set_mode(Text, break),
+
+    {ok, Title} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Title, ["Okta WebAuthN"]),
+    ok = lv_span:set_style(Title, TitleStyle),
+
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
+        #?MODULE{errmsg = ErrMsg} ->
+            {ok, ErrOuter} = lv_obj:create(Inst, Flex),
+            ok = lv_obj:add_style(ErrOuter, GroupStyle),
+            {ok, ErrLbl} = lv_label:create(ErrOuter),
+            ok = lv_label:set_text(ErrLbl, ErrMsg),
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
+    end,
+
+    DevFlex = make_group(Flex, 16#f101, S1),
+
+    {ok, DevLbl} = lv_label:create(DevFlex),
+    ok = lv_label:set_text(DevLbl, DevName),
+
+    {ok, Row} = lv_obj:create(Inst, DevFlex),
+    ok = lv_obj:add_style(Row, RowStyle),
+
+    {ok, Spinner} = lv_spinner:create(Row, 1000, 90),
+    ok = lv_obj:set_size(Spinner, {45, 45}),
+
+    {ok, SpinLbl} = lv_label:create(Row),
+    ok = lv_label:set_text(SpinLbl, ["Authenticating...\n",
+        "Touch your device now"]),
+
+    {ok, BtnRow} = lv_obj:create(Inst, DevFlex),
+    ok = lv_obj:add_style(BtnRow, RowStyle),
+
+    Evts = lists:foldl(fun (RType, Acc) ->
+        {ok, R = #{properties := Props}} = okta:rinfo(Okta, RType),
+        RemText = string:titlecase(atom_to_binary(RType, utf8)),
+        case maps:keys(Props) of
+            [] ->
+                {ok, RemBtn} = lv_btn:create(BtnRow),
+                {ok, RemLbl} = lv_label:create(RemBtn),
+                ok = lv_label:set_text(RemLbl, RemText),
+                {ok, RemEvt, _} = lv_event:setup(RemBtn, short_clicked,
+                    {proceed, RemBtn, RType}),
+                [RemEvt | Acc];
+            _ ->
+                Acc
+        end
+    end, [], [cancel | Rems]),
+
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+    do_ping_annotate(S1),
+
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts},
+        [{state_timeout, 0, auth}]};
+
+okta_webauthn(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+okta_webauthn(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+okta_webauthn(info, {scard_result, _}, #?MODULE{}) ->
+    keep_state_and_data;
+okta_webauthn(state_timeout, auth, S0 = #?MODULE{srv = Srv, okta = Okta}) ->
+    {ok, Ewa} = rdp_server:get_dvchan_pid(Srv, rdpewa_fsm),
+    {ok, {webauthn, Com, AI = #{aaguid := AAGuid, cred_id := CredId,
+                                challenge := Challenge, app_id := AppId,
+                                uv_required := UVReq}}} = okta:ainfo(Okta),
+    #{host := Host, scheme := <<"https">>} = uri_string:parse(AppId),
+    CD = #{
+        <<"type">> => <<"webauthn.get">>,
+        <<"challenge">> => Challenge,
+        <<"origin">> => AppId,
+        <<"crossOrigin">> => false
+    },
+    CDBin = iolist_to_binary([json:encode(CD)]),
+    CDHash = crypto:hash(sha256, CDBin),
+    {ok, CredIdBin} = jose_base64url:decode(CredId),
+    R = rdpewa_fsm:get_assertion(Ewa, #{
+        relying_party => Host,
+        u2f_app_id => AppId,
+        client_data => CDHash,
+        allowed_credentials => [#{id => CredIdBin}],
+        uv => if UVReq -> required; true -> any end
+        }),
+    case R of
+        {ok, I = #{signature := Sig, auth_data := {AuthData, _}}} ->
+            DevInfo = maps:get(device, I, #{}),
+            DevName = case DevInfo of
+                #{product := Product, manufacturer := Manuf} ->
+                    iolist_to_binary([Manuf, <<" ">>, Product]);
+                _ ->
+                    maps:get(device_name, AI, maps:get(name, Com))
+            end,
+            Args = #{
+                credentials => #{
+                    authenticator_data => base64:encode(AuthData),
+                    signature_data => base64:encode(Sig),
+                    client_data => base64:encode(CDBin)
+                }
+            },
+            case okta:proceed(Okta, challenge_authenticator, Args) of
+                {ok, next_steps, Steps} ->
+                    S1 = okta_add_step(webauthn, DevName, S0),
+                    okta_next(Steps, S1);
+                {ok, finished, Tokens} ->
+                    S1 = okta_add_step(webauthn, DevName, S0),
+                    okta_finish(Tokens, S1);
+                {warning, Msgs, next_steps, Steps} ->
+                    lager:debug("okta warning: ~p", [Msgs]),
+                    S1 = okta_add_step(webauthn, DevName, S0),
+                    S2 = okta_msgs_to_errmsg(Msgs, S1),
+                    okta_next(Steps, S2);
+                {error, Msgs, next_steps, Steps} ->
+                    lager:debug("okta error: ~p", [Msgs]),
+                    S1 = okta_msgs_to_errmsg(Msgs, S0),
+                    okta_next(Steps, S1);
+                Else ->
+                    lager:debug("okta proceed else: ~p", [Else]),
+                    Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+                    S1 = S0#?MODULE{errmsg = Msg},
+                    {next_state, login, S1}
+            end;
+        Else ->
+            lager:debug("webauthn failed: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error authenticating token:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            case okta:proceed(Okta, cancel) of
+                {ok, next_steps, Steps} ->
+                    okta_next(Steps, S1);
+                {warning, Msgs, next_steps, Steps} ->
+                    lager:debug("okta warning: ~p", [Msgs]),
+                    S1 = okta_msgs_to_errmsg(Msgs, S0),
+                    okta_next(Steps, S1);
+                {error, Msgs, next_steps, Steps} ->
+                    lager:debug("okta error: ~p", [Msgs]),
+                    S1 = okta_msgs_to_errmsg(Msgs, S0),
+                    okta_next(Steps, S1);
+                Else ->
+                    lager:debug("okta proceed else: ~p", [Else]),
+                    Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+                    S1 = S0#?MODULE{errmsg = Msg},
+                    {next_state, login, S1}
+            end
+    end;
+okta_webauthn(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
+    ok = lv_obj:add_state(Btn, disabled),
+    case okta:proceed(Okta, Rem) of
+        {ok, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            okta_next(Steps, S0);
+        {ok, finished, Tokens} ->
+            okta_finish(Tokens, S0);
+        {warning, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta warning: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        {error, Msgs, next_steps, Steps} ->
+            ok = lv_obj:clear_state(Btn, disabled),
+            lager:debug("okta error: ~p", [Msgs]),
+            S1 = okta_msgs_to_errmsg(Msgs, S0),
+            okta_next(Steps, S1);
+        Else ->
+            lager:debug("okta proceed else: ~p", [Else]),
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, login, S1}
     end.
 
 offer_epw(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
@@ -1258,7 +2333,7 @@ offer_epw(info, {_, respond_yes}, S0 = #?MODULE{}) ->
     ok = scard_saved_pw_ra:add_password(UPN, EPW),
     {next_state, check_shell, S0}.
 
-mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
+duo_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
                                             inst = Inst}) ->
     #{row := RowStyle, group := GroupStyle, title := TitleStyle,
       instruction := InstrStyle} = Sty,
@@ -1431,43 +2506,43 @@ mfa_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
     {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
                             rmbrchk = RememberCheck}};
 
-mfa_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+duo_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
-mfa_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+duo_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
 
-mfa_choice(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+duo_choice(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
     ok = lv_indev:wait_release(Inst, keyboard),
-    mfa_choice(info, {Ref, Evt}, S0);
+    duo_choice(info, {Ref, Evt}, S0);
 
-mfa_choice(info, {scard_result, _}, #?MODULE{}) ->
+duo_choice(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 
-mfa_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
+duo_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
     #?MODULE{creds = #{username := U}} = S0,
     Creds1 = #{username => U},
     {next_state, login, S0#?MODULE{creds = Creds1}};
 
-mfa_choice(info, {_, {push, DevId}}, S0 = #?MODULE{}) ->
+duo_choice(info, {_, {push, DevId}}, S0 = #?MODULE{}) ->
     #?MODULE{creds = Creds0, rmbrchk = RmbrChk} = S0,
     {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
     Code = gen_push_code(),
     Creds1 = Creds0#{duo => #{device => DevId, method => push, code => Code,
                               remember_me => RememberMe}},
     S1 = S0#?MODULE{creds = Creds1},
-    {next_state, mfa_auth, S1};
+    {next_state, duo_auth, S1};
 
-mfa_choice(info, {_, {push, DevId, Code}}, S0 = #?MODULE{}) ->
+duo_choice(info, {_, {push, DevId, Code}}, S0 = #?MODULE{}) ->
     #?MODULE{creds = Creds0, rmbrchk = RmbrChk} = S0,
     {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
     Creds1 = Creds0#{duo => #{device => DevId, method => vpush, code => Code,
                               remember_me => RememberMe}},
     S1 = S0#?MODULE{creds = Creds1},
-    {next_state, mfa_auth, S1};
+    {next_state, duo_auth, S1};
 
-mfa_choice(info, {_, {sms_codes, DevId, Btn}}, S0 = #?MODULE{duo = Duo}) ->
+duo_choice(info, {_, {sms_codes, DevId, Btn}}, S0 = #?MODULE{duo = Duo}) ->
     ok = lv_obj:add_state(Btn, disabled),
     #?MODULE{creds = Creds, peer = Peer} = S0,
     #{username := U} = Creds,
@@ -1482,35 +2557,35 @@ mfa_choice(info, {_, {sms_codes, DevId, Btn}}, S0 = #?MODULE{duo = Duo}) ->
     ok = lv_obj:clear_state(Btn, disabled),
     keep_state_and_data;
 
-mfa_choice(info, {_, {call, DevId}}, S0 = #?MODULE{}) ->
+duo_choice(info, {_, {call, DevId}}, S0 = #?MODULE{}) ->
     #?MODULE{creds = Creds0, rmbrchk = RmbrChk} = S0,
     {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
     Creds1 = Creds0#{duo => #{device => DevId, method => call,
                               remember_me => RememberMe}},
     S1 = S0#?MODULE{creds = Creds1},
-    {next_state, mfa_auth, S1};
+    {next_state, duo_auth, S1};
 
-mfa_choice(info, {_, {passcode, DevId, CodeText, _Btn}}, S0 = #?MODULE{}) ->
+duo_choice(info, {_, {passcode, DevId, CodeText, _Btn}}, S0 = #?MODULE{}) ->
     {ok, OTP} = lv_textarea:get_text(CodeText),
     #?MODULE{creds = Creds0, rmbrchk = RmbrChk} = S0,
     {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
     Creds1 = Creds0#{duo => #{device => DevId, method => otp, otp => OTP,
                               remember_me => RememberMe}},
     S1 = S0#?MODULE{creds = Creds1},
-    {next_state, mfa_auth, S1}.
+    {next_state, duo_auth, S1}.
 
-mfa_auth(enter, _PrevState, S0 = #?MODULE{}) ->
+duo_auth(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying MFA details...", S0),
     do_ping_annotate(S0),
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, {check, 3}}]};
-mfa_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+duo_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-mfa_auth(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+duo_auth(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-mfa_auth(info, {scard_result, _}, #?MODULE{}) ->
+duo_auth(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
-mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
+duo_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                                              peer = Peer, duoid = DuoId}) ->
     #{username := U, duo := DuoCreds} = Creds,
     RememberMe = maps:get(remember_me, DuoCreds, false),
@@ -1531,9 +2606,9 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                 {ok, R = #{<<"result">> := <<"deny">>}} ->
                     lager:debug("duo denied vpush: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = "Duo Push denied"},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
-                    {next_state, mfa_push_code, S0#?MODULE{duotx = undefined}};
+                    {next_state, duo_push_code, S0#?MODULE{duotx = undefined}};
                 {error, {error, timeout}} when (N > 0) ->
                     lager:debug("duo auth call timed out, retrying"),
                     {keep_state_and_data, [{state_timeout, 500, {check, N - 1}}]};
@@ -1541,9 +2616,9 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                     lager:debug("duo auth error: ~999p", [Err]),
                     Msg = io_lib:format("Error contacting Duo API:\n~p", [Err]),
                     S1 = S0#?MODULE{errmsg = Msg},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"txid">> := TxId}} ->
-                    {next_state, mfa_async, S0#?MODULE{duotx = TxId}}
+                    {next_state, duo_async, S0#?MODULE{duotx = TxId}}
             end;
         #{method := push, device := DevId, code := Code} ->
             PushInfo0 = duo_client_info(S0),
@@ -1562,9 +2637,9 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                 {ok, R = #{<<"result">> := <<"deny">>}} ->
                     lager:debug("duo denied push: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = "Duo Push denied"},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
-                    {next_state, mfa_push_code, S0#?MODULE{duotx = undefined}};
+                    {next_state, duo_push_code, S0#?MODULE{duotx = undefined}};
                 {error, {error, timeout}} when (N > 0) ->
                     lager:debug("duo auth call timed out, retrying"),
                     {keep_state_and_data, [{state_timeout, 500, {check, N - 1}}]};
@@ -1572,9 +2647,9 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                     lager:debug("duo auth error: ~999p", [Err]),
                     Msg = io_lib:format("Error contacting Duo API:\n~p", [Err]),
                     S1 = S0#?MODULE{errmsg = Msg},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"txid">> := TxId}} ->
-                    {next_state, mfa_push_code, S0#?MODULE{duotx = TxId}}
+                    {next_state, duo_push_code, S0#?MODULE{duotx = TxId}}
             end;
         #{method := call, device := DevId} ->
             Args = #{
@@ -1589,7 +2664,7 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                 {ok, R = #{<<"result">> := <<"deny">>}} ->
                     lager:debug("duo denied phone call: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = "Duo Phone Call denied"},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
                     case RememberMe of
                         false -> ok;
@@ -1599,9 +2674,9 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     S1 = S0#?MODULE{errmsg = "Error contacting Duo API"},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"txid">> := TxId}} ->
-                    {next_state, mfa_async, S0#?MODULE{duotx = TxId}}
+                    {next_state, duo_async, S0#?MODULE{duotx = TxId}}
             end;
         #{method := otp, otp := OTP} ->
             Args = #{
@@ -1616,7 +2691,7 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                     StatusMsg = maps:get(<<"status_msg">>, R, ""),
                     lager:debug("duo denied passcode: ~999p", [R]),
                     S1 = S0#?MODULE{errmsg = ["Duo Passcode denied: ", StatusMsg]},
-                    {next_state, mfa_choice, S1};
+                    {next_state, duo_choice, S1};
                 {ok, #{<<"result">> := <<"allow">>}} ->
                     case RememberMe of
                         false -> ok;
@@ -1629,11 +2704,11 @@ mfa_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     S1 = S0#?MODULE{errmsg = "Error contacting Duo API"},
-                    {next_state, mfa_choice, S1}
+                    {next_state, duo_choice, S1}
             end
     end.
 
-mfa_async(enter, _PrevState, S0 = #?MODULE{creds = #{duo := DuoCreds},
+duo_async(enter, _PrevState, S0 = #?MODULE{creds = #{duo := DuoCreds},
                                            sty = Sty, inst = Inst,
                                            res = {W, H}}) ->
     #{title := TitleStyle, instruction := InstrStyle, flex := FlexStyle,
@@ -1699,14 +2774,14 @@ mfa_async(enter, _PrevState, S0 = #?MODULE{creds = #{duo := DuoCreds},
             {keep_state, S0#?MODULE{screen = Screen, events = [BtnEvt]},
                 [{state_timeout, 500, check}]}
     end;
-mfa_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+duo_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-mfa_async(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+duo_async(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-mfa_async(info, {scard_result, _}, #?MODULE{}) ->
+duo_async(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
-mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
+duo_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
     #?MODULE{creds = #{username := U, duo := DuoCreds}} = S0,
     RememberMe = maps:get(remember_me, DuoCreds, false),
     case duo:auth_status(Duo, TxId) of
@@ -1714,10 +2789,10 @@ mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
             {keep_state, S0, [{state_timeout, 1000, check}]};
         {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := StatusMsg}} ->
             S1 = S0#?MODULE{errmsg = ["Duo MFA denied: ", StatusMsg]},
-            {next_state, mfa_choice, S1};
+            {next_state, duo_choice, S1};
         {ok, #{<<"result">> := <<"deny">>}} ->
             S1 = S0#?MODULE{errmsg = "Duo MFA denied"},
-            {next_state, mfa_choice, S1};
+            {next_state, duo_choice, S1};
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("duo allowed auth, proceeding"),
             #?MODULE{duoid = DuoId} = S0,
@@ -1729,13 +2804,13 @@ mfa_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
         _ ->
             {keep_state, S0, [{state_timeout, 1000, check}]}
     end;
-mfa_async(info, {_, cancel}, S0 = #?MODULE{}) ->
+duo_async(info, {_, cancel}, S0 = #?MODULE{}) ->
     % start a new duo client on cancel, to make sure it doesn't get stuck
     {ok, Duo} = duo:start_link(),
     S1 = S0#?MODULE{errmsg = "Cancelled", duo = Duo},
-    {next_state, mfa_choice, S1}.
+    {next_state, duo_choice, S1}.
 
-mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
+duo_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     #{row := RowStyle, title := TitleStyle, instruction := InstrStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
@@ -1807,21 +2882,21 @@ mfa_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
 
     {keep_state, S0#?MODULE{screen = Screen, events = Evts}};
 
-mfa_push_code(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+duo_push_code(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 
-mfa_push_code(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+duo_push_code(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
     ok = lv_indev:wait_release(Inst, keyboard),
-    mfa_push_code(info, {Ref, Evt}, S0);
+    duo_push_code(info, {Ref, Evt}, S0);
 
-mfa_push_code(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+duo_push_code(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
 
-mfa_push_code(info, {scard_result, _}, #?MODULE{}) ->
+duo_push_code(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 
-mfa_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
+duo_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
     #?MODULE{duotx = DuoTx} = S0,
     #{duo := #{method := push, code := WantCode}} = Creds,
     {ok, Code} = lv_textarea:get_text(CodeText),
@@ -1829,7 +2904,7 @@ mfa_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
         {WantCode, undefined} ->
             {next_state, check_shell, S0};
         {WantCode, _} ->
-            {next_state, mfa_async, S0};
+            {next_state, duo_async, S0};
         _ ->
             lager:debug("duo push verification code incorrect"),
             #?MODULE{inst = Inst, screen = Screen, sty = Sty} = S0,
@@ -1849,10 +2924,10 @@ mfa_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
             keep_state_and_data
     end;
 
-mfa_push_code(info, {_, cancel}, S0 = #?MODULE{creds = Creds0}) ->
+duo_push_code(info, {_, cancel}, S0 = #?MODULE{creds = Creds0}) ->
     Creds1 = maps:remove(duo, Creds0),
     S1 = S0#?MODULE{creds = Creds1},
-    {next_state, mfa_choice, S1}.
+    {next_state, duo_choice, S1}.
 
 gen_push_code() ->
     <<N:32/big>> = crypto:strong_rand_bytes(4),
@@ -3163,6 +4238,12 @@ decrypt(Crypted, MacExtraData) ->
     D.
 
 -spec encrypt_creds(creds()) -> encrypted_creds().
+encrypt_creds(C0 = #{username := U, password := Pw, tgts := Tgts, tokens := Toks}) ->
+    Pid = term_to_binary(self()),
+    PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
+    TgtsCrypt = encrypt(term_to_binary(Tgts), <<Pid/binary, U/binary>>),
+    ToksCrypt = encrypt(term_to_binary(Toks), <<Pid/binary, U/binary>>),
+    C0#{password => PwCrypt, tgts => TgtsCrypt, tokens => ToksCrypt, encrypted => true};
 encrypt_creds(C0 = #{username := U, password := Pw, tgts := Tgts}) ->
     Pid = term_to_binary(self()),
     PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
@@ -3181,6 +4262,12 @@ encrypt_creds(#{encrypted := true}) -> error(already_encrypted);
 encrypt_creds(C0 = #{}) -> C0#{encrypted => true}.
 
 -spec decrypt_creds(encrypted_creds()) -> creds().
+decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt, tgts := TgtsCrypt, tokens := ToksCrypt})->
+    Pid = term_to_binary(self()),
+    Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
+    Tgts = binary_to_term(decrypt(TgtsCrypt, <<Pid/binary, U/binary>>)),
+    Toks = binary_to_term(decrypt(ToksCrypt, <<Pid/binary, U/binary>>)),
+    maps:remove(encrypted, C0#{password => Pw, tgts => Tgts, tokens => Toks});
 decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt, tgts := TgtsCrypt}) ->
     Pid = term_to_binary(self()),
     Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
