@@ -36,7 +36,8 @@
 -export([start/0]).
 -export([tick/0]).
 -export([gen_key/0]).
--export([get_all_pools/0, get_pool/1, create_pool/1, update_pool/1]).
+-export([get_all_pools/0, get_pool/1, create_pool/1, update_pool/1,
+    delete_pool/1]).
 -export([claim_handle/1, get_handle/1]).
 -export([create_host/1, update_host/1, enable_host/1, disable_host/1,
     delete_host/1]).
@@ -165,6 +166,13 @@ create_pool(PoolMap) ->
 -spec update_pool(pool_config()) -> ok | {error, not_found} | ra_error().
 update_pool(PoolMap) ->
     case ra:process_command(?MODULE, {update_pool, PoolMap}) of
+        {ok, Res, _Leader} -> Res;
+        Else -> Else
+    end.
+
+-spec delete_pool(pool()) -> ok | {error, pool_has_hosts} | ra_error().
+delete_pool(Pool) ->
+    case ra:process_command(?MODULE, {delete_pool, Pool}) of
         {ok, Res, _Leader} -> Res;
         Else -> Else
     end.
@@ -1059,6 +1067,20 @@ apply(_Meta, {create_pool, PD0}, S0 = #?MODULE{pools = P0}) ->
                 priority => maps:get(priority, PD0, 0)
             },
             P1 = P0#{Pool => PD1},
+            S1 = S0#?MODULE{pools = P1},
+            {S1, ok, []}
+    end;
+
+apply(_Meta, {delete_pool, Pool}, S0 = #?MODULE{pools = P0, meta = M0}) ->
+    HasHosts = lists:any(fun
+        (#{pool := P}) when P =:= Pool -> true;
+        (_) -> false
+    end, maps:values(M0)),
+    case HasHosts of
+        true ->
+            {S0, {error, pool_has_hosts}, []};
+        false ->
+            P1 = maps:remove(Pool, P0),
             S1 = S0#?MODULE{pools = P1},
             {S1, ok, []}
     end;
