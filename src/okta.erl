@@ -515,7 +515,6 @@ compose_rem_payload(Args, #remediation{fields = FMap}, S0 = #?MODULE{}) ->
 
 get_json(Host, Path, S0 = #?MODULE{addhdrs = Hdrs0}) ->
     {Gun, S1} = open_gun(Host, S0),
-    lager:debug("get_json(~s, ~s)", [Host, Path]),
     Req = gun:get(Gun, Path, Hdrs0#{
         <<"accept">> => <<"application/ion+json; okta-version=1.0.0">>
     }),
@@ -523,7 +522,6 @@ get_json(Host, Path, S0 = #?MODULE{addhdrs = Hdrs0}) ->
 
 post_json(Host, Path, Data, S0 = #?MODULE{addhdrs = Hdrs0}) ->
     {Gun, S1} = open_gun(Host, S0),
-    lager:debug("post_json(~s, ~s, ~p)", [Host, Path, maps:keys(Data)]),
     Req = gun:post(Gun, Path, Hdrs0#{
         <<"content-type">> => <<"application/json">>,
         <<"accept">> => <<"application/ion+json; okta-version=1.0.0">>
@@ -532,7 +530,6 @@ post_json(Host, Path, Data, S0 = #?MODULE{addhdrs = Hdrs0}) ->
 
 post_formenc(Host, Path, Qs, S0 = #?MODULE{addhdrs = Hdrs0}) ->
     {Gun, S1} = open_gun(Host, S0),
-    lager:debug("post_formenc(~s, ~s, ~p)", [Host, Path, [K || {K,V} <- Qs]]),
     Req = gun:post(Gun, Path, Hdrs0#{
        <<"content-type">> => <<"application/x-www-form-urlencoded">>,
        <<"accept">> => <<"application/json">>
@@ -567,21 +564,6 @@ req_json_reply(Gun, Req, S0 = #?MODULE{}) ->
                 true -> ok
             end,
             Body1 = json:decode(Body0),
-            Username = case Body1 of
-                #{<<"user">> := #{<<"value">> := #{<<"identifier">> := I}}} -> I;
-                _ -> "nouser"
-            end,
-            DumpName = iolist_to_binary(["okta-dumps/",
-                Username, "_",
-                calendar:system_time_to_rfc3339(
-                    erlang:system_time(second),
-                    [{offset, "Z"},{time_designator, $_}]),
-                "_",
-                jose_base64url:encode(
-                    crypto:strong_rand_bytes(8)),
-                ".json"]),
-            file:write_file(DumpName, Body0),
-            lager:debug("wrote response body => ~s", [DumpName]),
             case Status of
                 200 -> {ok, Body1, S0};
                 _ -> {error, {http, Status, Body1}, S0}
