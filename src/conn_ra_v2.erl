@@ -74,6 +74,9 @@ register_metrics() ->
     }.
 -type username() :: binary().
 -type conn_id() :: binary().
+-type okta_authenticator() ::
+    #{type => webauthn, device => binary(), name => binary(), aaguid => binary()} |
+    #{type => atom(), name => binary()}.
 -type conn() :: #{
     id => conn_id(),
     frontend_pid => pid(),
@@ -88,7 +91,7 @@ register_metrics() ->
     auth_attempts => [auth_attempt()],
     duo_preauth => binary(),
     okta_username => binary(),
-    okta_authenticators => [#{type => atom(), name => binary()}]
+    okta_authenticators => [okta_authenticator()]
     }.
 
 -type hour_num() :: integer().
@@ -365,12 +368,22 @@ conn_to_json(C) ->
     end,
     J13 = case C of
         #{okta_username := User, okta_authenticators := Steps} ->
+            Auths = lists:map(fun
+                (#{type := webauthn, name := Name,
+                   device := DeviceName, aaguid := AAGuid}) ->
+                    #{<<"type">> => <<"webauthn">>,
+                      <<"name">> => Name,
+                      <<"device">> => DeviceName,
+                      <<"aaguid">> => AAGuid};
+                (#{type := password}) ->
+                    #{<<"type">> => <<"password">>};
+                (#{type := Type, name := Name}) ->
+                    #{<<"type">> => atom_to_binary(Type, utf8),
+                      <<"name">> => Name}
+            end, Steps),
             J12#{<<"okta">> => #{
                  <<"username">> => User,
-                 <<"authenticators">> => [#{
-                     <<"type">> => atom_to_binary(Type, utf8),
-                     <<"name">> => Name
-                 } || #{type := Type, name := Name} <- Steps]
+                 <<"authenticators">> => Auths
             }};
         _ -> J12
     end,

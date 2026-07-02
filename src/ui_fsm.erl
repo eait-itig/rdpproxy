@@ -658,6 +658,18 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
         S5#?MODULE{cinfo = #{slots => #{}}}
     end,
 
+    case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
+        {ok, Pid} when is_pid(Pid) ->
+            case rdpewa_fsm:list_auths(Pid) of
+                {ok, Auths} ->
+                    lager:debug("rdpewa authenticators = ~p", [Auths]);
+                Else ->
+                    lager:debug("failed to get rdpewa authenticators: ~p", [Else])
+            end;
+        _ ->
+            lager:debug("rdpewa not available")
+    end,
+
     case Creds1 of
         #{username := _, password := _} ->
             {next_state, check_login, S6};
@@ -1380,13 +1392,14 @@ check_okta(state_timeout, {begin_auth, N}, S0 = #?MODULE{creds = Creds, srv = Sr
             end
     end.
 
-okta_add_step(Type, Name, S0 = #?MODULE{creds = Creds0}) ->
+okta_add_step(Type, Info, S0 = #?MODULE{creds = Creds0}) when is_map(Info) ->
     O0 = maps:get(okta, Creds0, #{}),
     Steps0 = maps:get(authenticators_used, O0, []),
-    Steps1 = [#{type => Type, name => Name} | Steps0],
+    Steps1 = [Info#{type => Type} | Steps0],
     O1 = O0#{authenticators_used => Steps1},
     Creds1 = Creds0#{okta => O1},
-    S0#?MODULE{creds = Creds1}.
+    S0#?MODULE{creds = Creds1};
+okta_add_step(Type, Name, S0) -> okta_add_step(Type, #{name => Name}, S0).
 
 okta_finish(Tokens, S0 = #?MODULE{srv = {FPid,_}, creds = Creds0, duoid = DuoId}) ->
     #{access_token := AT, id_token := IT,
@@ -1506,7 +1519,7 @@ okta_next(#{select_authenticator := _}, S0 = #?MODULE{}) ->
 okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
                                              inst = Inst, srv = Srv}) ->
     #{row := RowStyle, group := GroupStyle, title := TitleStyle,
-      instruction := InstrStyle} = Sty,
+      instruction := InstrStyle, item_title := ItemTitleStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
@@ -1534,11 +1547,7 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
     end,
 
     {HasWebAuthn, Ewa} = case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
-        {ok, Pid} when is_pid(Pid) ->
-            case rdpewa_fsm:list_auths(Pid) of
-                {ok, [_|_]} -> {true, Pid};
-                _ -> {false, none}
-            end;
+        {ok, Pid} when is_pid(Pid) -> {true, Pid};
         _ -> {false, none}
     end,
 
@@ -1546,25 +1555,31 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
         okta:rinfo(Okta, select_authenticator),
 
     Evts0 = lists:foldl(fun
-        (#{authenticator := {webauthn, Com, Info}, label := Label}, Acc0) ->
-            #{device_name := DevName} = Info,
-            DevFlex = make_group(Flex, 16#f101, S0),
+        (#{authenticator := {webauthn, Com, EIs}, label := Label}, Acc0) ->
+            DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
+            DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
+
+            DevFlex = make_group(Flex, 16#f084, S0),
+
+            {ok, TypeLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(TypeLbl, [Label]),
+            ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
             {ok, DevLbl} = lv_label:create(DevFlex),
-            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, DevName, <<")">>]),
+            ok = lv_label:set_text(DevLbl, [DevName0]),
 
             {ok, Row} = lv_obj:create(Inst, DevFlex),
             ok = lv_obj:add_style(Row, RowStyle),
 
             {ok, MethodBtn} = lv_btn:create(Row),
             {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
-            ok = lv_label:set_text(MethodBtnLbl, <<"Use this device">>),
+            ok = lv_label:set_text(MethodBtnLbl, [<<"Use ">>, Label]),
 
             case HasWebAuthn of
                 false ->
                     ok = lv_obj:add_state(MethodBtn, disabled),
                     {ok, HelpLbl} = lv_label:create(DevFlex),
                     ok = lv_label:set_text(HelpLbl, [
-                        "Enable WebAuthN redirection to use this device"]),
+                        "Enable WebAuthN redirection to use ", Label]),
                     #{role := RoleStyle} = Sty,
                     ok = lv_obj:add_style(HelpLbl, RoleStyle),
                     Acc0;
@@ -1574,30 +1589,59 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
                         short_clicked, {select, MethodBtn, Payload}),
                     [MethodBtnEvt | Acc0]
             end;
-        (#{authenticator := {app, Com, Info}, label := Label, properties := Props}, Acc0) ->
-            #{device_name := DevName} = Info,
+
+        (#{authenticator := {app, Com, EIs}, label := Label, properties := Props}, Acc0) ->
             #{method_type := {choice, _, MethodOpts}} = Props,
-            DevFlex = make_group(Flex, 16#f101, S0),
-            {ok, DevLbl} = lv_label:create(DevFlex),
-            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, DevName, <<")">>]),
+            MethodChoices = lists:foldl(fun (#{label := L, value := V}, MCAcc) ->
+                Method = binary_to_atom(V, utf8),
+                MCAcc#{Method => L}
+            end, #{}, MethodOpts),
+            MethodGroups = lists:foldl(fun (EI, MGAcc) ->
+                Methods = maps:get(methods, EI, maps:get(methods, Com)),
+                MG0 = maps:get(Methods, MGAcc, []),
+                MGAcc#{Methods => [EI | MG0]}
+            end, #{}, EIs),
+            maps:fold(fun
+                ([signed_nonce], _MethodEIs, Acc00) ->
+                    Acc00;
+                (Methods, MethodEIs, Acc00) ->
+                    DevNames = lists:uniq([D || #{device_name := D} <- MethodEIs]),
+                    DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
-            {ok, Row} = lv_obj:create(Inst, DevFlex),
-            ok = lv_obj:add_style(Row, RowStyle),
-            lists:foldl(fun (#{label := L, value := V}, Acc00) ->
-                {ok, MethodBtn} = lv_btn:create(Row),
-                {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
-                ok = lv_label:set_text(MethodBtnLbl, L),
+                    DevFlex = make_group(Flex, 16#f10b, S0),
 
-                Payload = #{authenticator => {Label, #{method_type => L}}},
-                {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
-                    short_clicked, {select, MethodBtn, Payload}),
-                [MethodBtnEvt | Acc00]
-            end, Acc0, MethodOpts);
-        (#{authenticator := {email, #{methods := [email]}, Info}, label := Label}, Acc0) ->
-            #{email := Email} = Info,
-            DevFlex = make_group(Flex, 16#f101, S0),
+                    {ok, TypeLbl} = lv_label:create(DevFlex),
+                    ok = lv_label:set_text(TypeLbl, [Label]),
+                    ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
+                    {ok, DevLbl} = lv_label:create(DevFlex),
+                    ok = lv_label:set_text(DevLbl, [DevName0]),
+
+                    {ok, Row} = lv_obj:create(Inst, DevFlex),
+                    ok = lv_obj:add_style(Row, RowStyle),
+
+                    lists:foldl(fun (Method, Acc000) ->
+                        #{Method := L} = MethodChoices,
+
+                        {ok, MethodBtn} = lv_btn:create(Row),
+                        {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+                        ok = lv_label:set_text(MethodBtnLbl, L),
+
+                        Payload = #{authenticator => {Label, #{method_type => L}}},
+                        {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                            short_clicked, {select, MethodBtn, Payload}),
+                        [MethodBtnEvt | Acc000]
+                    end, Acc00, Methods)
+            end, Acc0, MethodGroups);
+
+        (#{authenticator := {email, #{methods := [email]}, [EI]}, label := Label}, Acc0) ->
+            #{email := Email} = EI,
+            DevFlex = make_group(Flex, 16#f0e0, S0),
+
+            {ok, TypeLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(TypeLbl, [Label]),
+            ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
             {ok, DevLbl} = lv_label:create(DevFlex),
-            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, Email, <<")">>]),
+            ok = lv_label:set_text(DevLbl, [Email]),
 
             {ok, Row} = lv_obj:create(Inst, DevFlex),
             ok = lv_obj:add_style(Row, RowStyle),
@@ -1610,11 +1654,16 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
             {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
                 short_clicked, {select, MethodBtn, Payload}),
             [MethodBtnEvt | Acc0];
-        (#{authenticator := {phone, #{methods := [sms]}, Info}, label := Label}, Acc0) ->
-            #{number := PhNum} = Info,
-            DevFlex = make_group(Flex, 16#f101, S0),
+
+        (#{authenticator := {phone, #{methods := [sms]}, [EI]}, label := Label}, Acc0) ->
+            #{number := PhNum} = EI,
+            DevFlex = make_group(Flex, 16#f7cd, S0),
+
+            {ok, TypeLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(TypeLbl, [Label]),
+            ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
             {ok, DevLbl} = lv_label:create(DevFlex),
-            ok = lv_label:set_text(DevLbl, [Label, <<" (">>, PhNum, <<")">>]),
+            ok = lv_label:set_text(DevLbl, [PhNum]),
 
             {ok, Row} = lv_obj:create(Inst, DevFlex),
             ok = lv_obj:add_style(Row, RowStyle),
@@ -1698,20 +1747,20 @@ okta_select(info, {_, {select, Btn, Payload}}, S0 = #?MODULE{}) ->
 
 okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
     #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
-      group := GroupStyle} = Sty,
+      group := GroupStyle, item_title := ItemTitleStyle} = Sty,
 
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
-    {ok, AuthInfo} = okta:ainfo(Okta),
-    {AuthType, Com, EnrollInfo} = AuthInfo,
+    {ok, {AuthType, Com, EIs}} = okta:ainfo(Okta),
     #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
-    DevName = case EnrollInfo of
-        #{device_name := N} ->
-            [AuthName, <<" (">>, N, <<")">>];
-        _ ->
-            AuthName
-    end,
+    MethodEIs = lists:filter(fun (EI) ->
+        Methods = maps:get(methods, EI, maps:get(methods, Com)),
+        lists:member(Method, Methods)
+    end, EIs),
+    [MethodEI | _] = MethodEIs,
+    DevNames = lists:uniq([D || #{device_name := D} <- MethodEIs]),
+    DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
     {ok, Rem} = okta:rinfo(Okta, challenge_authenticator),
     #{properties := RemProps} = Rem,
@@ -1736,10 +1785,17 @@ okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = 
             S0#?MODULE{errmsg = undefined}
     end,
 
-    DevFlex = make_group(Flex, 16#f101, S1),
+    DevFlex = make_group(Flex, 16#f11c, S1),
 
-    {ok, DevLbl} = lv_label:create(DevFlex),
-    ok = lv_label:set_text(DevLbl, DevName),
+    {ok, TypeLbl} = lv_label:create(DevFlex),
+    ok = lv_label:set_text(TypeLbl, [AuthName]),
+    ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
+    case DevName0 of
+        <<>> -> ok;
+        _ ->
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [DevName0])
+    end,
 
     {ok, Row} = lv_obj:create(Inst, DevFlex),
     ok = lv_obj:add_style(Row, RowStyle),
@@ -1761,6 +1817,7 @@ okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = 
             end,
             ok = lv_group:add_obj(InpGroup, CodeText),
             {undefined, InpMap0#{Path => CodeText}};
+
         (Path = [Name | _], {choice, _, Choices}, InpMap0) ->
             Labels = [L || #{label := L} <- Choices],
             LabelMap = maps:from_list(lists:zip(
@@ -1870,7 +1927,7 @@ okta_enter_code(info, {_, {proceed, Btn, RemName, InpMap}}, S0 = #?MODULE{okta =
     ok = lv_obj:add_state(Btn, disabled),
     {ok, Rem} = okta:rinfo(Okta, RemName),
     #{properties := RemProps} = Rem,
-    {ok, {_Type, Com, _EInfo}} = okta:ainfo(Okta),
+    {ok, {_Type, Com, _EIs}} = okta:ainfo(Okta),
     #{methods := [Method | _], name := AuthName} = Com,
     Args = okta:map_remprops(fun
         (Path, {simple, _}) ->
@@ -1921,19 +1978,28 @@ okta_msgs_to_errmsg(Msgs, S0 = #?MODULE{}) ->
 
 okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
     #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
-      vcode := VCodeStyle, group := GroupStyle} = Sty,
+      vcode := VCodeStyle, group := GroupStyle,
+      item_title := ItemTitleStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
-    {ok, AuthInfo} = okta:ainfo(Okta),
-    {AuthType, Com, EnrollInfo} = AuthInfo,
+    {ok, {AuthType, Com, EIs}} = okta:ainfo(Okta),
     #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
-    DevName = case EnrollInfo of
-        #{device_name := N} ->
-            [AuthName, <<" (">>, N, <<")">>];
-        _ ->
-            AuthName
+
+    Icon = case AuthType of
+        app -> 16#f10b;
+        email -> 16#f0e0;
+        phone -> 16#f7cd;
+        _ -> 16#f101
     end,
+
+    MethodEIs = lists:filter(fun (EI) ->
+        Methods = maps:get(methods, EI, maps:get(methods, Com)),
+        lists:member(Method, Methods)
+    end, EIs),
+    [MethodEI | _] = MethodEIs,
+    DevNames = lists:uniq([D || #{device_name := D} <- MethodEIs]),
+    DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
     {ok, Text} = lv_span:create(Flex),
     ok = lv_obj:set_size(Text, {{percent, 100}, content}),
@@ -1955,7 +2021,7 @@ okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta})
             S0#?MODULE{errmsg = undefined}
     end,
 
-    case EnrollInfo of
+    case MethodEI of
         #{push_code := _} ->
             {ok, Instr} = lv_span:new_span(Text),
             ok = lv_span:set_text(Instr, [$\n,
@@ -1967,10 +2033,17 @@ okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta})
             ok
     end,
 
-    DevFlex = make_group(Flex, 16#f101, S1),
+    DevFlex = make_group(Flex, Icon, S1),
 
-    {ok, DevLbl} = lv_label:create(DevFlex),
-    ok = lv_label:set_text(DevLbl, DevName),
+    {ok, TypeLbl} = lv_label:create(DevFlex),
+    ok = lv_label:set_text(TypeLbl, [AuthName]),
+    ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
+    case DevName0 of
+        <<>> -> ok;
+        _ ->
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [DevName0])
+    end,
 
     {ok, Row} = lv_obj:create(Inst, DevFlex),
     ok = lv_obj:add_style(Row, RowStyle),
@@ -1981,7 +2054,7 @@ okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta})
     {ok, SpinLbl} = lv_label:create(Row),
     ok = lv_label:set_text(SpinLbl, "Waiting for confirmation..."),
 
-    case EnrollInfo of
+    case MethodEI of
         #{push_code := PushCode} ->
             {ok, CodeLbl} = lv_label:create(Row),
             ok = lv_obj:align(CodeLbl, right_mid),
@@ -2027,7 +2100,7 @@ okta_poll(info, {scard_result, _}, #?MODULE{}) ->
 okta_poll(state_timeout, poll, S0 = #?MODULE{okta = Okta}) ->
     {ok, PollInfo} = okta:rinfo(Okta, challenge_poll),
     #{refresh := PollInterval} = PollInfo,
-    {ok, {_Type, Com, _EInfo}} = okta:ainfo(Okta),
+    {ok, {_Type, Com, _EIs}} = okta:ainfo(Okta),
     #{methods := [Method | _], name := AuthName} = Com,
     case okta:proceed(Okta, challenge_poll) of
         {ok, next_steps, #{challenge_poll := #{}}} ->
@@ -2083,19 +2156,15 @@ okta_poll(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
 
 okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
     #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
-      vcode := VCodeStyle, group := GroupStyle} = Sty,
+      vcode := VCodeStyle, group := GroupStyle,
+      item_title := ItemTitleStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
-    {ok, AuthInfo} = okta:ainfo(Okta),
-    {AuthType, Com, EnrollInfo} = AuthInfo,
+    {ok, {AuthType, Com, EIs}} = okta:ainfo(Okta),
     #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
-    DevName = case EnrollInfo of
-        #{device_name := N} ->
-            [AuthName, <<" (">>, N, <<")">>];
-        _ ->
-            AuthName
-    end,
+    DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
+    DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
     {ok, Text} = lv_span:create(Flex),
     ok = lv_obj:set_size(Text, {{percent, 100}, content}),
@@ -2116,10 +2185,17 @@ okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Ok
             S0#?MODULE{errmsg = undefined}
     end,
 
-    DevFlex = make_group(Flex, 16#f101, S1),
+    DevFlex = make_group(Flex, 16#f084, S1),
 
-    {ok, DevLbl} = lv_label:create(DevFlex),
-    ok = lv_label:set_text(DevLbl, DevName),
+    {ok, TypeLbl} = lv_label:create(DevFlex),
+    ok = lv_label:set_text(TypeLbl, [AuthName]),
+    ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
+    case DevName0 of
+        <<>> -> ok;
+        _ ->
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [DevName0])
+    end,
 
     {ok, Row} = lv_obj:create(Inst, DevFlex),
     ok = lv_obj:add_style(Row, RowStyle),
@@ -2129,7 +2205,7 @@ okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Ok
 
     {ok, SpinLbl} = lv_label:create(Row),
     ok = lv_label:set_text(SpinLbl, ["Authenticating...\n",
-        "Touch your device now"]),
+        "(Touch may be required)"]),
 
     {ok, BtnRow} = lv_obj:create(Inst, DevFlex),
     ok = lv_obj:add_style(BtnRow, RowStyle),
@@ -2166,9 +2242,19 @@ okta_webauthn(info, {scard_result, _}, #?MODULE{}) ->
     keep_state_and_data;
 okta_webauthn(state_timeout, auth, S0 = #?MODULE{srv = Srv, okta = Okta}) ->
     {ok, Ewa} = rdp_server:get_dvchan_pid(Srv, rdpewa_fsm),
-    {ok, {webauthn, Com, AI = #{aaguid := AAGuid, cred_id := CredId,
-                                challenge := Challenge, app_id := AppId,
-                                uv_required := UVReq}}} = okta:ainfo(Okta),
+    {ok, {webauthn, Com, EIs = [FirstEI | _]}} = okta:ainfo(Okta),
+
+    #{challenge := Challenge, app_id := AppId, uv_required := UVReq} = FirstEI,
+
+    CredIdMap = lists:foldl(fun
+        (EI = #{cred_id := CredId}, Acc) ->
+            {ok, CredIdBin} = jose_base64url:decode(CredId),
+            Acc#{CredIdBin => EI}
+    end, #{}, EIs),
+    CredIds = [#{id => CredId} || CredId <- maps:keys(CredIdMap)],
+    DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
+    DevName0 = iolist_to_binary(lists:join(<<", ">>, DevNames)),
+
     #{host := Host, scheme := <<"https">>} = uri_string:parse(AppId),
     CD = #{
         <<"type">> => <<"webauthn.get">>,
@@ -2177,23 +2263,29 @@ okta_webauthn(state_timeout, auth, S0 = #?MODULE{srv = Srv, okta = Okta}) ->
         <<"crossOrigin">> => false
     },
     CDBin = iolist_to_binary([json:encode(CD)]),
-    CDHash = crypto:hash(sha256, CDBin),
-    {ok, CredIdBin} = jose_base64url:decode(CredId),
+
     R = rdpewa_fsm:get_assertion(Ewa, #{
         relying_party => Host,
-        u2f_app_id => AppId,
-        client_data => CDHash,
-        allowed_credentials => [#{id => CredIdBin}],
+        client_data => CDBin,
+        allowed_credentials => CredIds,
         uv => if UVReq -> required; true -> any end
         }),
     case R of
         {ok, I = #{signature := Sig, auth_data := {AuthData, _}}} ->
             DevInfo = maps:get(device, I, #{}),
-            DevName = case DevInfo of
+            SI0 = case DevInfo of
                 #{product := Product, manufacturer := Manuf} ->
-                    iolist_to_binary([Manuf, <<" ">>, Product]);
+                    #{device => iolist_to_binary([Manuf, <<" ">>, Product])};
                 _ ->
-                    maps:get(device_name, AI, maps:get(name, Com))
+                    #{}
+            end,
+            SI1 = case I of
+                #{credential := #{id := UsedCredId}} ->
+                    #{UsedCredId := UsedEI} = CredIdMap,
+                    SI0#{name => maps:get(device_name, UsedEI),
+                         aaguid => maps:get(aaguid, UsedEI)};
+                _ ->
+                    SI0
             end,
             Args = #{
                 credentials => #{
@@ -2204,46 +2296,36 @@ okta_webauthn(state_timeout, auth, S0 = #?MODULE{srv = Srv, okta = Okta}) ->
             },
             case okta:proceed(Okta, challenge_authenticator, Args) of
                 {ok, next_steps, Steps} ->
-                    S1 = okta_add_step(webauthn, DevName, S0),
+                    S1 = okta_add_step(webauthn, SI1, S0),
                     okta_next(Steps, S1);
                 {ok, finished, Tokens} ->
-                    S1 = okta_add_step(webauthn, DevName, S0),
+                    S1 = okta_add_step(webauthn, SI1, S0),
                     okta_finish(Tokens, S1);
                 {warning, Msgs, next_steps, Steps} ->
                     lager:debug("okta warning: ~p", [Msgs]),
-                    S1 = okta_add_step(webauthn, DevName, S0),
+                    S1 = okta_add_step(webauthn, SI1, S0),
                     S2 = okta_msgs_to_errmsg(Msgs, S1),
                     okta_next(Steps, S2);
                 {error, Msgs, next_steps, Steps} ->
                     lager:debug("okta error: ~p", [Msgs]),
                     S1 = okta_msgs_to_errmsg(Msgs, S0),
-                    okta_next(Steps, S1);
+                    okta_next(maps:remove(challenge_authenticator, Steps), S1);
                 Else ->
                     lager:debug("okta proceed else: ~p", [Else]),
                     Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
                     S1 = S0#?MODULE{errmsg = Msg},
-                    {next_state, login, S1}
+                    case okta:rinfo(Okta, select_authenticator) of
+                        {ok, RI} -> okta_next(#{select_authenticator => RI}, S1);
+                        _ -> {next_state, login, S1}
+                    end
             end;
         Else ->
             lager:debug("webauthn failed: ~p", [Else]),
             Msg = iolist_to_binary(io_lib:format("Error authenticating token:\n~p", [Else])),
             S1 = S0#?MODULE{errmsg = Msg},
-            case okta:proceed(Okta, cancel) of
-                {ok, next_steps, Steps} ->
-                    okta_next(Steps, S1);
-                {warning, Msgs, next_steps, Steps} ->
-                    lager:debug("okta warning: ~p", [Msgs]),
-                    S1 = okta_msgs_to_errmsg(Msgs, S0),
-                    okta_next(Steps, S1);
-                {error, Msgs, next_steps, Steps} ->
-                    lager:debug("okta error: ~p", [Msgs]),
-                    S1 = okta_msgs_to_errmsg(Msgs, S0),
-                    okta_next(Steps, S1);
-                Else ->
-                    lager:debug("okta proceed else: ~p", [Else]),
-                    Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
-                    S1 = S0#?MODULE{errmsg = Msg},
-                    {next_state, login, S1}
+            case okta:rinfo(Okta, select_authenticator) of
+                {ok, RI} -> okta_next(#{select_authenticator => RI}, S1);
+                _ -> {next_state, login, S1}
             end
     end;
 okta_webauthn(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->

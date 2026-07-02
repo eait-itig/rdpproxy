@@ -209,29 +209,31 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
     challenge_poll | select_authenticator | challenge_authenticator |
     device_challenge_poll | cancel_polling | cancel.
 
--type password_info() :: #{}.
+-type password_info() :: #{methods => [atom()]}.
 -type webauthn_info() :: #{device_name => binary(), aaguid => binary(),
     challenge => binary(), cred_id => binary(), app_id => binary(),
-    uv_required => boolean()}.
+    uv_required => boolean(), methods => [atom()]}.
 -type loopback_device_info() :: #{challenge => binary(), domain => binary(),
-    ports => [integer()], timeout => integer()}.
--type custom_uri_device_info() :: #{uri => binary()}.
--type app_info() :: #{device_name => binary(), push_code => binary()}.
--type secq_info() :: #{question => atom() | {custom, binary()}, answer => binary()}.
--type email_info() :: #{email => binary()}.
--type phone_info() :: #{number => binary()}.
+    ports => [integer()], timeout => integer(), methods => [atom()]}.
+-type custom_uri_device_info() :: #{uri => binary(), methods => [atom()]}.
+-type app_info() :: #{device_name => binary(), push_code => binary(),
+    methods => [atom()]}.
+-type secq_info() :: #{question => atom() | {custom, binary()},
+    answer => binary(), methods => [atom()]}.
+-type email_info() :: #{email => binary(), methods => [atom()]}.
+-type phone_info() :: #{number => binary(), methods => [atom()]}.
 
 -type auth_common_info() :: #{methods => [atom()], remediations => [remtype()],
     name => binary()}.
 
--type authinfo() :: {password, auth_common_info(), password_info()} |
-    {loopback_device, auth_common_info(), loopback_device_info()} |
-    {custom_uri_device, auth_common_info(), custom_uri_device_info()} |
-    {app, auth_common_info(), app_info()} |
-    {security_question, auth_common_info(), secq_info()} |
-    {email, auth_common_info(), email_info()} |
-    {phone, auth_common_info(), phone_info()} |
-    {webauthn, auth_common_info(), webauthn_info()}.
+-type authinfo() :: {password, auth_common_info(), [password_info()]} |
+    {loopback_device, auth_common_info(), [loopback_device_info()]} |
+    {custom_uri_device, auth_common_info(), [custom_uri_device_info()]} |
+    {app, auth_common_info(), [app_info()]} |
+    {security_question, auth_common_info(), [secq_info()]} |
+    {email, auth_common_info(), [email_info()]} |
+    {phone, auth_common_info(), [phone_info()]} |
+    {webauthn, auth_common_info(), [webauthn_info()]}.
 
 -type reminfo() :: #{properties => remprops(), authenticator => authinfo(),
     refresh => integer(), name => binary()}.
@@ -365,7 +367,6 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
 -type option() :: #object_option{} | #string_option{}.
 
 -record(?MODULE, {
-    gunopts :: map(),
     gunmap = #{} :: #{binary() => pid()},
     host :: binary(),
     cid :: binary(),
@@ -376,13 +377,14 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
     ihdl :: undefined | binary(),
     sthdl :: undefined | binary(),
     app :: undefined | binary(),
-    rems = #{} :: #{atom() => remediation()},
+    msgs = [] :: [#message{}],
+    curauth :: undefined | enroll_id(),
     authns = #{} :: #{auth_id() => authenticator()},
     enrolls = #{} :: #{enroll_id() => {auth_key(), authenticator(), enrollment()}},
     eauthn = #{} :: #{enroll_id() => auth_id()},
-    curauth :: undefined | enroll_id(),
+    rems = #{} :: #{atom() => remediation()},
     idpkeys = #{} :: #{binary() => map()},
-    msgs = [] :: [#message{}]
+    gunopts :: map()
     }).
 
 init(_) ->
@@ -513,6 +515,7 @@ compose_rem_payload(Args, #remediation{fields = FMap}, S0 = #?MODULE{}) ->
 
 get_json(Host, Path, S0 = #?MODULE{addhdrs = Hdrs0}) ->
     {Gun, S1} = open_gun(Host, S0),
+    lager:debug("get_json(~s, ~s)", [Host, Path]),
     Req = gun:get(Gun, Path, Hdrs0#{
         <<"accept">> => <<"application/ion+json; okta-version=1.0.0">>
     }),
@@ -520,6 +523,7 @@ get_json(Host, Path, S0 = #?MODULE{addhdrs = Hdrs0}) ->
 
 post_json(Host, Path, Data, S0 = #?MODULE{addhdrs = Hdrs0}) ->
     {Gun, S1} = open_gun(Host, S0),
+    lager:debug("post_json(~s, ~s, ~p)", [Host, Path, maps:keys(Data)]),
     Req = gun:post(Gun, Path, Hdrs0#{
         <<"content-type">> => <<"application/json">>,
         <<"accept">> => <<"application/ion+json; okta-version=1.0.0">>
@@ -528,6 +532,7 @@ post_json(Host, Path, Data, S0 = #?MODULE{addhdrs = Hdrs0}) ->
 
 post_formenc(Host, Path, Qs, S0 = #?MODULE{addhdrs = Hdrs0}) ->
     {Gun, S1} = open_gun(Host, S0),
+    lager:debug("post_formenc(~s, ~s, ~p)", [Host, Path, [K || {K,V} <- Qs]]),
     Req = gun:post(Gun, Path, Hdrs0#{
        <<"content-type">> => <<"application/x-www-form-urlencoded">>,
        <<"accept">> => <<"application/json">>
@@ -562,6 +567,21 @@ req_json_reply(Gun, Req, S0 = #?MODULE{}) ->
                 true -> ok
             end,
             Body1 = json:decode(Body0),
+            Username = case Body1 of
+                #{<<"user">> := #{<<"value">> := #{<<"identifier">> := I}}} -> I;
+                _ -> "nouser"
+            end,
+            DumpName = iolist_to_binary(["okta-dumps/",
+                Username, "_",
+                calendar:system_time_to_rfc3339(
+                    erlang:system_time(second),
+                    [{offset, "Z"},{time_designator, $_}]),
+                "_",
+                jose_base64url:encode(
+                    crypto:strong_rand_bytes(8)),
+                ".json"]),
+            file:write_file(DumpName, Body0),
+            lager:debug("wrote response body => ~s", [DumpName]),
             case Status of
                 200 -> {ok, Body1, S0};
                 _ -> {error, {http, Status, Body1}, S0}
@@ -686,8 +706,10 @@ parse_enrollment(E0 = #{<<"type">> := <<"security_key">>,
 
 parse_enrollment(E = #{<<"type">> := <<"security_key">>,
                        <<"challengeData">> := CD}, _D) ->
-    #{<<"challenge">> := Challenge,
-      <<"extensions">> := #{<<"appid">> := AppId}} = CD,
+
+    #{<<"challenge">> := Challenge} = CD,
+    Exts = maps:get(<<"extensions">>, CD, #{}),
+    AppId = maps:get(<<"appid">>, Exts, undefined),
     UserVerif = (maps:get(<<"userVerification">>, CD, undefined) =:= <<"required">>),
     #{<<"displayName">> := DevName} = E,
     CredId = maps:get(<<"credentialId">>, E, undefined),
@@ -839,7 +861,7 @@ parse_authenticators(D = #{<<"authenticators">> := #{
                     (EID, _, CAcc) when EID =:= AID ->
                         CAcc;
                     (EID, {EKey, EAuthn, E}, CAcc) when EKey =:= Key ->
-                        V1 = {EKey, EAuthn, merge_records(E, CE)},
+                        V1 = {EKey, EAuthn, merge_records(CE, E)},
                         CAcc#{EID => V1};
                     (EID, V, CAcc) ->
                         CAcc#{EID => V}
@@ -857,8 +879,8 @@ parse_authenticators(D = #{<<"authenticators">> := #{
         end, Authn2, E1),
 
         #authenticator{remediations = ARems, enrollments = EIDs} = Authn3,
-        NewCurEID = case OldCurEID of
-            AID -> [FirstEID | _] = EIDs, FirstEID;
+        NewCurEID = case {OldCurEID, EIDs} of
+            {AID, [OnlyEID]} -> OnlyEID;
             _ -> OldCurEID
         end,
         A1 = A0#{AID => Authn3},
@@ -1198,40 +1220,57 @@ map_defined(M0) ->
         (_K, _V) -> true
     end, M0).
 
-authenticator_to_map(A = #authenticator{enrollments = [EnrollId]}, S0) ->
-    #?MODULE{enrolls = E0} = S0,
-    #{EnrollId := {_Key, _EAuthn, Enroll}} = E0,
-    authenticator_to_map({A, Enroll}, S0);
-
-authenticator_to_map({A = #authenticator{}, #password_enroll{}}, _S0) ->
-    {password, authenticator_to_common(A), #{}};
-authenticator_to_map({A = #authenticator{}, E = #device_loopback_enroll{}}, _S0) ->
+enrollment_to_map(#password_enroll{}, _S0) ->
+    {password, #{}};
+enrollment_to_map(E = #device_loopback_enroll{}, _S0) ->
     #device_loopback_enroll{challenge = Chal, domain = Domain, ports = Ports,
                             timeout = Timeout} = E,
     Info = map_defined(#{challenge => Chal, domain => Domain, ports => Ports,
                          timeout => Timeout}),
-    {loopback_device, authenticator_to_common(A), Info};
-authenticator_to_map({A = #authenticator{}, #device_uri_enroll{href = U}}, _S0) ->
-    {custom_uri_device, authenticator_to_common(A), #{uri => U}};
-authenticator_to_map({A = #authenticator{}, #email_enroll{email = E}}, _S0) ->
-    {email, authenticator_to_common(A), #{email => E}};
-authenticator_to_map({A = #authenticator{}, #phone_enroll{number = N}}, _S0) ->
-    {phone, authenticator_to_common(A), #{number => N}};
-authenticator_to_map({A = #authenticator{},
-                      #secq_enroll{question = Q, answer = A}}, _S0) ->
-    {secq, authenticator_to_common(A),
-     map_defined(#{question => Q, answer => A})};
-authenticator_to_map({A = #authenticator{},
-                      #app_enroll{device_name = Name, push_code = Code}}, _S0) ->
-    {app, authenticator_to_common(A),
-     map_defined(#{device_name => Name, push_code => Code})};
-
-authenticator_to_map({A = #authenticator{}, E = #webauthn_enroll{}}, _S0) ->
+    {loopback_device, Info};
+enrollment_to_map(#device_uri_enroll{href = U}, _S0) ->
+    {custom_uri_device, #{uri => U}};
+enrollment_to_map(#email_enroll{email = E}, _S0) ->
+    {email, #{email => E}};
+enrollment_to_map(#phone_enroll{number = N}, _S0) ->
+    {phone, #{number => N}};
+enrollment_to_map(#secq_enroll{question = Q, answer = A}, _S0) ->
+    {secq, map_defined(#{question => Q, answer => A})};
+enrollment_to_map(#app_enroll{device_name = Name, push_code = Code}, _S0) ->
+    {app, map_defined(#{device_name => Name, push_code => Code})};
+enrollment_to_map(E = #webauthn_enroll{}, _S0) ->
     #webauthn_enroll{device_name = DevName, cred_id = CredId, aaguid = AAGuid,
                      challenge = Chal, appid = AppId, uvreq = UVReq} = E,
-    {webauthn, authenticator_to_common(A),
-     map_defined(#{device_name => DevName, cred_id => CredId, aaguid => AAGuid,
-                   challenge => Chal, app_id => AppId, uv_required => UVReq})}.
+    {webauthn, map_defined(#{device_name => DevName, cred_id => CredId,
+                             aaguid => AAGuid, challenge => Chal,
+                             app_id => AppId, uv_required => UVReq})}.
+
+authenticator_to_map(A = #authenticator{enrollments = [EID]}, S0) ->
+    #?MODULE{enrolls = E0} = S0,
+    #{EID := {_Key, _EAuthn, E}} = E0,
+    authenticator_to_map({A, E}, S0);
+
+authenticator_to_map(A = #authenticator{enrollments = EIDs, methods = MA}, S0) ->
+    #?MODULE{enrolls = E0} = S0,
+    {Type, EIList} = lists:foldl(fun (EID, {T, EIAcc}) ->
+        #{EID := {_Key, EAuthn, E}} = E0,
+        {T0, EI0} = enrollment_to_map(E, S0),
+        case T0 of
+            _ when T =:= undefined -> ok;
+            T -> ok
+        end,
+        #authenticator{methods = ME} = EAuthn,
+        EI1 = case ME of
+            MA -> EI0;
+            _ -> EI0#{methods => ME}
+        end,
+        {T0, [EI1 | EIAcc]}
+    end, {undefined, []}, EIDs),
+    {Type, authenticator_to_common(A), EIList};
+
+authenticator_to_map({A = #authenticator{}, E}, S0) ->
+    {Type, EI} = enrollment_to_map(E, S0),
+    {Type, authenticator_to_common(A), [EI]}.
 
 field_to_map(#simple_field{required = Req, visible = Vis, default = Def, label = Lbl}, _S0) ->
     {simple, map_defined(
@@ -1699,13 +1738,173 @@ parse_curauthenticator_no_id_test() ->
                        }, A1),
     ?assertMatch([<<"aut5cc88xdpzAn7jD3l7">>], maps:keys(A1)),
     ?assertMatch([<<"pfd7n5i4xyWwnZ7ff3l7">>, <<"pfd7n5i4xyWwnZ7ff9aa">>], maps:keys(EA1)),
-    ?assertMatch(<<"pfd7n5i4xyWwnZ7ff3l7">>, CA1),
+    ?assertMatch(<<"aut5cc88xdpzAn7jD3l7">>, CA1),
 
     ?assertMatch(#authenticator{},
         get_auth_or_enroll(<<"aut5cc88xdpzAn7jD3l7">>, S2)),
     ?assertMatch({#authenticator{}, #app_enroll{push_code = <<"00">>}},
         get_auth_or_enroll(<<"pfd7n5i4xyWwnZ7ff3l7">>, S2)).
 
+parse_multi_webauthn_test() ->
+    D0 = #{
+        <<"currentAuthenticator">> => #{
+            <<"type">> => <<"object">>,
+            <<"value">> => #{
+                <<"contextualData">> => #{
+                    <<"challengeData">> => #{
+                        <<"challenge">> => <<"abc123">>
+                    }
+                },
+                <<"type">> => <<"security_key">>,
+                <<"key">> => <<"webauthn">>,
+                <<"id">> => <<"aut5hsyiocodnayOE3l7">>,
+                <<"displayName">> => <<"Passkeys">>,
+                <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+            }
+        },
+        <<"authenticators">> => #{
+            <<"type">> => <<"array">>,
+            <<"value">> => [
+                #{
+                    <<"type">> => <<"security_key">>,
+                    <<"key">> => <<"webauthn">>,
+                    <<"id">> => <<"aut5hsyiocodnayOE3l7">>,
+                    <<"displayName">> => <<"Passkeys">>,
+                    <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+                }
+            ]
+        },
+        <<"authenticatorEnrollments">> => #{
+            <<"type">> => <<"array">>,
+            <<"value">> => [
+                #{
+                    <<"type">> => <<"security_key">>,
+                    <<"key">> => <<"webauthn">>,
+                    <<"id">> => <<"fwf7n5id5sUmPbUA63l7">>,
+                    <<"displayName">> => <<"YubiKey A">>,
+                    <<"credentialId">> => <<"credA">>,
+                    <<"profile">> => #{
+                        <<"aaguid">> => <<"2fc0579f-8113-47ea-b116-bb5a8db9202a">>
+                    },
+                    <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+                },
+                #{
+                    <<"type">> => <<"security_key">>,
+                    <<"key">> => <<"webauthn">>,
+                    <<"id">> => <<"fwf8k0nh1copH5y3P3l7">>,
+                    <<"displayName">> => <<"YubiKey B">>,
+                    <<"credentialId">> => <<"credB">>,
+                    <<"profile">> => #{
+                        <<"aaguid">> => <<"19083c3d-8383-4b18-bc03-8f1c9ab2fd1b">>
+                    },
+                    <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+                }
+            ]
+        }
+    },
+    S0 = #?MODULE{},
+    S1 = parse_enrollments(D0, S0),
+    S2 = parse_authenticators(D0, S1),
+    #?MODULE{enrolls = E1, authns = A1, eauthn = EA1, curauth = CA1} = S2,
+    ?assertMatch(#{
+        <<"fwf7n5id5sUmPbUA63l7">> :=
+            {<<"webauthn">>, #authenticator{},
+             #webauthn_enroll{device_name = <<"YubiKey A">>,
+                              aaguid = <<"2fc0579f-8113-47ea-b116-bb5a8db9202a">>,
+                              challenge = <<"abc123">>,
+                              cred_id = <<"credA">>}},
+        <<"fwf8k0nh1copH5y3P3l7">> :=
+            {<<"webauthn">>, #authenticator{},
+             #webauthn_enroll{device_name = <<"YubiKey B">>,
+                              aaguid = <<"19083c3d-8383-4b18-bc03-8f1c9ab2fd1b">>,
+                              challenge = <<"abc123">>,
+                              cred_id = <<"credB">>}}
+        }, E1),
+    ?assertMatch([<<"fwf7n5id5sUmPbUA63l7">>, <<"fwf8k0nh1copH5y3P3l7">>], maps:keys(E1)),
+    ?assertMatch(#{<<"aut5hsyiocodnayOE3l7">> :=
+        #authenticator{methods = [webauthn],
+                       name = <<"Passkeys">>,
+                       enrollments = [<<"fwf7n5id5sUmPbUA63l7">>, <<"fwf8k0nh1copH5y3P3l7">>]}
+                       }, A1),
+    ?assertMatch([<<"aut5hsyiocodnayOE3l7">>], maps:keys(A1)),
+    ?assertMatch([<<"fwf7n5id5sUmPbUA63l7">>, <<"fwf8k0nh1copH5y3P3l7">>], maps:keys(EA1)),
+    ?assertMatch(<<"aut5hsyiocodnayOE3l7">>, CA1),
+
+    ?assertMatch(#authenticator{},
+        get_auth_or_enroll(<<"aut5hsyiocodnayOE3l7">>, S2)),
+    ?assertMatch({#authenticator{}, #webauthn_enroll{}},
+        get_auth_or_enroll(<<"fwf7n5id5sUmPbUA63l7">>, S2)).
+
+authenticator_to_map_multi_enroll_test() ->
+    D0 = #{
+        <<"currentAuthenticator">> => #{
+            <<"type">> => <<"object">>,
+            <<"value">> => #{
+                <<"contextualData">> => #{
+                    <<"challengeData">> => #{
+                        <<"challenge">> => <<"abc123">>
+                    }
+                },
+                <<"type">> => <<"security_key">>,
+                <<"key">> => <<"webauthn">>,
+                <<"id">> => <<"aut5hsyiocodnayOE3l7">>,
+                <<"displayName">> => <<"Passkeys">>,
+                <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+            }
+        },
+        <<"authenticators">> => #{
+            <<"type">> => <<"array">>,
+            <<"value">> => [
+                #{
+                    <<"type">> => <<"security_key">>,
+                    <<"key">> => <<"webauthn">>,
+                    <<"id">> => <<"aut5hsyiocodnayOE3l7">>,
+                    <<"displayName">> => <<"Passkeys">>,
+                    <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+                }
+            ]
+        },
+        <<"authenticatorEnrollments">> => #{
+            <<"type">> => <<"array">>,
+            <<"value">> => [
+                #{
+                    <<"type">> => <<"security_key">>,
+                    <<"key">> => <<"webauthn">>,
+                    <<"id">> => <<"fwf7n5id5sUmPbUA63l7">>,
+                    <<"displayName">> => <<"YubiKey A">>,
+                    <<"credentialId">> => <<"credA">>,
+                    <<"profile">> => #{
+                        <<"aaguid">> => <<"2fc0579f-8113-47ea-b116-bb5a8db9202a">>
+                    },
+                    <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+                },
+                #{
+                    <<"type">> => <<"security_key">>,
+                    <<"key">> => <<"webauthn">>,
+                    <<"id">> => <<"fwf8k0nh1copH5y3P3l7">>,
+                    <<"displayName">> => <<"YubiKey B">>,
+                    <<"credentialId">> => <<"credB">>,
+                    <<"profile">> => #{
+                        <<"aaguid">> => <<"19083c3d-8383-4b18-bc03-8f1c9ab2fd1b">>
+                    },
+                    <<"methods">> => [#{<<"type">> => <<"webauthn">>}]
+                }
+            ]
+        }
+    },
+    S0 = #?MODULE{},
+    S1 = parse_enrollments(D0, S0),
+    S2 = parse_authenticators(D0, S1),
+
+    #?MODULE{curauth = CurAuth} = S2,
+
+    R = authenticator_to_map(get_auth_or_enroll(CurAuth, S2), S2),
+    ?assertMatch({webauthn, #{name := <<"Passkeys">>}, [
+        #{device_name := <<"YubiKey B">>, challenge := <<"abc123">>,
+          cred_id := <<"credB">>},
+        #{device_name := <<"YubiKey A">>, challenge := <<"abc123">>,
+          cred_id := <<"credA">>}
+        ]}, R).
 
 map_remprops_test() ->
     RemProps0 = #{
