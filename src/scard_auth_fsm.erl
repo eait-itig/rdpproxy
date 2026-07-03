@@ -571,8 +571,6 @@ validate_certs(state_timeout, next_slot, S0 = #?MODULE{slots_todo = [Key | Rest]
             Slot0#slot{info = SI5#{valid => true}};
         {error, {unknown_ca, _}} ->
             Slot0#slot{info = SI5#{valid => false}};
-        {error, {bad_cert, cert_expired}} ->
-            Slot0#slot{info = SI5#{valid => true}};
         {error, Why} ->
             lager:debug("cert in ~s slot ~p failed verification: ~p",
                 [binary:encode_hex(CardId), SlotId, Why]),
