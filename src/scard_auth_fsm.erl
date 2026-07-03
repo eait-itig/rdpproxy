@@ -163,6 +163,7 @@ transaction(Pid, Card, Actions) ->
     srv :: rdp_server:server(),
     fsm :: ui_fsm(),
     step_pid :: pid(),
+    first_err = true :: boolean(),
     rdpdr :: undefined | pid(),
     scard :: undefined | rdpdr_scard:state(),
     rdrs = [] :: [reader()],
@@ -236,9 +237,25 @@ open_scard(cast, {result, {ok, RdpDr, SC0}}, S0 = #?MODULE{step_pid = Pid}) ->
         {'DOWN', _, process, Pid, normal} -> ok
     end,
     {next_state, enum_cards, S1};
+open_scard(cast, {result, {error, Why}}, S0 = #?MODULE{step_pid = Pid}) ->
+    receive
+        {'DOWN', _, process, Pid, normal} -> ok
+    end,
+    case S0 of
+        #?MODULE{first_err = true} ->
+            lager:debug("failed to open scard device: ~p", [Why]);
+        _ ->
+            ok
+    end,
+    {next_state, no_scard, S0#?MODULE{first_err = false}};
 open_scard(info, {'DOWN', _, process, Pid, Why}, S0 = #?MODULE{step_pid = Pid}) ->
-    lager:debug("failed to open scard device: ~p", [Why]),
-    {next_state, no_scard, S0}.
+    case S0 of
+        #?MODULE{first_err = true} ->
+            lager:debug("failed to open scard device: ~p", [Why]);
+        _ ->
+            ok
+    end,
+    {next_state, no_scard, S0#?MODULE{first_err = false}}.
 
 try_list_groups(SC0) ->
     case rdpdr_scard:list_groups(SC0) of
@@ -253,14 +270,11 @@ try_list_readers([], SC0) ->
 try_list_readers([Group | Rest], SC0) ->
     case rdpdr_scard:list_readers(Group, SC0) of
         {ok, undefined, SC1} ->
-            lager:debug("group ~s, readers undefined!", [Group]),
             try_list_readers(Rest, SC1);
         {ok, Readers, SC1} ->
-            lager:debug("group ~s, readers = ~999p", [Group, Readers]),
             {RestReaders, SC2} = try_list_readers(Rest, SC1),
             {lists:usort(Readers ++ RestReaders), SC2};
-        Err ->
-            lager:debug("group ~s, err = ~999p", [Group, Err]),
+        _Err ->
             try_list_readers(Rest, SC0)
     end.
 
@@ -364,15 +378,33 @@ enum_cards(cast, {result, {ok, Readers, Cards, SC0}}, S0 = #?MODULE{step_pid = P
         {'DOWN', _, process, Pid, normal} -> ok
     end,
     case maps:size(CardMap) of
-        0 ->
+        0 when S0#?MODULE.first_err ->
             lager:debug("no workable cards found"),
+            {next_state, no_cards, S1#?MODULE{first_err = false}};
+        0 ->
             {next_state, no_cards, S1};
         _ ->
             {next_state, enum_slots, S1}
     end;
+enum_cards(cast, {result, {error, Why}}, S0 = #?MODULE{step_pid = Pid}) ->
+    receive
+        {'DOWN', _, process, Pid, normal} -> ok
+    end,
+    case S0 of
+        #?MODULE{first_err = true} ->
+            lager:debug("failed to enumerate cards: ~p", [Why]);
+        _ ->
+            ok
+    end,
+    {next_state, no_cards, S0#?MODULE{first_err = false}};
 enum_cards(info, {'DOWN', _, process, Pid, Why}, S0 = #?MODULE{step_pid = Pid}) ->
-    lager:debug("failed to enumerate cards: ~p", [Why]),
-    {next_state, no_scard, S0}.
+    case S0 of
+        #?MODULE{first_err = true} ->
+            lager:debug("failed to enumerate cards: ~p", [Why]);
+        _ ->
+            ok
+    end,
+    {next_state, no_cards, S0#?MODULE{first_err = false}}.
 
 check_slots_on_card(Card, SlotIds) ->
     #card{id = CardId, piv = Piv} = Card,
