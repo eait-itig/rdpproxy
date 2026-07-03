@@ -737,7 +737,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
     {keep_state, S3};
 
 login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
-                                                sty = Sty}) ->
+                                                sty = Sty, inst = Inst}) ->
     {ok, AllCards = [FirstCard | _]} = scard_auth_fsm:list_cards(SCard),
     conn_ra:annotate(FPid, #{scard => FirstCard}),
 
@@ -746,7 +746,7 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
 
     #?MODULE{srv = {FPid, _}, events = Evts0, widgets = Widgets} = S0,
     #{flex := Flex, inp := InpGroup} = Widgets,
-    #{item_title := ItemTitleStyle} = Sty,
+    #{item_title := ItemTitleStyle, row := RowStyle} = Sty,
 
     Evts1 = lists:foldl(fun (#{slots := CSIs}, CAcc) ->
         lists:foldl(fun
@@ -772,7 +772,10 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
                         {ok, UserLbl} = lv_label:create(CardFlex),
                         ok = lv_label:set_text(UserLbl, UPN),
 
-                        {ok, PinText} = lv_textarea:create(CardFlex),
+                        {ok, Row} = lv_obj:create(Inst, CardFlex),
+                        ok = lv_obj:add_style(Row, RowStyle),
+
+                        {ok, PinText} = lv_textarea:create(Row),
                         ok = lv_textarea:set_one_line(PinText, true),
                         ok = lv_textarea:set_text_selection(PinText, true),
                         ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
@@ -781,7 +784,7 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
                         ok = lv_textarea:set_password_mode(PinText, true),
                         ok = lv_group:add_obj(InpGroup, PinText),
 
-                        {ok, CardBtn} = lv_btn:create(CardFlex),
+                        {ok, CardBtn} = lv_btn:create(Row),
                         {ok, CardBtnLbl} = lv_label:create(CardBtn),
                         ok = lv_label:set_text(CardBtnLbl, "Login"),
 
@@ -821,7 +824,10 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
             {ok, UserLbl} = lv_label:create(CardFlex),
             ok = lv_label:set_text(UserLbl, lists:join(<<", ">>, UPNs)),
 
-            {ok, PinText} = lv_textarea:create(CardFlex),
+            {ok, Row} = lv_obj:create(Inst, CardFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, PinText} = lv_textarea:create(Row),
             ok = lv_textarea:set_one_line(PinText, true),
             ok = lv_textarea:set_text_selection(PinText, true),
             ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
@@ -830,7 +836,7 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
             ok = lv_textarea:set_password_mode(PinText, true),
             ok = lv_group:add_obj(InpGroup, PinText),
 
-            {ok, CardBtn} = lv_btn:create(CardFlex),
+            {ok, CardBtn} = lv_btn:create(Row),
             {ok, CardBtnLbl} = lv_label:create(CardBtn),
             ok = lv_label:set_text(CardBtnLbl, "Login"),
 
@@ -1144,7 +1150,7 @@ check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = []}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, return_to_login}]};
 check_mfa(state_timeout, return_to_login, S0 = #?MODULE{errmsg = EM}) ->
     EM1 = case EM of
-        undefined -> <<"No MFA methods configured.">>;
+        undefined -> <<"No MFA methods remaining">>;
         _ -> EM
     end,
     {next_state, login, S0#?MODULE{errmsg = EM1}};
@@ -1293,7 +1299,8 @@ scard_mfa_slots_for_user(S0 = #?MODULE{creds = Creds, cslots = Slots}) ->
 scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
                                                   scard = SCard}) ->
     #{group := GroupStyle, title := TitleStyle, instruction := InstrStyle,
-      role := RoleStyle, item_title := ItemTitleStyle} = Sty,
+      role := RoleStyle, item_title := ItemTitleStyle,
+      row := RowStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
 
@@ -1350,7 +1357,10 @@ scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
                 _ -> ok
             end,
 
-            {ok, PinText} = lv_textarea:create(CardFlex),
+            {ok, Row} = lv_obj:create(Inst, CardFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, PinText} = lv_textarea:create(Row),
             ok = lv_textarea:set_one_line(PinText, true),
             ok = lv_textarea:set_text_selection(PinText, true),
             ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
@@ -1359,7 +1369,7 @@ scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
             ok = lv_textarea:set_password_mode(PinText, true),
             ok = lv_group:add_obj(InpGroup, PinText),
 
-            {ok, CardBtn} = lv_btn:create(CardFlex),
+            {ok, CardBtn} = lv_btn:create(Row),
             {ok, CardBtnLbl} = lv_label:create(CardBtn),
             ok = lv_label:set_text(CardBtnLbl, "Verify"),
 
@@ -1381,7 +1391,14 @@ scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
 
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
-    ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
+    CancelText = case S0 of
+        #?MODULE{mfa = [NextMethod | _]} ->
+            ["Try another method (", string:titlecase(
+                atom_to_binary(NextMethod, utf8)), ")"];
+        #?MODULE{mfa = []} ->
+            ["Cancel"]
+    end,
+    ok = lv_label:set_text(CancelBtnLbl, CancelText),
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     Evts1 = [CancelEvt | Evts0],
 
@@ -1845,7 +1862,14 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
 
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
-    ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
+    CancelText = case S0 of
+        #?MODULE{mfa = [NextMethod | _]} ->
+            ["Try another method (", string:titlecase(
+                atom_to_binary(NextMethod, utf8)), ")"];
+        #?MODULE{mfa = []} ->
+            ["Cancel"]
+    end,
+    ok = lv_label:set_text(CancelBtnLbl, CancelText),
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     Evts1 = [CancelEvt | Evts0],
 
@@ -2754,7 +2778,14 @@ duo_choice(enter, _PrevState, S0 = #?MODULE{duodevs = Devs, sty = Sty,
 
     {ok, CancelBtn} = lv_btn:create(Flex),
     {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
-    ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
+    CancelText = case S0 of
+        #?MODULE{mfa = [NextMethod | _]} ->
+            ["Try another method (", string:titlecase(
+                atom_to_binary(NextMethod, utf8)), ")"];
+        #?MODULE{mfa = []} ->
+            ["Cancel"]
+    end,
+    ok = lv_label:set_text(CancelBtnLbl, CancelText),
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     Evts1 = [CancelEvt | Evts0],
 
