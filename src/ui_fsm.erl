@@ -1141,7 +1141,7 @@ check_mfa(enter, _PrevState, S0 = #?MODULE{mfa_bypass = undefined}) ->
     do_ping_annotate(S0),
     Methods = rdpproxy:config([mfa, methods], [duo]),
     {keep_state, S0#?MODULE{screen = Screen, mfa = Methods},
-     [{state_timeout, 0, check_bypass}]};
+     [{state_timeout, 100, check_bypass}]};
 check_mfa(state_timeout, check_bypass, S0 = #?MODULE{duoid = DuoId, creds = Creds}) ->
     #{username := Username} = Creds,
     case process_acl([mfa, bypass_acl], S0) of
@@ -1175,7 +1175,7 @@ check_mfa(state_timeout, return_to_login, S0 = #?MODULE{errmsg = EM}) ->
 check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = [_ | _]}) ->
     Screen = make_waiting_screen("Checking MFA...", S0),
     do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 0, next_method}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, next_method}]};
 check_mfa(state_timeout, next_method, S0 = #?MODULE{mfa = [NextMethod | Rest]}) ->
     S1 = S0#?MODULE{mfa = Rest},
     lager:debug("mfa trying method ~p next...", [NextMethod]),
