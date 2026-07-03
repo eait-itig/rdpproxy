@@ -918,6 +918,7 @@ parse_fields([], _D) -> #{};
 parse_fields([F = #{<<"name">> := Name} | Rest], D) ->
     (parse_fields(Rest, D))#{Name => parse_field(F, D)}.
 
+worst_msg_verb([]) -> error;
 worst_msg_verb([#message{class = error}]) -> error;
 worst_msg_verb([#message{}]) -> warning;
 worst_msg_verb([#message{class = error} | _Rest]) -> error;
