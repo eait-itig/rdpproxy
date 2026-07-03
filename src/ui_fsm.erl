@@ -689,7 +689,7 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             S0#?MODULE{errmsg = undefined}
     end,
 
-    UPwFlex = make_group(Flex, 16#f11c, S0),
+    UPwFlex = make_group(Flex, 16#f2c2, S0),
 
     {ok, UserText} = lv_textarea:create(UPwFlex),
     ok = lv_textarea:set_one_line(UserText, true),
@@ -746,7 +746,7 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
 
     #?MODULE{srv = {FPid, _}, events = Evts0, widgets = Widgets} = S0,
     #{flex := Flex, inp := InpGroup} = Widgets,
-    #{item_title := ItemTitleStyle, row := RowStyle} = Sty,
+    #{item_title := ItemTitleStyle, row := RowStyle, role := RoleStyle} = Sty,
 
     Evts1 = lists:foldl(fun (#{slots := CSIs}, CAcc) ->
         lists:foldl(fun
@@ -754,23 +754,26 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
                     pubkey := PubKey = {#'ECPoint'{}, {namedCurve, _}}}, SAcc) ->
                 case scard_saved_pw_ra:get_password(PubKey) of
                     {ok, EPW = #{username := UPN}} ->
-                        CardFlex = make_group(Flex, 16#f2c2, S0),
+                        CardFlex = make_group(Flex, 16#f0a3, S0),
 
                         {ok, CardInfo} = scard_auth_fsm:get_card(SCard, CID),
                         CardTitle = case CardInfo of
                             #{yk_serial := Serial, yk_version := {Maj, _, _}} ->
-                                [<<"YubiKey ">>, integer_to_binary(Maj), <<" #">>,
-                                 integer_to_binary(Serial)];
+                                [<<"YubiKey ">>, integer_to_binary(Maj),
+                                 <<"   #">>, integer_to_binary(Serial)];
                             #{reader := Rdr} ->
                                 [Rdr]
                         end,
 
                         {ok, RdrLbl} = lv_label:create(CardFlex),
-                        ok = lv_label:set_text(RdrLbl, CardTitle),
+                        ok = lv_label:set_text(RdrLbl, UPN),
                         ok = lv_obj:add_style(RdrLbl, ItemTitleStyle),
 
                         {ok, UserLbl} = lv_label:create(CardFlex),
-                        ok = lv_label:set_text(UserLbl, UPN),
+                        ok = lv_obj:add_style(UserLbl, RoleStyle),
+                        ok = lv_label:set_text(UserLbl, CardTitle),
+                        ok = lv_obj:add_flag(UserLbl, ignore_layout),
+                        ok = lv_obj:align(UserLbl, top_right),
 
                         {ok, Row} = lv_obj:create(Inst, CardFlex),
                         ok = lv_obj:add_style(Row, RowStyle),
@@ -806,23 +809,37 @@ login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
         (#{slot_id := piv_key_mgmt}, Acc) ->
             Acc;
         (SI = #{card_id := CID, upn := UPNs}, Acc) ->
-            CardFlex = make_group(Flex, 16#f2c2, S0),
+            CardFlex = make_group(Flex, 16#f084, S0),
+
+            [FirstUPN | RestUPNs] = UPNs,
 
             {ok, CardInfo} = scard_auth_fsm:get_card(SCard, CID),
             CardTitle = case CardInfo of
                 #{yk_serial := Serial, yk_version := {Maj, _, _}} ->
-                    [<<"YubiKey ">>, integer_to_binary(Maj), <<" #">>,
+                    [<<"YubiKey ">>, integer_to_binary(Maj), <<"   #">>,
                      integer_to_binary(Serial)];
                 #{reader := Rdr} ->
                     [Rdr]
             end,
 
             {ok, RdrLbl} = lv_label:create(CardFlex),
-            ok = lv_label:set_text(RdrLbl, CardTitle),
+            ok = lv_label:set_text(RdrLbl, FirstUPN),
             ok = lv_obj:add_style(RdrLbl, ItemTitleStyle),
 
             {ok, UserLbl} = lv_label:create(CardFlex),
-            ok = lv_label:set_text(UserLbl, lists:join(<<", ">>, UPNs)),
+            ok = lv_obj:add_style(UserLbl, RoleStyle),
+            ok = lv_label:set_text(UserLbl, CardTitle),
+            ok = lv_obj:add_flag(UserLbl, ignore_layout),
+            ok = lv_obj:align(UserLbl, top_right),
+
+            case RestUPNs of
+                [_|_] ->
+                    {ok, OtherNamesLbl} = lv_label:create(CardFlex),
+                    ok = lv_label:set_text(OtherNamesLbl, ["  ",
+                        lists:join(<<"\n  ">>, RestUPNs)]);
+                _ ->
+                    ok
+            end,
 
             {ok, Row} = lv_obj:create(Inst, CardFlex),
             ok = lv_obj:add_style(Row, RowStyle),
@@ -1153,7 +1170,8 @@ check_mfa(state_timeout, return_to_login, S0 = #?MODULE{errmsg = EM}) ->
         undefined -> <<"No MFA methods remaining">>;
         _ -> EM
     end,
-    {next_state, login, S0#?MODULE{errmsg = EM1}};
+    Methods = rdpproxy:config([mfa, methods], [duo]),
+    {next_state, login, S0#?MODULE{mfa = Methods, errmsg = EM1}};
 check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = [_ | _]}) ->
     Screen = make_waiting_screen("Checking MFA...", S0),
     do_ping_annotate(S0),
@@ -1309,7 +1327,7 @@ scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
     ok = lv_span:set_mode(Text, break),
 
     {ok, Title} = lv_span:new_span(Text),
-    ok = lv_span:set_text(Title, rdpproxy:config([ui, title_mfa])),
+    ok = lv_span:set_text(Title, "Smartcard/YubiKey MFA"),
     ok = lv_span:set_style(Title, TitleStyle),
 
     {ok, Instr} = lv_span:new_span(Text),
@@ -1331,7 +1349,9 @@ scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
 
     Evts0 = lists:foldl(fun
         (#{match := M, slot := SI = #{card_id := CID, upn := UPNs}}, Acc) ->
-            CardFlex = make_group(Flex, 16#f2c2, S0),
+            CardFlex = make_group(Flex, 16#f084, S0),
+
+            [FirstUPN | RestUPNs] = UPNs,
 
             {ok, CardInfo} = scard_auth_fsm:get_card(SCard, CID),
             CardTitle = case CardInfo of
@@ -1343,17 +1363,29 @@ scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
             end,
 
             {ok, RdrLbl} = lv_label:create(CardFlex),
-            ok = lv_label:set_text(RdrLbl, CardTitle),
+            ok = lv_label:set_text(RdrLbl, FirstUPN),
             ok = lv_obj:add_style(RdrLbl, ItemTitleStyle),
 
             {ok, UserLbl} = lv_label:create(CardFlex),
-            ok = lv_label:set_text(UserLbl, lists:join(<<", ">>, UPNs)),
+            ok = lv_obj:add_style(UserLbl, RoleStyle),
+            ok = lv_label:set_text(UserLbl, CardTitle),
+            ok = lv_obj:add_flag(UserLbl, ignore_layout),
+            ok = lv_obj:align(UserLbl, top_right),
+
+            case RestUPNs of
+                [_|_] ->
+                    {ok, OtherNamesLbl} = lv_label:create(CardFlex),
+                    ok = lv_label:set_text(OtherNamesLbl, ["  ",
+                        lists:join(<<"\n  ">>, RestUPNs)]);
+                _ ->
+                    ok
+            end,
 
             case M of
                 acl ->
                     {ok, WhyLbl} = lv_label:create(CardFlex),
                     ok = lv_obj:add_style(WhyLbl, RoleStyle),
-                    ok = lv_label:set_text(WhyLbl, "(matched by MFA exception rule)");
+                    ok = lv_label:set_text(WhyLbl, "(MFA exception rule)");
                 _ -> ok
             end,
 
