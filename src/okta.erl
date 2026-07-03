@@ -36,6 +36,7 @@
     remediations/1,
     rinfo/2,
     ainfo/1,
+    msgs/1,
     begin_auth/1,
     begin_auth/2,
     proceed/2,
@@ -100,7 +101,7 @@ mapfold_remprops(Path, Fun, UAcc0, Props, Opts) ->
     SimpleOnly = lists:member(simple_only, Opts),
     RequiredOnly = lists:member(required_only, Opts),
     maps:fold(fun
-        (K, {simple, #{required := false}}, {Acc, UAcc1}) when RequiredOnly ->
+        (_, {simple, #{required := false}}, {Acc, UAcc1}) when RequiredOnly ->
             {Acc, UAcc1};
         (K, {simple, #{required := true, default := V}}, {Acc, UAcc1}) when RequiredOnly ->
             {Acc#{K => V}, UAcc1};
@@ -110,7 +111,7 @@ mapfold_remprops(Path, Fun, UAcc0, Props, Opts) ->
         (K, {object, #{properties := InnerProps}}, {Acc, UAcc1}) ->
             {InnerObj, UAcc2} = mapfold_remprops([K | Path], Fun, UAcc1, InnerProps, Opts),
             {Acc#{K => InnerObj}, UAcc2};
-        (K, {choice, _, Choices}, Acc) when SimpleOnly ->
+        (K, {choice, _, _}, _Acc) when SimpleOnly ->
             error({choice_required, [K | Path]});
         (K, P = {choice, _, Choices}, {Acc, UAcc1}) ->
             {Label, UAcc2} = Fun([K | Path], P, UAcc1),
@@ -137,7 +138,7 @@ map_remprops(Path, Fun, Props, Opts) ->
     SimpleOnly = lists:member(simple_only, Opts),
     RequiredOnly = lists:member(required_only, Opts),
     maps:fold(fun
-        (K, {simple, #{required := false}}, Acc) when RequiredOnly ->
+        (_, {simple, #{required := false}}, Acc) when RequiredOnly ->
             Acc;
         (K, {simple, #{required := true, default := V}}, Acc) when RequiredOnly ->
             Acc#{K => V};
@@ -146,7 +147,7 @@ map_remprops(Path, Fun, Props, Opts) ->
         (K, {object, #{properties := InnerProps}}, Acc) ->
             InnerObj = map_remprops([K | Path], Fun, InnerProps, Opts),
             Acc#{K => InnerObj};
-        (K, {choice, _, Choices}, Acc) when SimpleOnly ->
+        (K, {choice, _, _}, _Acc) when SimpleOnly ->
             error({choice_required, [K | Path]});
         (K, P = {choice, _, Choices}, Acc) ->
             Label = Fun([K | Path], P),
@@ -1401,6 +1402,10 @@ handle_call({remediation_info, Name}, _From, S0 = #?MODULE{rems = Rems}) ->
         _ ->
             {reply, {error, not_found}, S0}
     end;
+
+handle_call(stop, From, S0 = #?MODULE{}) ->
+    gen_server:reply(From, ok),
+    {stop, normal, S0};
 
 handle_call(get_messages, _From, S0 = #?MODULE{msgs = Msgs}) ->
     {reply, {ok, [msg_to_tuple(M) || M <- Msgs]}, S0};

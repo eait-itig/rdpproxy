@@ -38,7 +38,7 @@
 -export([start/0]).
 -export([encrypt/2, decrypt/3]).
 
--export_types([username/0, saved_pw/0]).
+-export_types([username/0, password/0, encrypted_pw/0]).
 
 -type ra_error() :: {error, term()} | {timeout, ra:server_id()}.
 

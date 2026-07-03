@@ -146,7 +146,7 @@ get_pool(Pool) ->
     user => username(),
     groups => [sid()],
     client_ip => string() | binary(),
-    card_info => scard_auth:card_info()
+    card_info => scard_auth_fsm:card_info()
     }.
 
 -spec get_pools_for(user_info()) -> {ok, [pool_config()]} | ra_error().
@@ -712,7 +712,7 @@ match_rule(#{client_ip := IP}, #{time := T}, {_, netmask, Net, MaskLen, TimeExp}
         _ -> no_match
     end;
 match_rule(#{user := U, card_info := #{slots := SlotMap}}, _Ctx,
-           {_, cert, Slot, Field, Value0}) ->
+           {_, cert, Slot, Field, Value0}) when is_map(SlotMap) ->
     Value1 = case Value0 of
         user -> U;
         _ -> Value0
@@ -720,6 +720,17 @@ match_rule(#{user := U, card_info := #{slots := SlotMap}}, _Ctx,
     Slots = case Slot of
         any -> maps:values(SlotMap);
         _ -> [maps:get(Slot, SlotMap, #{})]
+    end,
+    match_slots_rule(Slots, Field, Value1);
+match_rule(#{user := U, card_info := #{slots := SlotList}}, _Ctx,
+           {_, cert, Slot, Field, Value0}) when is_list(SlotList) ->
+    Value1 = case Value0 of
+        user -> U;
+        _ -> Value0
+    end,
+    Slots = case Slot of
+        any -> maps:values(SlotList);
+        _ -> [X || X = #{slot_id := SlotId} <- SlotList, SlotId =:= Slot]
     end,
     match_slots_rule(Slots, Field, Value1);
 match_rule(#{user := U}, _Ctx, {_, cert, _, _, _}) -> no_match;

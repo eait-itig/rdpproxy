@@ -91,7 +91,9 @@ register_metrics() ->
     auth_attempts => [auth_attempt()],
     duo_preauth => binary(),
     okta_username => binary(),
-    okta_authenticators => [okta_authenticator()]
+    okta_authenticators => [okta_authenticator()],
+    smartcard_used => #{card_id => binary(), slot_id => atom(),
+        serial => integer(), cn => binary(), upn => [binary()]}
     }.
 
 -type hour_num() :: integer().
@@ -387,7 +389,25 @@ conn_to_json(C) ->
             }};
         _ -> J12
     end,
-    [jsx:encode(J13), $\n].
+    J14 = case C of
+        #{smartcard_used := SI} ->
+            #{card_id := CardID, slot_id := SlotID, serial := SlotSerialInt,
+              cn := SlotCN, upn := [SlotUPN | _]} = SI,
+            SlotSerialBin = integer_to_binary(SlotSerialInt, 16),
+            SlotIDBin = atom_to_binary(SlotID, utf8),
+            J13#{
+                <<"smartcard_used">> => #{
+                    <<"guid">> => binary:encode_hex(CardID),
+                    <<"slot">> => SlotIDBin,
+                    <<"serial">> => SlotSerialBin,
+                    <<"cn">> => SlotCN,
+                    <<"upn">> => SlotUPN
+                }
+            };
+        _ ->
+            J13
+    end,
+    [jsx:encode(J14), $\n].
 
 dn_oid_to_str(?'id-at-commonName') -> "cn";
 dn_oid_to_str(?'id-at-countryName') -> "c";

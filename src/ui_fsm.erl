@@ -66,6 +66,8 @@
     okta_poll/3,
     okta_select/3,
     okta_webauthn/3,
+    scard_mfa_select/3,
+    scard_mfa_check_pin/3,
     check_shell/3,
     manual_host/3,
     pool_choice/3,
@@ -137,7 +139,8 @@ start_link(Frontend, L, Inst, {W, H}) ->
 
 -type password_creds() :: #{username => binary(), domain => binary(),
     password => binary(), duo => duo_choice(), okta => okta_creds(),
-    tgts => term(), tokens => okta_tokens()}.
+    tgts => term(), tokens => okta_tokens(),
+    scard => #{remember_me => boolean()}}.
 
 -type smartcard_creds() :: #{slot => nist_piv:slot(), pin => binary(),
     tgts => term()}.
@@ -182,9 +185,9 @@ start_link(Frontend, L, Inst, {W, H}) ->
     creds = #{} :: creds(),
     hdl = #{} :: session_ra:handle_state(),
     uinfo :: undefined | session_ra:user_info(),
-    cinfo :: undefined | scard_auth:card_info(),
+    cslots :: undefined | [scard_auth_fsm:slot_info()],
     piv :: undefined | pid(),
-    scard :: undefined | rdpdr_scard:state(),
+    scard :: undefined | scard_auth_fsm:fsm(),
     tsudcore :: undefined | #tsud_core{},
     nms :: undefined | pid(),
     hostname :: undefined | binary(),
@@ -192,6 +195,7 @@ start_link(Frontend, L, Inst, {W, H}) ->
     duoid :: undefined | binary(),
     okta :: undefined | pid(),
     mfa = [] :: [atom()],
+    mfa_bypass :: undefined | boolean(),
     errmsg :: undefined | binary(),
     duodevs :: undefined | [map()],
     rmbrchk :: undefined | lv:checkbox(),
@@ -374,15 +378,21 @@ make_styles(Inst, {W, H}) ->
 callback_mode() -> [state_functions, state_enter].
 
 %% @private
-terminate(Reason, State, #?MODULE{duo = undefined, nms = undefined}) ->
-    lager:debug("ui_fsm dying from state ~s due to ~999p", [State, Reason]),
-    ok;
+terminate(Reason, State, S0 = #?MODULE{scard = SCard}) when not (SCard =:= undefined) ->
+    scard_auth_fsm:stop(SCard),
+    terminate(Reason, State, S0#?MODULE{scard = undefined});
+terminate(Reason, State, S0 = #?MODULE{okta = Okta}) when not (Okta =:= undefined) ->
+    okta:stop(Okta),
+    terminate(Reason, State, S0#?MODULE{okta = undefined});
 terminate(Reason, State, S0 = #?MODULE{duo = Duo}) when not (Duo =:= undefined) ->
     duo:stop(Duo),
     terminate(Reason, State, S0#?MODULE{duo = undefined});
 terminate(Reason, State, S0 = #?MODULE{nms = Nms}) when not (Nms =:= undefined) ->
     nms:stop(Nms),
-    terminate(Reason, State, S0#?MODULE{nms = undefined}).
+    terminate(Reason, State, S0#?MODULE{nms = undefined});
+terminate(Reason, State, #?MODULE{}) ->
+    lager:debug("ui_fsm dying from state ~s due to ~999p", [State, Reason]),
+    ok.
 
 %% @private
 code_change(_OldVsn, OldState, S0, _Extra) ->
@@ -409,37 +419,6 @@ do_ping_annotate(#?MODULE{srv = F = {FPid, _}}) ->
                 [<<"0.0.0.0/0">>], AvgPing)
     end,
     conn_ra:annotate(FPid, #{avg_ping => AvgPing}).
-
-check_scard(#?MODULE{srv = F}) ->
-    case rdp_server:get_vchan_pid(F, rdpdr_fsm) of
-        {ok, RdpDr} ->
-            case rdpdr_fsm:get_devices(RdpDr) of
-                {ok, Devs} ->
-                    case lists:keyfind(rdpdr_dev_smartcard, 1, Devs) of
-                        false ->
-                            {error, no_scard};
-                        #rdpdr_dev_smartcard{id = DevId} ->
-                            case rdpdr_scard:open(RdpDr, DevId, system) of
-                                {ok, SC0} ->
-                                    case (catch scard_auth:check(SC0)) of
-                                        {'EXIT', Why} ->
-                                            lager:debug("probing scard failed:"
-                                                " ~p", [Why]),
-                                            {error, check_error};
-                                        Other -> Other
-                                    end;
-                                Err ->
-                                    lager:debug("failed to establish ctx: ~p",
-                                        [Err])
-                            end
-                    end;
-                Err ->
-                    lager:debug("failed to get rdpdr devs: ~p", [Err]),
-                    Err
-            end;
-        _ ->
-            {error, no_rdpdr}
-    end.
 
 get_msg(Name, #?MODULE{creds = #{username := U}}) ->
     Msg0 = rdpproxy:config([ui, Name]),
@@ -643,19 +622,17 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
     end,
     S5 = S4#?MODULE{creds = encrypt_creds(Creds1)},
 
-    Fsm = self(),
-    spawn(fun() ->
-        Res = check_scard(S5),
-        Fsm ! {scard_result, Res}
-    end),
+    {ok, SCard} = scard_auth_fsm:start_link(Srv, self()),
+
     S6 = receive
-        {scard_result, {ok, Piv, _Rdr, SC0, Info}} ->
-            conn_ra:annotate(FPid, #{scard => Info}),
-            S5#?MODULE{cinfo = Info, piv = Piv, scard = SC0};
-        {scard_result, _} ->
-            S5#?MODULE{cinfo = #{slots => #{}}}
+        {scard_ready, SCard} ->
+            {ok, CardInfo} = scard_auth_fsm:list_cards(SCard),
+            [FirstCard | _] = CardInfo,
+            conn_ra:annotate(FPid, #{scard => FirstCard}),
+            {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+            S5#?MODULE{cslots = Slots, scard = SCard}
     after 2000 ->
-        S5#?MODULE{cinfo = #{slots => #{}}}
+        S5#?MODULE{scard = SCard}
     end,
 
     case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
@@ -679,7 +656,7 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
 
 %% @private
 login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
-                                       cinfo = CInfo}) ->
+                                       cslots = CSlots, scard = SCard}) ->
     #{title := TitleStyle, subtitle := SubtitleStyle,
       instruction := InstrStyle, group := GroupStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
@@ -737,70 +714,13 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
         {login, UserText, PwText}}),
 
     Evts0 = [BtnEvent, UAcEvent, AcEvent],
-
-    Evts1 = maps:fold(fun
-        (Slot, #{pubkey := PubKey = {#'ECPoint'{}, {namedCurve, _}}}, Acc) ->
-            case scard_saved_pw_ra:get_password(PubKey) of
-                {ok, EPW = #{username := UPN}} ->
-                    CardFlex = make_group(Flex, 16#f2c2, S0),
-                    {ok, UserLbl} = lv_label:create(CardFlex),
-                    ok = lv_label:set_text(UserLbl, UPN),
-
-                    {ok, PinText} = lv_textarea:create(CardFlex),
-                    ok = lv_textarea:set_one_line(PinText, true),
-                    ok = lv_textarea:set_text_selection(PinText, true),
-                    ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
-                    #?MODULE{pinchars = PinChars} = S0,
-                    ok = lv_textarea:set_accepted_chars(PinText, PinChars),
-                    ok = lv_textarea:set_password_mode(PinText, true),
-                    ok = lv_group:add_obj(InpGroup, PinText),
-
-                    {ok, CardBtn} = lv_btn:create(CardFlex),
-                    {ok, CardBtnLbl} = lv_label:create(CardBtn),
-                    ok = lv_label:set_text(CardBtnLbl, "Login"),
-
-                    {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
-                        {login_epw, Slot, PinText, EPW}),
-                    {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
-                        {wait_release, {login_epw, Slot, PinText, EPW}}),
-
-                    [YkBtnEvent, YkAcEvent | Acc];
-                _Err ->
-                    Acc
-            end;
-        (_Slot, Info, Acc) ->
-            Acc
-    end, Evts0, maps:get(slots, CInfo, #{})),
-    Evts2 = maps:fold(fun
-        (piv_key_mgmt, _Info, Acc) ->
-            Acc;
-        (Slot, #{valid := true, upn := [UPN | _]}, Acc) ->
-            CardFlex = make_group(Flex, 16#f2c2, S0),
-            {ok, UserLbl} = lv_label:create(CardFlex),
-            ok = lv_label:set_text(UserLbl, UPN),
-
-            {ok, PinText} = lv_textarea:create(CardFlex),
-            ok = lv_textarea:set_one_line(PinText, true),
-            ok = lv_textarea:set_text_selection(PinText, true),
-            ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
-            #?MODULE{pinchars = PinChars} = S0,
-            ok = lv_textarea:set_accepted_chars(PinText, PinChars),
-            ok = lv_textarea:set_password_mode(PinText, true),
-            ok = lv_group:add_obj(InpGroup, PinText),
-
-            {ok, CardBtn} = lv_btn:create(CardFlex),
-            {ok, CardBtnLbl} = lv_label:create(CardBtn),
-            ok = lv_label:set_text(CardBtnLbl, "Login"),
-
-            {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
-                {login_pin, Slot, PinText}),
-            {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
-                {wait_release, {login_pin, Slot, PinText}}),
-
-            [YkBtnEvent, YkAcEvent | Acc];
-        (_Slot, _Info, Acc) ->
-            Acc
-    end, Evts1, maps:get(slots, CInfo, #{})),
+    S2 = S1#?MODULE{screen = Screen, events = Evts0,
+                    widgets = #{flex => Flex, inp => InpGroup}},
+    S3 = case CSlots of
+        undefined -> S2;
+        [] -> S2;
+        _ -> {keep_state, SS} = login(info, {scard_ready, SCard}, S2), SS
+    end,
 
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
@@ -814,54 +734,92 @@ login(enter, _PrevState, S0 = #?MODULE{inst = Inst, sty = Sty, creds = Creds,
             ok = lv_group:focus_obj(UserText)
     end,
 
-    {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
-                            widgets = #{flex => Flex, inp => InpGroup}}};
+    {keep_state, S3};
 
-login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
+login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard, srv = {FPid,_},
+                                                sty = Sty}) ->
+    {ok, AllCards = [FirstCard | _]} = scard_auth_fsm:list_cards(SCard),
+    conn_ra:annotate(FPid, #{scard => FirstCard}),
+
+    {ok, CSlots} = scard_auth_fsm:list_valid_slots(SCard),
+    S1 = S0#?MODULE{cslots = CSlots},
+
     #?MODULE{srv = {FPid, _}, events = Evts0, widgets = Widgets} = S0,
     #{flex := Flex, inp := InpGroup} = Widgets,
-    conn_ra:annotate(FPid, #{scard => CInfo}),
-    S1 = S0#?MODULE{cinfo = CInfo, piv = Piv, scard = SC0},
-    Evts1 = maps:fold(fun
-        (Slot, #{pubkey := PubKey = {#'ECPoint'{}, {namedCurve, _}}}, Acc) ->
-            case scard_saved_pw_ra:get_password(PubKey) of
-                {ok, EPW = #{username := UPN}} ->
-                    CardFlex = make_group(Flex, 16#f2c2, S0),
-                    {ok, UserLbl} = lv_label:create(CardFlex),
-                    ok = lv_label:set_text(UserLbl, UPN),
+    #{item_title := ItemTitleStyle} = Sty,
 
-                    {ok, PinText} = lv_textarea:create(CardFlex),
-                    ok = lv_textarea:set_one_line(PinText, true),
-                    ok = lv_textarea:set_text_selection(PinText, true),
-                    ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
-                    #?MODULE{pinchars = PinChars} = S0,
-                    ok = lv_textarea:set_accepted_chars(PinText, PinChars),
-                    ok = lv_textarea:set_password_mode(PinText, true),
-                    ok = lv_group:add_obj(InpGroup, PinText),
+    Evts1 = lists:foldl(fun (#{slots := CSIs}, CAcc) ->
+        lists:foldl(fun
+            (SI = #{card_id := CID,
+                    pubkey := PubKey = {#'ECPoint'{}, {namedCurve, _}}}, SAcc) ->
+                case scard_saved_pw_ra:get_password(PubKey) of
+                    {ok, EPW = #{username := UPN}} ->
+                        CardFlex = make_group(Flex, 16#f2c2, S0),
 
-                    {ok, CardBtn} = lv_btn:create(CardFlex),
-                    {ok, CardBtnLbl} = lv_label:create(CardBtn),
-                    ok = lv_label:set_text(CardBtnLbl, "Login"),
+                        {ok, CardInfo} = scard_auth_fsm:get_card(SCard, CID),
+                        CardTitle = case CardInfo of
+                            #{yk_serial := Serial, yk_version := {Maj, _, _}} ->
+                                [<<"YubiKey ">>, integer_to_binary(Maj), <<" #">>,
+                                 integer_to_binary(Serial)];
+                            #{reader := Rdr} ->
+                                [Rdr]
+                        end,
 
-                    {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
-                        {login_epw, Slot, PinText, EPW}),
-                    {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
-                        {wait_release, {login_epw, Slot, PinText, EPW}}),
+                        {ok, RdrLbl} = lv_label:create(CardFlex),
+                        ok = lv_label:set_text(RdrLbl, CardTitle),
+                        ok = lv_obj:add_style(RdrLbl, ItemTitleStyle),
 
-                    [YkBtnEvent, YkAcEvent | Acc];
-                _Err ->
-                    Acc
-            end;
-        (_Slot, Info, Acc) ->
-            Acc
-    end, Evts0, maps:get(slots, CInfo, #{})),
-    Evts2 = maps:fold(fun
-        (piv_key_mgmt, _Info, Acc) ->
+                        {ok, UserLbl} = lv_label:create(CardFlex),
+                        ok = lv_label:set_text(UserLbl, UPN),
+
+                        {ok, PinText} = lv_textarea:create(CardFlex),
+                        ok = lv_textarea:set_one_line(PinText, true),
+                        ok = lv_textarea:set_text_selection(PinText, true),
+                        ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
+                        #?MODULE{pinchars = PinChars} = S0,
+                        ok = lv_textarea:set_accepted_chars(PinText, PinChars),
+                        ok = lv_textarea:set_password_mode(PinText, true),
+                        ok = lv_group:add_obj(InpGroup, PinText),
+
+                        {ok, CardBtn} = lv_btn:create(CardFlex),
+                        {ok, CardBtnLbl} = lv_label:create(CardBtn),
+                        ok = lv_label:set_text(CardBtnLbl, "Login"),
+
+                        {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
+                            {login_epw, SI, PinText, EPW}),
+                        {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
+                            {wait_release,
+                                {login_epw, SI, PinText, EPW}}),
+
+                        [YkBtnEvent, YkAcEvent | SAcc];
+                    _Err ->
+                        SAcc
+                end;
+            (_SI, SAcc) ->
+                SAcc
+        end, CAcc, CSIs)
+    end, Evts0, AllCards),
+    Evts2 = lists:foldl(fun
+        (#{slot_id := piv_key_mgmt}, Acc) ->
             Acc;
-        (Slot, #{valid := true, upn := [UPN | _]}, Acc) ->
+        (SI = #{card_id := CID, upn := UPNs}, Acc) ->
             CardFlex = make_group(Flex, 16#f2c2, S0),
+
+            {ok, CardInfo} = scard_auth_fsm:get_card(SCard, CID),
+            CardTitle = case CardInfo of
+                #{yk_serial := Serial, yk_version := {Maj, _, _}} ->
+                    [<<"YubiKey ">>, integer_to_binary(Maj), <<" #">>,
+                     integer_to_binary(Serial)];
+                #{reader := Rdr} ->
+                    [Rdr]
+            end,
+
+            {ok, RdrLbl} = lv_label:create(CardFlex),
+            ok = lv_label:set_text(RdrLbl, CardTitle),
+            ok = lv_obj:add_style(RdrLbl, ItemTitleStyle),
+
             {ok, UserLbl} = lv_label:create(CardFlex),
-            ok = lv_label:set_text(UserLbl, UPN),
+            ok = lv_label:set_text(UserLbl, lists:join(<<", ">>, UPNs)),
 
             {ok, PinText} = lv_textarea:create(CardFlex),
             ok = lv_textarea:set_one_line(PinText, true),
@@ -877,21 +835,19 @@ login(info, {scard_result, {ok, Piv, _Rdr, SC0, CInfo}}, S0 = #?MODULE{}) ->
             ok = lv_label:set_text(CardBtnLbl, "Login"),
 
             {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
-                {login_pin, Slot, PinText}),
+                {login_pin, SI, PinText}),
             {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
-                {wait_release, {login_pin, Slot, PinText}}),
+                {wait_release, {login_pin, SI, PinText}}),
 
             [YkBtnEvent, YkAcEvent | Acc];
-        (_Slot, _Info, Acc) ->
+        (_SI, Acc) ->
             Acc
-    end, Evts1, maps:get(slots, CInfo, #{})),
-    S2 = S1#?MODULE{events = Evts1},
+    end, Evts1, CSlots),
+    S2 = S1#?MODULE{events = Evts2},
     {keep_state, S2};
 login(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-login(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
 
 login(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -913,57 +869,33 @@ login(info, {_, {login, UserText, PwText}}, S0 = #?MODULE{}) ->
     S1 = S0#?MODULE{creds = encrypt_creds(C0)},
     {next_state, check_login, S1};
 
-login(info, {_, {login_pin, Slot, PinText}}, S0 = #?MODULE{}) ->
+login(info, {_, {login_pin, SI, PinText}}, S0 = #?MODULE{}) ->
+    #{card_id := CardId, slot_id := SlotId} = SI,
     {ok, Pin} = lv_textarea:get_text(PinText),
-    S1 = S0#?MODULE{creds = encrypt_creds(#{slot => Slot, pin => Pin})},
+    S1 = S0#?MODULE{creds = encrypt_creds(#{slot_info => SI,
+                                            card_id => CardId,
+                                            slot_id => SlotId,
+                                            pin => Pin})},
     {next_state, check_pin, S1};
 
-login(info, {_, {login_epw, Slot, PinText, EPW}}, S0 = #?MODULE{}) ->
+login(info, {_, {login_epw, SI, PinText, EPW}}, S0 = #?MODULE{}) ->
+    #{card_id := CardId, slot_id := SlotId} = SI,
     {ok, Pin} = lv_textarea:get_text(PinText),
-    S1 = S0#?MODULE{creds = encrypt_creds(
-        #{slot => Slot, pin => Pin, epw => EPW})},
+    S1 = S0#?MODULE{creds = encrypt_creds(#{slot_info => SI,
+                                            card_id => CardId,
+                                            slot_id => SlotId,
+                                            pin => Pin,
+                                            epw => EPW})},
     {next_state, check_pin_epw, S1}.
 
-challenge_key(Piv, Slot, Key) ->
-    Alg = nist_piv:algo_for_key(Key),
-    Challenge = <<"rdpivy cak challenge", 0,
-        (crypto:strong_rand_bytes(16))/binary>>,
-    HashAlgo = case Alg of
-        rsa2048 -> sha512;
-        eccp256 -> sha256;
-        eccp384 -> sha384;
-        eccp521 -> sha512
-    end,
-    Hash = crypto:hash(HashAlgo, Challenge),
-    Input = case Alg of
-        rsa2048 ->
-            {ok, Info} = 'PKCS7':encode('DigestInfo', #'DigestInfo'{
-                digestAlgorithm = #'PKCS7AlgorithmIdentifier'{
-                    algorithm = ?'id-sha512',
-                    parameters = <<5,0>>},
-                digest = Hash}),
-            PadLen = 256 - byte_size(Info) - 3,
-            Pad = binary:copy(<<16#FF>>, PadLen),
-            <<16#00, 16#01, Pad/binary, 16#00, Info/binary>>;
-        _ ->
-            Hash
-    end,
-    case apdu_transform:command(Piv, {sign, Slot, Alg, Input}) of
-        {ok, [{ok, CardSig}]} ->
-            public_key:verify(Challenge, HashAlgo, CardSig, Key);
-        Err ->
-            lager:debug("error while challenging slot ~s: ~999p", [Slot, Err]),
-            false
+normalise_user_domain(UserOrUPN, #?MODULE{listener = L}) ->
+    [DefaultDomain | _] = rdpproxy:config([frontend, L, domains], [<<".">>]),
+    case string:split(UserOrUPN, "@") of
+        [U, D] -> {string:lowercase(unicode:characters_to_binary(U, utf8)),
+                   string:uppercase(unicode:characters_to_binary(D, utf8))};
+        [U] -> {string:lowercase(unicode:characters_to_binary(U, utf8)),
+                string:uppercase(unicode:characters_to_binary(DefaultDomain, utf8))}
     end.
-
-scard_disconnect(S0 = #?MODULE{piv = undefined}) ->
-    S0;
-scard_disconnect(S0 = #?MODULE{piv = Piv, scard = SC0}) ->
-    lager:debug("closing scard connection and handle"),
-    exit(Piv, kill),
-    {ok, SC1} = rdpdr_scard:disconnect(leave, SC0),
-    ok = rdpdr_scard:close(SC1),
-    S0#?MODULE{piv = undefined, scard = undefined}.
 
 check_pin(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying PIN...", S0),
@@ -976,74 +908,78 @@ check_pin(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     {next_state, dead, S0};
 check_pin(state_timeout, check, S0 = #?MODULE{creds = #{pin := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"PIN required">>}};
-check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
-                                              cinfo = CInfo, listener = L}) ->
-    #{slot := Slot, pin := PIN} = decrypt_creds(Creds0),
-    #{slots := #{piv_card_auth := CAKSlot, Slot := SlotInfo}} = CInfo,
-    #{pubkey := CAK} = CAKSlot,
-    #{pubkey := PubKey, upn := [UPN | _]} = SlotInfo,
-    case string:split(UPN, "@") of
-        [Username, _Domain] -> ok;
-        [Username] -> ok
-    end,
-    [DefaultDomain | _] = rdpproxy:config([frontend, L, domains], [<<".">>]),
-    Creds1 = Creds0#{username => iolist_to_binary(Username),
-                     domain => iolist_to_binary(DefaultDomain)},
-    UInfo = #{user => iolist_to_binary(Username), groups => []},
-    S1 = S0#?MODULE{creds = Creds1, uinfo = UInfo},
-    ok = apdu_transform:begin_transaction(Piv),
-    {ok, [{ok, _}]} = apdu_transform:command(Piv, select),
-    case challenge_key(Piv, piv_card_auth, CAK) of
-        true ->
-            case apdu_transform:command(Piv, {verify_pin, piv_pin, PIN}) of
-                {ok, [ok]} ->
-                    Screen = make_waiting_screen(
-                        "Challenging smartcard key...\n"
-                        "(Touch may be required)", S0),
-                    case challenge_key(Piv, Slot, PubKey) of
-                        true ->
-                            apdu_transform:end_transaction(Piv),
-                            prometheus_counter:inc(smartcard_auths_total),
-                            #?MODULE{srv = {FPid, _}} = S0,
-                            conn_ra:annotate(FPid, #{
-                                session => #{
-                                    user => iolist_to_binary(Username),
-                                    domain => iolist_to_binary(DefaultDomain),
-                                    ip => undefined
-                                    },
-                                duo_preauth => <<"bypass">>
-                                }),
-                            S2 = scard_disconnect(S1#?MODULE{screen = Screen}),
-                            {next_state, check_shell, S2};
-                        false ->
-                            apdu_transform:end_transaction(Piv),
-                            prometheus_counter:inc(auth_failures_total),
-                            ErrMsg = iolist_to_binary(io_lib:format(
-                                "Failed to validate Smartcard PIN (certificate "
-                                "verification failure)", [])),
-                            {next_state, login, S0#?MODULE{errmsg = ErrMsg}}
-                    end;
-                {ok, [{error, bad_auth, Attempts}]} ->
-                    apdu_transform:end_transaction(Piv),
-                    prometheus_counter:inc(auth_failures_total),
-                    ErrMsg = iolist_to_binary(io_lib:format(
-                        "Failed to validate Smartcard PIN, ~B attempts left",
-                        [Attempts])),
-                    {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
-                Err ->
-                    lager:debug("apdu err = ~999p", [Err]),
-                    apdu_transform:end_transaction(Piv),
-                    ErrMsg = <<"Failed to communicate with smartcard.">>,
-                    {next_state, login, S0#?MODULE{errmsg = ErrMsg}}
-            end;
-        false ->
-            apdu_transform:end_transaction(Piv),
+check_pin(state_timeout, check, S0 = #?MODULE{creds = Creds0,
+                                              scard = SCard,
+                                              listener = L}) ->
+    #{card_id := CardId, slot_id := SlotId, slot_info := SI, pin := PIN} =
+        decrypt_creds(Creds0),
+    #{card_id := CardId, slot_id := SlotId} = SI,
+
+    #{upn := [UPN | _]} = SI,
+    [DomainRaw | _] = rdpproxy:config([frontend, L, domains], [<<".">>]),
+    Domain = string:uppercase(unicode:characters_to_binary(DomainRaw, utf8)),
+    {Username, _CertDomain} = normalise_user_domain(UPN, S0),
+
+    Creds1 = Creds0#{username => Username, domain => Domain},
+    UInfo = #{user => Username, groups => []},
+
+    Screen = make_waiting_screen("Challenging smartcard key...\n"
+        "(Touch may be required)", S0),
+    S1 = S0#?MODULE{creds = Creds1, uinfo = UInfo, screen = Screen},
+
+    R = scard_auth_fsm:transaction(SCard, CardId, [
+        {verify_pin, PIN}, {challenge, SlotId} ]),
+    case R of
+        {ok, _} ->
+            prometheus_counter:inc(smartcard_auths_total),
+            #?MODULE{srv = {FPid, _}} = S1,
+            conn_ra:annotate(FPid, #{
+                session => #{
+                    user => Username,
+                    domain => Domain,
+                    ip => undefined
+                    },
+                smartcard_used => maps:remove(dn,
+                    maps:remove(pubkey, maps:remove(cert, SI)))
+                }),
+            {next_state, check_mfa, S1};
+        {error, verify_pin, verification_failed} ->
             prometheus_counter:inc(auth_failures_total),
-            lager:debug("CAK verification failed"),
-            {next_state, login, S0#?MODULE{
-                errmsg = <<"Failed to validate Smartcard PIN "
-                    "(CAK verification failure)">>}}
-    end.
+            ErrMsg = <<"Smartcard is invalid or faulty ",
+                "(CAK verification failed)">>,
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, verify_pin, {bad_auth, Attempts}} ->
+            prometheus_counter:inc(auth_failures_total),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Incorrect Smartcard PIN, ~B attempts left",
+                [Attempts])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, challenge, verification_failed} ->
+            prometheus_counter:inc(auth_failures_total),
+            ErrMsg = <<"Invalid Smartcard (signature "
+                "verification failure)">>,
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, verify_pin, Why} ->
+            lager:debug("verify pin err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard during PIN verification:\n"
+                "~p", [Why])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, challenge, Why} ->
+            lager:debug("challenge err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard while signing challenge:\n"
+                "~p", [Why])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, Why} ->
+            lager:debug("transaction err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard:\n"
+                "~p", [Why])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}}
+    end;
+check_pin(_, _, #?MODULE{}) ->
+    {keep_state_and_data, [postpone]}.
 
 check_pin_epw(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying PIN...", S0),
@@ -1056,72 +992,75 @@ check_pin_epw(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     {next_state, dead, S0};
 check_pin_epw(state_timeout, check, S0 = #?MODULE{creds = #{pin := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"PIN required">>}};
-check_pin_epw(state_timeout, check, S0 = #?MODULE{creds = Creds0, piv = Piv,
-                                                  cinfo = CInfo, listener = L}) ->
-    #{slot := Slot, pin := PIN, epw := EPW} = decrypt_creds(Creds0),
+check_pin_epw(state_timeout, check, S0 = #?MODULE{creds = Creds0,
+                                                  scard = SCard}) ->
+    Creds1 = decrypt_creds(Creds0),
+    #{card_id := CardId, slot_id := SlotId, slot_info := SI, pin := PIN,
+      epw := EPW} = Creds1,
+    #{card_id := CardId, slot_id := SlotId} = SI,
+
     #{username := UPN} = EPW,
-    #{slots := #{piv_card_auth := CAKSlot, Slot := SlotInfo}} = CInfo,
-    #{pubkey := CAK} = CAKSlot,
-    [Username | _Domain] = string:split(UPN, "@"),
-    [DefaultDomain | _] = rdpproxy:config([frontend, L, domains], [<<".">>]),
-    Creds1 = Creds0#{username => iolist_to_binary(Username),
-                     domain => iolist_to_binary(DefaultDomain)},
-    UInfo = #{user => iolist_to_binary(Username), groups => []},
-    S1 = S0#?MODULE{creds = Creds1, uinfo = UInfo},
-    ok = apdu_transform:begin_transaction(Piv),
-    {ok, [{ok, _}]} = apdu_transform:command(Piv, select),
-    case challenge_key(Piv, piv_card_auth, CAK) of
-        true ->
-            case apdu_transform:command(Piv, {verify_pin, piv_pin, PIN}) of
-                {ok, [ok]} ->
-                    Screen = make_waiting_screen(
-                        "Challenging smartcard key...\n"
-                        "(Touch may be required)", S0),
-                    case scard_saved_pw_ra:decrypt(EPW, Piv, Slot) of
-                        {ok, Pw} ->
-                            apdu_transform:end_transaction(Piv),
-                            prometheus_counter:inc(smartcard_auths_total),
-                            #?MODULE{srv = {FPid, _}} = S0,
-                            conn_ra:annotate(FPid, #{
-                                session => #{
-                                    user => iolist_to_binary(Username),
-                                    domain => iolist_to_binary(DefaultDomain),
-                                    ip => undefined
-                                    },
-                                duo_preauth => <<"bypass">>
-                                }),
-                            S2 = scard_disconnect(S1#?MODULE{screen = Screen}),
-                            Creds2 = Creds1#{password => Pw},
-                            S3 = S2#?MODULE{creds = encrypt_creds(Creds2)},
-                            {next_state, check_login, S3};
-                        {error, _Why} ->
-                            apdu_transform:end_transaction(Piv),
-                            prometheus_counter:inc(auth_failures_total),
-                            ErrMsg = iolist_to_binary(io_lib:format(
-                                "Failed to decrypt Smartcard saved password", [])),
-                            {next_state, login, S0#?MODULE{errmsg = ErrMsg}}
-                    end;
-                {ok, [{error, bad_auth, Attempts}]} ->
-                    apdu_transform:end_transaction(Piv),
-                    prometheus_counter:inc(auth_failures_total),
-                    ErrMsg = iolist_to_binary(io_lib:format(
-                        "Failed to validate Smartcard PIN, ~B attempts left",
-                        [Attempts])),
-                    {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
-                Err ->
-                    lager:debug("apdu err = ~999p", [Err]),
-                    apdu_transform:end_transaction(Piv),
-                    ErrMsg = <<"Failed to communicate with smartcard.">>,
-                    {next_state, login, S0#?MODULE{errmsg = ErrMsg}}
-            end;
-        false ->
-            apdu_transform:end_transaction(Piv),
+    {Username, Domain} = normalise_user_domain(UPN, S0),
+
+    Creds2 = Creds1#{username => Username,
+                     domain => Domain},
+    UInfo = #{user => Username, groups => []},
+
+    Screen = make_waiting_screen("Decrypting credentials...\n"
+        "(Touch may be required)", S0),
+    S1 = S0#?MODULE{creds = encrypt_creds(Creds1), uinfo = UInfo,
+                    screen = Screen},
+
+    R = scard_auth_fsm:transaction(SCard, CardId, [
+        {verify_pin, PIN}, {decrypt_epw, SlotId, EPW} ]),
+    case R of
+        {ok, [ok, {ok, Pw}]} ->
+            prometheus_counter:inc(smartcard_auths_total),
+            #?MODULE{srv = {FPid, _}} = S0,
+            conn_ra:annotate(FPid, #{
+                session => #{
+                    user => Username,
+                    domain => Domain,
+                    ip => undefined
+                    },
+                smartcard_used => maps:remove(dn,
+                    maps:remove(pubkey, maps:remove(cert, SI)))
+                }),
+            Creds3 = Creds2#{password => Pw},
+            S2 = S1#?MODULE{creds = encrypt_creds(Creds3)},
+            {next_state, check_login, S2};
+        {error, verify_pin, verification_failed} ->
             prometheus_counter:inc(auth_failures_total),
-            lager:debug("CAK verification failed"),
-            {next_state, login, S0#?MODULE{
-                errmsg = <<"Failed to validate Smartcard "
-                    "(CAK verification failure)">>}}
-    end.
+            ErrMsg = <<"Smartcard is invalid or faulty ",
+                "(CAK verification failed)">>,
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, verify_pin, {bad_auth, Attempts}} ->
+            prometheus_counter:inc(auth_failures_total),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Incorrect Smartcard PIN, ~B attempts left",
+                [Attempts])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, verify_pin, Why} ->
+            lager:debug("verify pin err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard during PIN verification:\n"
+                "~p", [Why])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, decrypt_epw, Why} ->
+            lager:debug("decrypt_epw err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard while decrypting creds:\n"
+                "~p", [Why])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}};
+        {error, Why} ->
+            lager:debug("transaction err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard:\n"
+                "~p", [Why])),
+            {next_state, login, S0#?MODULE{errmsg = ErrMsg}}
+    end;
+check_pin_epw(_, _, #?MODULE{}) ->
+    {keep_state_and_data, [postpone]}.
 
 check_login(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Verifying login details...", S0),
@@ -1129,8 +1068,9 @@ check_login(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
 check_login(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-check_login(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+check_login(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 check_login(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
@@ -1140,7 +1080,7 @@ check_login(state_timeout, check, S0 = #?MODULE{creds = #{password := <<>>}}) ->
     {next_state, login, S0#?MODULE{errmsg = <<"Username and password required">>}};
 check_login(state_timeout, check, S0 = #?MODULE{creds = ECreds, srv = Srv}) ->
     Creds0 = decrypt_creds(ECreds),
-    #{username := Username, password := Password, domain := Domain} = Creds0,
+    #{username := Username, password := _, domain := Domain} = Creds0,
     {FPid, _} = Srv,
     case krb_auth:authenticate(Creds0) of
         {true, UInfo, Tgts} ->
@@ -1151,15 +1091,16 @@ check_login(state_timeout, check, S0 = #?MODULE{creds = ECreds, srv = Srv}) ->
                 }),
             S1 = S0#?MODULE{creds = encrypt_creds(Creds0#{tgts => Tgts}),
                             uinfo = UInfo},
-            S2 = scard_disconnect(S1),
-            {next_state, check_mfa, S2};
+            {next_state, check_mfa, S1};
 
         false ->
             lager:debug("auth for ~s failed", [Username]),
             prometheus_counter:inc(auth_failures_total),
             {next_state, login, S0#?MODULE{
                 errmsg = <<"Invalid username or password.">>}}
-    end.
+    end;
+check_login(_, _, #?MODULE{}) ->
+    {keep_state_and_data, [postpone]}.
 
 split_domain(UserDomain, #?MODULE{listener = L}) ->
     [DefaultDomain | _] = ValidDomains = rdpproxy:config(
@@ -1172,61 +1113,71 @@ split_domain(UserDomain, #?MODULE{listener = L}) ->
         [U] -> {DefaultDomain, U}
     end.
 
+check_mfa(enter, _PrevState, S0 = #?MODULE{mfa_bypass = undefined}) ->
+    Screen = make_waiting_screen("Checking MFA...", S0),
+    do_ping_annotate(S0),
+    Methods = rdpproxy:config([mfa, methods], [duo]),
+    {keep_state, S0#?MODULE{screen = Screen, mfa = Methods},
+     [{state_timeout, 0, check_bypass}]};
+check_mfa(state_timeout, check_bypass, S0 = #?MODULE{duoid = DuoId, creds = Creds}) ->
+    #{username := Username} = Creds,
+    case process_acl([mfa, bypass_acl], S0) of
+        allow ->
+            lager:debug("skipping MFA for ~p due to bypass_acl", [Username]),
+            S1 = S0#?MODULE{mfa_bypass = true},
+            check_epw(S1);
+        deny ->
+            case remember_ra:check({DuoId, Username}) of
+                true ->
+                    lager:debug("skipping MFA for ~p due to remember me", [Username]),
+                    S1 = S0#?MODULE{mfa_bypass = true},
+                    check_epw(S1);
+                false ->
+                    S1 = S0#?MODULE{mfa_bypass = false},
+                    check_mfa(enter, check_mfa, S1)
+            end
+    end;
 check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = []}) ->
+    Screen = make_waiting_screen("Checking MFA...", S0),
+    do_ping_annotate(S0),
     lager:error("no mfa methods remaining, bailing"),
-    {keep_state_and_data, [{state_timeout, 0, return_to_login}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, return_to_login}]};
 check_mfa(state_timeout, return_to_login, S0 = #?MODULE{errmsg = EM}) ->
     EM1 = case EM of
         undefined -> <<"No MFA methods configured.">>;
         _ -> EM
     end,
     {next_state, login, S0#?MODULE{errmsg = EM1}};
-check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = [NextMethod | Rest]}) ->
-    {keep_state_and_data, [{state_timeout, 0, next_method}]};
+check_mfa(enter, _PrevState, S0 = #?MODULE{mfa = [_ | _]}) ->
+    Screen = make_waiting_screen("Checking MFA...", S0),
+    do_ping_annotate(S0),
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 0, next_method}]};
 check_mfa(state_timeout, next_method, S0 = #?MODULE{mfa = [NextMethod | Rest]}) ->
+    S1 = S0#?MODULE{mfa = Rest},
+    lager:debug("mfa trying method ~p next...", [NextMethod]),
     case NextMethod of
-        duo -> {next_state, check_duo, S0};
-        smartcard -> {next_state, check_smartcard, S0};
-        okta -> {next_state, check_okta, S0}
-    end.
+        duo -> {next_state, check_duo, S1};
+        smartcard -> {next_state, check_smartcard, S1};
+        okta -> {next_state, check_okta, S1}
+    end;
+check_mfa(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+check_mfa(_, _, #?MODULE{}) ->
+    {keep_state_and_data, [postpone]}.
 
 check_duo(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Checking Duo MFA...", S0),
     do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, {preauth, 3}}]};
 check_duo(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 check_duo(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-check_duo(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
-check_duo(state_timeout, check_bypass, S0 = #?MODULE{
-            creds = Creds = #{epw := EPW}, uinfo = UInfo0}) ->
-    #{public_key := PubKey} = EPW,
-    scard_saved_pw_ra:bump_password(PubKey),
-    lager:debug("skipping duo due to epw saved creds"),
-    {next_state, check_shell, S0};
-check_duo(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
-    #{username := Username} = Creds,
-    #?MODULE{peer = Peer, cinfo = CardInfo, uinfo = UInfo0} = S0,
-    UInfo1 = UInfo0#{card_info => CardInfo, client_ip => Peer},
-    SkipDuoACL = rdpproxy:config([mfa, bypass_acl], [{deny, everybody}]),
-    Now = erlang:system_time(second),
-    UCtx = #{time => Now, pool_availability => #{}},
-    case session_ra:process_rules(UInfo1, UCtx, SkipDuoACL) of
-        allow ->
-            case CardInfo of
-                #{slots := #{piv_card_auth := #{valid := true},
-                             piv_key_mgmt := #{pubkey := _PubKey}}} ->
-                    {next_state, offer_epw, S0};
-                _ ->
-                    lager:debug("mfa bypass for ~s", [Username]),
-                    {next_state, check_shell, S0}
-            end;
-        deny ->
-            {keep_state, S0, [{state_timeout, 100, {preauth, 3}}]}
-    end;
+check_duo(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 check_duo(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                                                 duo = Duo, peer = Peer,
                                                 duoid = DuoId}) ->
@@ -1251,14 +1202,13 @@ check_duo(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
             lager:debug("duo preauth said enroll for ~p: bypassing", [Username]),
             {next_state, check_mfa, S0};
         {ok, #{<<"result">> := <<"enroll">>}} ->
-            #?MODULE{mfa = [duo | Rest]} = S0,
-            S1 = S0#?MODULE{mfa = Rest, errmsg =
+            S1 = S0#?MODULE{errmsg =
                 <<"Duo MFA required but not enrolled.\n"
                   "Visit auth.uq.edu.au in a web browser to set up.">>},
             {next_state, check_mfa, S1};
         {ok, #{<<"result">> := <<"allow">>}} ->
             lager:debug("duo bypass for ~p", [Username]),
-            {next_state, check_shell, S0};
+            check_epw(S0);
         {ok, #{<<"result">> := <<"auth">>, <<"devices">> := Devs0 = [_Dev1 | _]} = RR} ->
             Devs1 = case RR of
                 #{<<"verification_code">> := Code} ->
@@ -1269,32 +1219,20 @@ check_duo(state_timeout, {preauth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                 _ -> Devs0
             end,
             S1 = S0#?MODULE{duodevs = Devs1},
-            case remember_ra:check({DuoId, Username}) of
-                true ->
-                    lager:debug("skipping duo for ~p due to remember me", [Username]),
-                    {next_state, check_shell, S1};
-                false ->
-                    lager:debug("sending ~p to duo screen", [Username]),
-                    {next_state, duo_choice, S1}
-            end;
+            lager:debug("sending ~p to duo screen", [Username]),
+            {next_state, duo_choice, S1};
         {ok, #{<<"result">> := <<"deny">>, <<"status_msg">> := Msg}} ->
             S1 = S0#?MODULE{errmsg = Msg},
             lager:debug("duo deny for ~p: ~p (id = ~p)", [Username, Msg, DuoId]),
-            {next_state, login, S1};
+            {next_state, check_mfa, S1};
         {error, {error, timeout}} when (N > 0) ->
             lager:debug("timed out doing duo preauth, trying again"),
             {keep_state_and_data, [{state_timeout, 100, {preauth, N - 1}}]};
         Else ->
             lager:debug("duo preauth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
-            case remember_ra:check({DuoId, Username}) of
-                true ->
-                    lager:debug("skipping duo for ~p due to remember me", [Username]),
-                    {next_state, check_shell, S0};
-                false ->
-                    Msg = iolist_to_binary(io_lib:format("Error contacting Duo MFA:\n~p", [Else])),
-                    S1 = S0#?MODULE{errmsg = Msg},
-                    {next_state, login, S1}
-            end
+            Msg = iolist_to_binary(io_lib:format("Error contacting Duo MFA:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, check_mfa, S1}
     end.
 
 check_smartcard(enter, _PrevState, S0 = #?MODULE{}) ->
@@ -1306,48 +1244,273 @@ check_smartcard(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef})
 check_smartcard(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-check_smartcard(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+check_smartcard(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
+check_smartcard(state_timeout, check,
+        S0 = #?MODULE{creds = #{card_id := _, slot_id := _, epw := _}}) ->
+    check_epw(S0);
+check_smartcard(state_timeout, check,
+        S0 = #?MODULE{creds = #{card_id := _, slot_id := _, pin := _}}) ->
+    check_epw(S0);
+check_smartcard(state_timeout, check, S0 = #?MODULE{cslots = undefined}) ->
+    {next_state, check_mfa, S0};
+check_smartcard(state_timeout, check, S0 = #?MODULE{cslots = []}) ->
+    {next_state, check_mfa, S0};
 check_smartcard(state_timeout, check, S0 = #?MODULE{}) ->
-    #?MODULE{mfa = [smartcard | Rest]} = S0,
-    S1 = S0#?MODULE{mfa = Rest},
-    {next_state, check_mfa, S1}.
+    Slots = scard_mfa_slots_for_user(S0),
+    case Slots of
+        [] ->
+            {next_state, check_mfa, S0};
+        [_|_] ->
+            {next_state, scard_mfa_select, S0}
+    end.
+
+scard_mfa_slots_for_user(S0 = #?MODULE{creds = Creds, cslots = Slots}) ->
+    #{username := UserOrUPN} = Creds,
+    {User, _Domain} = normalise_user_domain(UserOrUPN, S0),
+    lists:foldl(fun
+        (SI = #{upn := UPNs, card_id := CardId, slot_id := SlotId}, Acc) ->
+            HasUPN = lists:any(fun (UPN) ->
+                {SlotUser, _SlotDomain} = normalise_user_domain(UPN, S0),
+                User =:= SlotUser
+            end, UPNs),
+            CredsCheck = Creds#{card_id => CardId, slot_id => SlotId},
+            SCheck = S0#?MODULE{creds = CredsCheck},
+            HasACL = process_acl([smartcard, mfa_acl], SCheck) =:= allow,
+            if
+                HasUPN ->
+                    [#{match => upn, slot => SI} | Acc];
+                HasACL ->
+                    [#{match => acl, slot => SI} | Acc];
+                true ->
+                    Acc
+            end;
+        (_, Acc) ->
+            Acc
+    end, [], Slots).
+
+scard_mfa_select(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst,
+                                                  scard = SCard}) ->
+    #{group := GroupStyle, title := TitleStyle, instruction := InstrStyle,
+      role := RoleStyle, item_title := ItemTitleStyle} = Sty,
+    {Screen, Flex} = make_screen(S0),
+    {ok, InpGroup} = lv_group:create(Inst),
+
+    {ok, Text} = lv_span:create(Flex),
+    ok = lv_obj:set_size(Text, {{percent, 100}, content}),
+    ok = lv_span:set_mode(Text, break),
+
+    {ok, Title} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Title, rdpproxy:config([ui, title_mfa])),
+    ok = lv_span:set_style(Title, TitleStyle),
+
+    {ok, Instr} = lv_span:new_span(Text),
+    ok = lv_span:set_text(Instr, [$\n, rdpproxy:config([ui, instruction_mfa])]),
+    ok = lv_span:set_style(Instr, InstrStyle),
+
+    S1 = case S0 of
+        #?MODULE{errmsg = undefined} -> S0;
+        #?MODULE{errmsg = ErrMsg} ->
+            {ok, ErrOuter} = lv_obj:create(Inst, Flex),
+            ok = lv_obj:add_style(ErrOuter, GroupStyle),
+            {ok, ErrLbl} = lv_label:create(ErrOuter),
+            ok = lv_label:set_text(ErrLbl, ErrMsg),
+            ok = lv_obj:set_style_text_color(ErrLbl, lv_color:darken(red, 2)),
+            S0#?MODULE{errmsg = undefined}
+    end,
+
+    Slots = scard_mfa_slots_for_user(S1),
+
+    Evts0 = lists:foldl(fun
+        (#{match := M, slot := SI = #{card_id := CID, upn := UPNs}}, Acc) ->
+            CardFlex = make_group(Flex, 16#f2c2, S0),
+
+            {ok, CardInfo} = scard_auth_fsm:get_card(SCard, CID),
+            CardTitle = case CardInfo of
+                #{yk_serial := Serial, yk_version := {Maj, _, _}} ->
+                    [<<"YubiKey ">>, integer_to_binary(Maj), <<" #">>,
+                     integer_to_binary(Serial)];
+                #{reader := Rdr} ->
+                    [Rdr]
+            end,
+
+            {ok, RdrLbl} = lv_label:create(CardFlex),
+            ok = lv_label:set_text(RdrLbl, CardTitle),
+            ok = lv_obj:add_style(RdrLbl, ItemTitleStyle),
+
+            {ok, UserLbl} = lv_label:create(CardFlex),
+            ok = lv_label:set_text(UserLbl, lists:join(<<", ">>, UPNs)),
+
+            case M of
+                acl ->
+                    {ok, WhyLbl} = lv_label:create(CardFlex),
+                    ok = lv_obj:add_style(WhyLbl, RoleStyle),
+                    ok = lv_label:set_text(WhyLbl, "(matched by MFA exception rule)");
+                _ -> ok
+            end,
+
+            {ok, PinText} = lv_textarea:create(CardFlex),
+            ok = lv_textarea:set_one_line(PinText, true),
+            ok = lv_textarea:set_text_selection(PinText, true),
+            ok = lv_textarea:set_placeholder_text(PinText, "PIN"),
+            #?MODULE{pinchars = PinChars} = S0,
+            ok = lv_textarea:set_accepted_chars(PinText, PinChars),
+            ok = lv_textarea:set_password_mode(PinText, true),
+            ok = lv_group:add_obj(InpGroup, PinText),
+
+            {ok, CardBtn} = lv_btn:create(CardFlex),
+            {ok, CardBtnLbl} = lv_label:create(CardBtn),
+            ok = lv_label:set_text(CardBtnLbl, "Verify"),
+
+            {ok, YkBtnEvent, _} = lv_event:setup(CardBtn, short_clicked,
+                {login_pin, SI, PinText}),
+            {ok, YkAcEvent, _} = lv_event:setup(PinText, ready,
+                {wait_release, {login_pin, SI, PinText}}),
+
+            [YkBtnEvent, YkAcEvent | Acc];
+        (_, Acc) ->
+            Acc
+    end, [], Slots),
+
+    {ok, CheckOuter} = lv_obj:create(Inst, Flex),
+    ok = lv_obj:add_style(CheckOuter, GroupStyle),
+
+    {ok, RememberCheck} = lv_checkbox:create(CheckOuter),
+    ok = lv_checkbox:set_text(RememberCheck, "Remember this computer (skip MFA for next 10 hours)"),
+
+    {ok, CancelBtn} = lv_btn:create(Flex),
+    {ok, CancelBtnLbl} = lv_label:create(CancelBtn),
+    ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
+    {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
+    Evts1 = [CancelEvt | Evts0],
+
+    ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
+
+    ok = lv_indev:set_group(Inst, keyboard, InpGroup),
+
+    {keep_state, S1#?MODULE{screen = Screen, events = Evts1,
+                            rmbrchk = RememberCheck}};
+scard_mfa_select(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+scard_mfa_select(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+scard_mfa_select(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
+    ok = lv_indev:wait_release(Inst, keyboard),
+    scard_mfa_select(info, {Ref, Evt}, S0);
+scard_mfa_select(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {next_state, scard_mfa_select, S0#?MODULE{cslots = Slots}};
+scard_mfa_select(info, {_, cancel}, S0 = #?MODULE{creds = Creds0}) ->
+    Creds1 = maps:remove(card_id,
+        maps:remove(slot_id, maps:remove(slot_info, Creds0))),
+    {next_state, check_mfa, S0#?MODULE{creds = Creds1}};
+scard_mfa_select(info, {_, {login_pin, SI, PinText}},
+                 S0 = #?MODULE{creds = Creds0, rmbrchk = RmbrChk}) ->
+    Creds1 = decrypt_creds(Creds0),
+    #{card_id := CardId, slot_id := SlotId} = SI,
+    {ok, RememberMe} = lv_checkbox:is_checked(RmbrChk),
+    SCC = #{remember_me => RememberMe},
+    {ok, Pin} = lv_textarea:get_text(PinText),
+    S1 = S0#?MODULE{creds = encrypt_creds(Creds1#{slot_info => SI,
+                                                  card_id => CardId,
+                                                  slot_id => SlotId,
+                                                  pin => Pin,
+                                                  scard => SCC})},
+    {next_state, scard_mfa_check_pin, S1}.
+
+scard_mfa_check_pin(enter, _PrevState, S0 = #?MODULE{}) ->
+    Screen = make_waiting_screen("Verifying PIN...", S0),
+    do_ping_annotate(S0),
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 200, check}]};
+scard_mfa_check_pin(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
+    {stop, normal, S0};
+scard_mfa_check_pin(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
+    rdp_server:close(Srv),
+    {next_state, dead, S0};
+scard_mfa_check_pin(state_timeout, check, S0 = #?MODULE{creds = #{pin := <<>>}}) ->
+    {next_state, scard_mfa_select, S0#?MODULE{errmsg = <<"PIN required">>}};
+scard_mfa_check_pin(state_timeout, check,
+                    S0 = #?MODULE{creds = Creds0, scard = SCard}) ->
+    Creds1 = decrypt_creds(Creds0),
+    #{card_id := CardId, slot_id := SlotId, slot_info := SI, pin := PIN,
+      username := Username} = Creds1,
+    #{card_id := CardId, slot_id := SlotId} = SI,
+    SCC = maps:get(scard, Creds0, #{}),
+    RememberMe = maps:get(remember_me, SCC, false),
+    Screen = make_waiting_screen("Challenging smartcard key...\n"
+        "(Touch may be required)", S0),
+    S1 = S0#?MODULE{screen = Screen},
+    R = scard_auth_fsm:transaction(SCard, CardId, [
+        {verify_pin, PIN}, {challenge, SlotId} ]),
+    case R of
+        {ok, _} ->
+            #?MODULE{srv = {FPid, _}} = S1,
+            conn_ra:annotate(FPid, #{
+                smartcard_used => maps:remove(dn,
+                    maps:remove(pubkey, maps:remove(cert, SI)))
+                }),
+            case RememberMe of
+                false -> ok;
+                true ->
+                    #?MODULE{duoid = DuoId} = S1,
+                    ok = remember_ra:remember({DuoId, Username})
+            end,
+            check_epw(S1);
+        {error, verify_pin, verification_failed} ->
+            prometheus_counter:inc(auth_failures_total),
+            ErrMsg = <<"Smartcard is invalid or faulty ",
+                "(CAK verification failed)">>,
+            {next_state, scard_mfa_select, S1#?MODULE{errmsg = ErrMsg}};
+        {error, verify_pin, {bad_auth, Attempts}} ->
+            prometheus_counter:inc(auth_failures_total),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Incorrect Smartcard PIN, ~B attempts left",
+                [Attempts])),
+            {next_state, scard_mfa_select, S1#?MODULE{errmsg = ErrMsg}};
+        {error, challenge, verification_failed} ->
+            prometheus_counter:inc(auth_failures_total),
+            ErrMsg = <<"Invalid Smartcard (signature "
+                "verification failure)">>,
+            {next_state, scard_mfa_select, S1#?MODULE{errmsg = ErrMsg}};
+        {error, verify_pin, Why} ->
+            lager:debug("verify pin err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard during PIN verification:\n"
+                "~p", [Why])),
+            {next_state, scard_mfa_select, S1#?MODULE{errmsg = ErrMsg}};
+        {error, challenge, Why} ->
+            lager:debug("challenge err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard while signing challenge:\n"
+                "~p", [Why])),
+            {next_state, scard_mfa_select, S1#?MODULE{errmsg = ErrMsg}};
+        {error, Why} ->
+            lager:debug("transaction err = ~999p", [Why]),
+            ErrMsg = iolist_to_binary(io_lib:format(
+                "Error communicating with Smartcard:\n"
+                "~p", [Why])),
+            {next_state, scard_mfa_select, S1#?MODULE{errmsg = ErrMsg}}
+    end;
+scard_mfa_check_pin(_, _, #?MODULE{}) ->
+    {keep_state_and_data, [postpone]}.
 
 check_okta(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Checking Okta MFA...", S0),
     do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check_bypass}]};
+    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, {begin_auth, 3}}]};
 check_okta(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
 check_okta(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-check_okta(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
-check_okta(state_timeout, check_bypass, S0 = #?MODULE{creds = Creds, uinfo = UInfo0}) ->
-    #{username := Username} = Creds,
-    #?MODULE{peer = Peer, cinfo = CardInfo, uinfo = UInfo0} = S0,
-    UInfo1 = UInfo0#{card_info => CardInfo, client_ip => Peer},
-    SkipACL = rdpproxy:config([mfa, bypass_acl], [{deny, everybody}]),
-    Now = erlang:system_time(second),
-    UCtx = #{time => Now, pool_availability => #{}},
-    case session_ra:process_rules(UInfo1, UCtx, SkipACL) of
-        allow ->
-            case CardInfo of
-                #{slots := #{piv_card_auth := #{valid := true},
-                             piv_key_mgmt := #{pubkey := _PubKey}}} ->
-                    {next_state, offer_epw, S0};
-                _ ->
-                    lager:debug("mfa bypass for ~s", [Username]),
-                    {next_state, check_shell, S0}
-            end;
-        deny ->
-            {keep_state, S0, [{state_timeout, 100, {begin_auth, 3}}]}
-    end;
+check_okta(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 check_okta(state_timeout, {begin_auth, N}, S0 = #?MODULE{creds = Creds, srv = Srv,
                                                 okta = Okta, peer = Peer,
                                                 duoid = DuoId, tsudcore = TsudCore}) ->
-    {FPid, _} = Srv,
     #{username := Username} = Creds,
 
     Caps = rdp_server:get_caps(Srv),
@@ -1375,21 +1538,15 @@ check_okta(state_timeout, {begin_auth, N}, S0 = #?MODULE{creds = Creds, srv = Sr
         {error, Msgs, next_steps, _Steps} ->
             lager:debug("okta error: ~p", [Msgs]),
             S1 = okta_msgs_to_errmsg(Msgs, S0),
-            {next_state, login, S1};
+            {next_state, check_mfa, S1};
         {error, {error, timeout}} when (N > 0) ->
             lager:debug("timed out doing okta begin_auth, trying again"),
             {keep_state_and_data, [{state_timeout, 100, {begin_auth, N - 1}}]};
         Else ->
             lager:debug("okta begin_auth else for ~p: ~p (id = ~p)", [Username, Else, DuoId]),
-            case remember_ra:check({DuoId, Username}) of
-                true ->
-                    lager:debug("skipping okta for ~p due to remember me", [Username]),
-                    {next_state, check_shell, S0};
-                false ->
-                    Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
-                    S1 = S0#?MODULE{errmsg = Msg},
-                    {next_state, login, S1}
-            end
+            Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
+            S1 = S0#?MODULE{errmsg = Msg},
+            {next_state, check_mfa, S1}
     end.
 
 okta_add_step(Type, Info, S0 = #?MODULE{creds = Creds0}) when is_map(Info) ->
@@ -1423,7 +1580,7 @@ okta_finish(Tokens, S0 = #?MODULE{srv = {FPid,_}, creds = Creds0, duoid = DuoId}
         false -> ok;
         true -> ok = remember_ra:remember({DuoId, U})
     end,
-    {next_state, check_shell, S1}.
+    check_epw(S1).
 
 okta_next(#{device_challenge_poll := _}, S0 = #?MODULE{okta = Okta}) ->
     lager:debug("cancelling device_challenge_poll"),
@@ -1437,12 +1594,12 @@ okta_next(#{device_challenge_poll := _}, S0 = #?MODULE{okta = Okta}) ->
         {error, Msgs, next_steps, _Steps} ->
             lager:debug("okta error: ~p", [Msgs]),
             S1 = okta_msgs_to_errmsg(Msgs, S0),
-            {next_state, login, S1};
+            {next_state, check_mfa, S1};
         Else ->
             lager:debug("okta else: ~p", [Else]),
             Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
             S1 = S0#?MODULE{errmsg = Msg},
-            {next_state, login, S1}
+            {next_state, check_mfa, S1}
     end;
 okta_next(#{identify := _}, S0 = #?MODULE{okta = Okta, creds = Creds}) ->
     #{username := Username} = Creds,
@@ -1460,12 +1617,12 @@ okta_next(#{identify := _}, S0 = #?MODULE{okta = Okta, creds = Creds}) ->
         {error, Msgs, next_steps, _Steps} ->
             lager:debug("okta error: ~p", [Msgs]),
             S1 = okta_msgs_to_errmsg(Msgs, S0),
-            {next_state, login, S1};
+            {next_state, check_mfa, S1};
         Else ->
             lager:debug("okta else: ~p", [Else]),
             Msg = iolist_to_binary(io_lib:format("Error contacting Okta:\n~p", [Else])),
             S1 = S0#?MODULE{errmsg = Msg},
-            {next_state, login, S1}
+            {next_state, check_mfa, S1}
     end;
 okta_next(#{challenge_authenticator := #{authenticator := {password,_,_}}},
           S0 = #?MODULE{okta = Okta, creds = ECreds}) ->
@@ -1546,16 +1703,16 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
             S0#?MODULE{errmsg = undefined}
     end,
 
-    {HasWebAuthn, Ewa} = case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
-        {ok, Pid} when is_pid(Pid) -> {true, Pid};
-        _ -> {false, none}
+    HasWebAuthn = case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
+        {ok, Pid} when is_pid(Pid) -> true;
+        _ -> false
     end,
 
     {ok, #{properties := #{authenticator := {choice, _, Options}}}} =
         okta:rinfo(Okta, select_authenticator),
 
     Evts0 = lists:foldl(fun
-        (#{authenticator := {webauthn, Com, EIs}, label := Label}, Acc0) ->
+        (#{authenticator := {webauthn, _Com, EIs}, label := Label}, Acc0) ->
             DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
             DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
@@ -1692,8 +1849,6 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
     Evts1 = [CancelEvt | Evts0],
 
-    %% TODO: add yubikey and u2f devices?
-
     ok = lv_scr:load_anim(Inst, Screen, fade_in, 50, 0, true),
 
     ok = lv_indev:set_group(Inst, keyboard, InpGroup),
@@ -1708,12 +1863,12 @@ okta_select(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
 okta_select(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
     ok = lv_indev:wait_release(Inst, keyboard),
     okta_select(info, {Ref, Evt}, S0);
-okta_select(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
-okta_select(info, {_, cancel}, S0 = #?MODULE{}) ->
-    #?MODULE{creds = #{username := U}} = S0,
-    Creds1 = #{username => U},
-    {next_state, login, S0#?MODULE{creds = Creds1}};
+okta_select(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
+okta_select(info, {_, cancel}, S0 = #?MODULE{creds = Creds0}) ->
+    Creds1 = maps:remove(okta, Creds0),
+    {next_state, check_mfa, S0#?MODULE{creds = Creds1}};
 okta_select(info, {_, {select, Btn, Payload}}, S0 = #?MODULE{}) ->
     #?MODULE{creds = Creds0, rmbrchk = RmbrChk, okta = Okta} = S0,
     ok = lv_obj:add_state(Btn, disabled),
@@ -1746,8 +1901,8 @@ okta_select(info, {_, {select, Btn, Payload}}, S0 = #?MODULE{}) ->
     end.
 
 okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
-    #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
-      group := GroupStyle, item_title := ItemTitleStyle} = Sty,
+    #{row := RowStyle, title := TitleStyle, group := GroupStyle,
+      item_title := ItemTitleStyle} = Sty,
 
     {Screen, Flex} = make_screen(S0),
     {ok, InpGroup} = lv_group:create(Inst),
@@ -1758,7 +1913,7 @@ okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = 
         Methods = maps:get(methods, EI, maps:get(methods, Com)),
         lists:member(Method, Methods)
     end, EIs),
-    [MethodEI | _] = MethodEIs,
+
     DevNames = lists:uniq([D || #{device_name := D} <- MethodEIs]),
     DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
@@ -1818,7 +1973,7 @@ okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = 
             ok = lv_group:add_obj(InpGroup, CodeText),
             {undefined, InpMap0#{Path => CodeText}};
 
-        (Path = [Name | _], {choice, _, Choices}, InpMap0) ->
+        (Path, {choice, _, Choices}, InpMap0) ->
             Labels = [L || #{label := L} <- Choices],
             LabelMap = maps:from_list(lists:zip(
                 lists:seq(0, length(Labels)),
@@ -1849,7 +2004,7 @@ okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = 
 
     Evts1 = maps:fold(fun
         (_Path, {_Widget, _IdxMap}, Acc) -> Acc;
-        (Path, Widget, Acc) ->
+        (_Path, Widget, Acc) ->
             case lv_obj:has_class(Widget, lv_textarea) of
                 true ->
                     {ok, Evt, _} = lv_event:setup(Widget, ready,
@@ -1868,7 +2023,7 @@ okta_enter_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = 
         (send, Acc) when AuthType =:= app ->
             Acc;
         (RType, Acc) ->
-            {ok, R = #{properties := Props}} = okta:rinfo(Okta, RType),
+            {ok, #{properties := Props}} = okta:rinfo(Okta, RType),
             RemText = string:titlecase(atom_to_binary(RType, utf8)),
             case maps:keys(Props) of
                 [] ->
@@ -1897,8 +2052,9 @@ okta_enter_code(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef})
 okta_enter_code(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-okta_enter_code(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+okta_enter_code(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 okta_enter_code(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
     ok = lv_obj:add_state(Btn, disabled),
     case okta:proceed(Okta, Rem) of
@@ -1981,7 +2137,6 @@ okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta})
       vcode := VCodeStyle, group := GroupStyle,
       item_title := ItemTitleStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
-    {ok, InpGroup} = lv_group:create(Inst),
 
     {ok, {AuthType, Com, EIs}} = okta:ainfo(Okta),
     #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
@@ -2068,7 +2223,7 @@ okta_poll(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta})
     ok = lv_obj:add_style(BtnRow, RowStyle),
 
     Evts = lists:foldl(fun (RType, Acc) ->
-        {ok, R = #{properties := Props}} = okta:rinfo(Okta, RType),
+        {ok, #{properties := Props}} = okta:rinfo(Okta, RType),
         RemText = string:titlecase(atom_to_binary(RType, utf8)),
         case maps:keys(Props) of
             [] ->
@@ -2095,8 +2250,9 @@ okta_poll(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 okta_poll(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-okta_poll(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+okta_poll(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 okta_poll(state_timeout, poll, S0 = #?MODULE{okta = Okta}) ->
     {ok, PollInfo} = okta:rinfo(Okta, challenge_poll),
     #{refresh := PollInterval} = PollInfo,
@@ -2155,14 +2311,12 @@ okta_poll(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
     end.
 
 okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Okta}) ->
-    #{row := RowStyle, title := TitleStyle, instruction := InstrStyle,
-      vcode := VCodeStyle, group := GroupStyle,
+    #{row := RowStyle, title := TitleStyle, group := GroupStyle,
       item_title := ItemTitleStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
-    {ok, InpGroup} = lv_group:create(Inst),
 
-    {ok, {AuthType, Com, EIs}} = okta:ainfo(Okta),
-    #{methods := [Method | _], remediations := Rems, name := AuthName} = Com,
+    {ok, {webauthn, Com, EIs}} = okta:ainfo(Okta),
+    #{remediations := Rems, name := AuthName} = Com,
     DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
     DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
 
@@ -2211,7 +2365,7 @@ okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Ok
     ok = lv_obj:add_style(BtnRow, RowStyle),
 
     Evts = lists:foldl(fun (RType, Acc) ->
-        {ok, R = #{properties := Props}} = okta:rinfo(Okta, RType),
+        {ok, #{properties := Props}} = okta:rinfo(Okta, RType),
         RemText = string:titlecase(atom_to_binary(RType, utf8)),
         case maps:keys(Props) of
             [] ->
@@ -2238,11 +2392,12 @@ okta_webauthn(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) -
 okta_webauthn(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-okta_webauthn(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+okta_webauthn(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 okta_webauthn(state_timeout, auth, S0 = #?MODULE{srv = Srv, okta = Okta}) ->
     {ok, Ewa} = rdp_server:get_dvchan_pid(Srv, rdpewa_fsm),
-    {ok, {webauthn, Com, EIs = [FirstEI | _]}} = okta:ainfo(Okta),
+    {ok, {webauthn, _Com, EIs = [FirstEI | _]}} = okta:ainfo(Okta),
 
     #{challenge := Challenge, app_id := AppId, uv_required := UVReq} = FirstEI,
 
@@ -2252,8 +2407,6 @@ okta_webauthn(state_timeout, auth, S0 = #?MODULE{srv = Srv, okta = Okta}) ->
             Acc#{CredIdBin => EI}
     end, #{}, EIs),
     CredIds = [#{id => CredId} || CredId <- maps:keys(CredIdMap)],
-    DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
-    DevName0 = iolist_to_binary(lists:join(<<", ">>, DevNames)),
 
     #{host := Host, scheme := <<"https">>} = uri_string:parse(AppId),
     CD = #{
@@ -2353,6 +2506,29 @@ okta_webauthn(info, {_, {proceed, Btn, Rem}}, S0 = #?MODULE{okta = Okta}) ->
             {next_state, login, S1}
     end.
 
+check_epw(S0 = #?MODULE{cslots = undefined}) ->
+    {next_state, check_shell, S0};
+check_epw(S0 = #?MODULE{cslots = []}) ->
+    {next_state, check_shell, S0};
+check_epw(S0 = #?MODULE{creds = #{epw := _}}) ->
+    {next_state, check_shell, S0};
+check_epw(S0 = #?MODULE{creds = C0 = #{password := _}, cslots = Slots = [_ | _]}) ->
+    EpwSlot = lists:search(fun
+        (#{slot_id := piv_key_mgmt,
+           pubkey := {#'ECPoint'{}, {namedCurve, _}}}) -> true;
+        (_) -> false
+    end, Slots),
+    case EpwSlot of
+        {value, #{card_id := CardId, slot_id := SlotId}} ->
+            C1 = maps:remove(pin, C0),
+            C2 = C1#{card_id => CardId, slot_id => SlotId},
+            {next_state, offer_epw, S0#?MODULE{creds = C2}};
+        _ ->
+            {next_state, check_shell, S0}
+    end;
+check_epw(S0 = #?MODULE{}) ->
+    {next_state, check_shell, S0}.
+
 offer_epw(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     #{row := RowStyle, title := TitleStyle, instruction := InstrStyle} = Sty,
     {Screen, Flex} = make_screen(S0),
@@ -2372,8 +2548,10 @@ offer_epw(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
 
     Group = make_group(Flex, 16#f084, S0),
 
-    #?MODULE{creds = #{username := U, domain := D},
-             cinfo = #{yk_serial := Serial}} = S0,
+    #?MODULE{scard = SCard,
+             creds = #{username := U, domain := D, card_id := CardId}} = S0,
+    {ok, #{yk_serial := Serial}} = scard_auth_fsm:get_card(SCard, CardId),
+
     {ok, Lbl} = lv_label:create(Group),
     ok = lv_label:set_text(Lbl, ["Pair YubiKey #", integer_to_binary(Serial),
         "\nwith account ", U, "@", D, "?"]),
@@ -2400,16 +2578,17 @@ offer_epw(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 offer_epw(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-offer_epw(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+offer_epw(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 offer_epw(info, {_, respond_no}, S0 = #?MODULE{}) ->
     lager:debug("refused epw offer"),
     {next_state, check_shell, S0};
-offer_epw(info, {_, respond_yes}, S0 = #?MODULE{}) ->
-    #?MODULE{cinfo = CardInfo, creds = ECreds} = S0,
-    Creds = decrypt_creds(ECreds),
-    #{username := Username, domain := Domain, password := Password} = Creds,
-    #{slots := #{piv_key_mgmt := #{pubkey := PubKey}}} = CardInfo,
+offer_epw(info, {_, respond_yes}, S0 = #?MODULE{scard = SCard, creds = ECreds}) ->
+    #{username := Username, domain := Domain, password := Password,
+      card_id := CardId, slot_id := SlotId} = decrypt_creds(ECreds),
+    {ok, _CI, SI} = scard_auth_fsm:get_slot(SCard, CardId, SlotId),
+    #{pubkey := PubKey} = SI,
     EPW = scard_saved_pw_ra:encrypt(Password, PubKey),
     UPN = iolist_to_binary([Username, $@, Domain]),
     ok = scard_saved_pw_ra:add_password(UPN, EPW),
@@ -2599,13 +2778,14 @@ duo_choice(info, {Ref, {wait_release, Evt}}, S0 = #?MODULE{inst = Inst}) ->
     ok = lv_indev:wait_release(Inst, keyboard),
     duo_choice(info, {Ref, Evt}, S0);
 
-duo_choice(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+duo_choice(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 
 duo_choice(info, {_, cancel}, S0 = #?MODULE{}) ->
-    #?MODULE{creds = #{username := U}} = S0,
-    Creds1 = #{username => U},
-    {next_state, login, S0#?MODULE{creds = Creds1}};
+    #?MODULE{creds = Creds0} = S0,
+    Creds1 = maps:remove(duo, Creds0),
+    {next_state, check_mfa, S0#?MODULE{creds = Creds1}};
 
 duo_choice(info, {_, {push, DevId}}, S0 = #?MODULE{}) ->
     #?MODULE{creds = Creds0, rmbrchk = RmbrChk} = S0,
@@ -2665,14 +2845,15 @@ duo_auth(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 duo_auth(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-duo_auth(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+duo_auth(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 duo_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                                              peer = Peer, duoid = DuoId}) ->
     #{username := U, duo := DuoCreds} = Creds,
     RememberMe = maps:get(remember_me, DuoCreds, false),
     case DuoCreds of
-        #{method := vpush, device := DevId, code := Code} ->
+        #{method := vpush, device := DevId, code := _} ->
             PushInfo0 = duo_client_info(S0),
             PushInfo1 = uri_string:compose_query(PushInfo0),
             Args = #{
@@ -2752,7 +2933,7 @@ duo_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                         false -> ok;
                         true -> ok = remember_ra:remember({DuoId, U})
                     end,
-                    {next_state, check_shell, S0};
+                    check_epw(S0);
                 Err = {error, _} ->
                     lager:debug("duo auth error: ~999p", [Err]),
                     S1 = S0#?MODULE{errmsg = "Error contacting Duo API"},
@@ -2779,7 +2960,7 @@ duo_auth(state_timeout, {check, N}, S0 = #?MODULE{creds = Creds, duo = Duo,
                         false -> ok;
                         true -> ok = remember_ra:remember({DuoId, U})
                     end,
-                    {next_state, check_shell, S0};
+                    check_epw(S0);
                 {error, {error, timeout}} when (N > 0) ->
                     lager:debug("duo auth call timed out, retrying"),
                     {keep_state_and_data, [{state_timeout, 500, {check, N}}]};
@@ -2861,8 +3042,9 @@ duo_async(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 duo_async(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-duo_async(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+duo_async(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 duo_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
     #?MODULE{creds = #{username := U, duo := DuoCreds}} = S0,
     RememberMe = maps:get(remember_me, DuoCreds, false),
@@ -2882,7 +3064,7 @@ duo_async(state_timeout, check, S0 = #?MODULE{duo = Duo, duotx = TxId}) ->
                 false -> ok;
                 true -> ok = remember_ra:remember({DuoId, U})
             end,
-            {next_state, check_shell, S0};
+            check_epw(S0);
         _ ->
             {keep_state, S0, [{state_timeout, 1000, check}]}
     end;
@@ -2943,7 +3125,7 @@ duo_push_code(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     ok = lv_label:set_text(CancelBtnLbl, "Cancel"),
     {ok, CancelEvt, _} = lv_event:setup(CancelBtn, short_clicked, cancel),
 
-    #?MODULE{res = {W, H}} = S0,
+    #?MODULE{res = {W, _H}} = S0,
     if
         (W >= 1600) ->
             {ok, Img} = lv_img:create(Screen),
@@ -2975,8 +3157,9 @@ duo_push_code(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
 
-duo_push_code(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+duo_push_code(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 
 duo_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
     #?MODULE{duotx = DuoTx} = S0,
@@ -2984,7 +3167,7 @@ duo_push_code(info, {_, {code, CodeText}}, S0 = #?MODULE{creds = Creds}) ->
     {ok, Code} = lv_textarea:get_text(CodeText),
     case {Code, DuoTx} of
         {WantCode, undefined} ->
-            {next_state, check_shell, S0};
+            check_epw(S0);
         {WantCode, _} ->
             {next_state, duo_async, S0};
         _ ->
@@ -3036,8 +3219,9 @@ check_shell(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 check_shell(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-check_shell(info, {scard_result, _}, #?MODULE{}) ->
-    keep_state_and_data;
+check_shell(info, {scard_ready, SCard}, S0 = #?MODULE{scard = SCard}) ->
+    {ok, Slots} = scard_auth_fsm:list_valid_slots(SCard),
+    {keep_state, S0#?MODULE{cslots = Slots}};
 check_shell(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
@@ -3161,7 +3345,7 @@ manual_host(state_timeout, check, S0 = #?MODULE{hostname = HostText0}) ->
     end;
 manual_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-manual_host(info, {scard_result, _}, #?MODULE{}) ->
+manual_host(info, {scard_ready, _}, #?MODULE{}) ->
     keep_state_and_data;
 manual_host(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
@@ -3172,26 +3356,32 @@ manual_host(info, {_, cancel}, S0 = #?MODULE{srv = Srv, rstate = check_shell}) -
 manual_host(info, {_, cancel}, S0 = #?MODULE{rstate = RState}) ->
     {next_state, RState, S0}.
 
-uinfo(#?MODULE{creds = Creds, uinfo = UInfo0, cinfo = CInfo, peer = ClientIP}) ->
+uinfo(#?MODULE{creds = Creds, uinfo = UInfo0, peer = ClientIP, scard = SCard}) ->
     % Always include the client IP as well as the basic user info from KRB5
     UInfo1 = UInfo0#{client_ip => ClientIP},
     % Only include the card_info if we used smartcard auth
     UInfo2 = case Creds of
-        #{slot := _, pin := _} -> UInfo1#{card_info => CInfo};
-        _ -> UInfo1
+        #{card_id := CardId, slot_id := SlotId} ->
+            {ok, CI, SI0} = scard_auth_fsm:get_slot(SCard, CardId, SlotId),
+            SI1 = maps:remove(pubkey, maps:remove(cert, SI0)),
+            {ok, _, CAKSI0} = scard_auth_fsm:get_slot(SCard, CardId, piv_card_auth),
+            CAKSI1 = maps:remove(pubkey, maps:remove(cert, CAKSI0)),
+            UInfo1#{card_info => CI#{slots =>
+                #{piv_card_auth => CAKSI1, SlotId => SI1}}};
+        _ ->
+            UInfo1
     end,
     UInfo2.
 
 process_acl(ConfigName, S0 = #?MODULE{}) ->
-    ACL = rdpproxy:config([ui, ConfigName], [{deny, everybody}]),
+    ACL = rdpproxy:config(ConfigName, [{deny, everybody}]),
     Now = erlang:system_time(second),
     Ctx = #{time => Now, pool_availability => #{}},
     session_ra:process_rules(uinfo(S0), Ctx, ACL).
 
 editing_host(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, edit_host = Dev}) ->
-    #{title := TitleStyle, role := RoleStyle, row := RowStyle,
-      group := GroupStyle, flex := FlexStyle} = Sty,
-    ShowAdmin = (process_acl(admin_acl, S0) =:= allow),
+    #{title := TitleStyle, row := RowStyle, group := GroupStyle,
+      flex := FlexStyle} = Sty,
 
     #{hostname := Hostname, ip := IP} = Dev,
     Desc = maps:get(desc, Dev, <<>>),
@@ -3265,7 +3455,7 @@ editing_host(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, edit_host 
     {keep_state, S0#?MODULE{screen = Screen, events = Evts}};
 editing_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-editing_host(info, {scard_result, _}, #?MODULE{}) ->
+editing_host(info, {scard_ready, _}, #?MODULE{}) ->
     keep_state_and_data;
 editing_host(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
@@ -3290,7 +3480,7 @@ pool_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 pool_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-pool_choice(info, {scard_result, _}, #?MODULE{}) ->
+pool_choice(info, {scard_ready, _}, #?MODULE{}) ->
     keep_state_and_data;
 pool_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
@@ -3301,8 +3491,8 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
 
     {ok, Pools} = session_ra:get_pools_for(uinfo(S0)),
 
-    ShowAdmin = (process_acl(admin_acl, S0) =:= allow),
-    ShowNMSPool = ShowAdmin orelse (process_acl(pool_nms_acl, S0) =:= allow),
+    ShowAdmin = (process_acl([ui, admin_acl], S0) =:= allow),
+    ShowNMSPool = ShowAdmin orelse (process_acl([ui, pool_nms_acl], S0) =:= allow),
 
     case Pools of
         [#{id := ID}] when (not ShowNMSPool) ->
@@ -3403,7 +3593,7 @@ pool_host_choice(enter, _PrevState, S0 = #?MODULE{}) ->
     {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 100, check}]};
 pool_host_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-pool_host_choice(info, {scard_result, _}, #?MODULE{}) ->
+pool_host_choice(info, {scard_ready, _}, #?MODULE{}) ->
     keep_state_and_data;
 pool_host_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
@@ -3632,7 +3822,7 @@ nms_choice(X, Y, S0 = #?MODULE{nms = undefined}) ->
     nms_choice(X, Y, S0#?MODULE{nms = Nms});
 nms_choice(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
-nms_choice(info, {scard_result, _}, #?MODULE{}) ->
+nms_choice(info, {scard_ready, _}, #?MODULE{}) ->
     keep_state_and_data;
 nms_choice(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
@@ -3755,7 +3945,7 @@ nms_choice(state_timeout, {menu, Devs0}, S0 = #?MODULE{creds = Creds,
     Groups = [recent | (maps:keys(Grouped) -- [recent])],
 
     ShowPools = (rdpproxy:config([frontend, L, mode], pool) =:= nms_choice),
-    ShowAdmin = (process_acl(admin_acl, S0) =:= allow),
+    ShowAdmin = (process_acl([ui, admin_acl], S0) =:= allow),
 
     {Evts1, AdminCustom, AdminCustomLabel} = case ShowAdmin of
         false -> {Evts0, undefined, undefined};
@@ -4051,10 +4241,10 @@ match_filter(U, Dev, F0 = #{search := Text}) ->
     Class = map_get_none(class, Dev, <<>>),
     RoleBin = map_get_none(role, Dev, <<>>),
     DescBin = map_get_none(desc, Dev, <<>>),
-    Haystack = string:to_lower(unicode:characters_to_list(
+    Haystack = string:lowercase(unicode:characters_to_list(
         iolist_to_binary([IP, $\s, Hostname, $\s, RoleBin, $\s, DescBin, $\s,
             Building, $\s, Room, $\s, Class]))),
-    Needle = string:to_lower(unicode:characters_to_list(Text)),
+    Needle = string:lowercase(unicode:characters_to_list(Text)),
     case string:find(Haystack, Needle) of
         nomatch -> false;
         _ -> match_filter(U, Dev, maps:remove(search, F0))
@@ -4200,7 +4390,13 @@ alloc_waiting(info, {allocated_session, Pid, Hdl}, S0 = #?MODULE{allocpid = Pid}
 redir(enter, _PrevState, S0 = #?MODULE{}) ->
     Screen = make_waiting_screen("Transferring connection...", S0),
     do_ping_annotate(S0),
-    {keep_state, S0#?MODULE{screen = Screen}, [{state_timeout, 500, redir}]};
+    S1 = case S0 of
+        #?MODULE{scard = undefined} -> S0;
+        #?MODULE{scard = Pid} ->
+            scard_auth_fsm:stop(Pid),
+            S0#?MODULE{scard = undefined}
+    end,
+    {keep_state, S1#?MODULE{screen = Screen}, [{state_timeout, 500, redir}]};
 
 redir(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -4211,7 +4407,7 @@ redir(state_timeout, redir, #?MODULE{srv = Srv, hdl = Hdl, listener = L, creds =
         #{username := _} -> [];
         #{slot := _} -> [smartcard]
     end,
-    Fqdn = rdpproxy:config([frontend, L, hostname], <<"localhost">>),
+    _Fqdn = rdpproxy:config([frontend, L, hostname], <<"localhost">>),
     Opts = #{
         session_id => SessId,
         cookie => <<"Cookie: msts=", Cookie/binary>>,
@@ -4320,49 +4516,51 @@ decrypt(Crypted, MacExtraData) ->
     D.
 
 -spec encrypt_creds(creds()) -> encrypted_creds().
-encrypt_creds(C0 = #{username := U, password := Pw, tgts := Tgts, tokens := Toks}) ->
+encrypt_creds(#{encrypted := true}) -> error(already_encrypted);
+encrypt_creds(C0 = #{username := U, tgts := Tgts}) ->
     Pid = term_to_binary(self()),
-    PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
     TgtsCrypt = encrypt(term_to_binary(Tgts), <<Pid/binary, U/binary>>),
+    C1 = encrypt_creds(maps:remove(tgts, C0)),
+    C1#{tgts => TgtsCrypt};
+encrypt_creds(C0 = #{username := U, tokens := Toks}) ->
+    Pid = term_to_binary(self()),
     ToksCrypt = encrypt(term_to_binary(Toks), <<Pid/binary, U/binary>>),
-    C0#{password => PwCrypt, tgts => TgtsCrypt, tokens => ToksCrypt, encrypted => true};
-encrypt_creds(C0 = #{username := U, password := Pw, tgts := Tgts}) ->
-    Pid = term_to_binary(self()),
-    PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
-    TgtsCrypt = encrypt(term_to_binary(Tgts), <<Pid/binary, U/binary>>),
-    C0#{password => PwCrypt, tgts => TgtsCrypt, encrypted => true};
+    C1 = encrypt_creds(maps:remove(tokens, C0)),
+    C1#{tokens => ToksCrypt};
 encrypt_creds(C0 = #{username := U, password := Pw}) ->
     Pid = term_to_binary(self()),
     PwCrypt = encrypt(Pw, <<Pid/binary, U/binary>>),
-    C0#{password => PwCrypt, encrypted => true};
-encrypt_creds(C0 = #{slot := Slot, pin := PIN}) ->
+    C1 = encrypt_creds(maps:remove(password, C0)),
+    C1#{password => PwCrypt};
+encrypt_creds(C0 = #{card_id := CardId, slot_id := SlotId, pin := PIN}) ->
     Pid = term_to_binary(self()),
-    SlotBin = term_to_binary(Slot),
+    SlotBin = term_to_binary({CardId, SlotId}),
     PINCrypt = encrypt(PIN, <<Pid/binary, SlotBin/binary>>),
-    C0#{pin => PINCrypt, encrypted => true};
-encrypt_creds(#{encrypted := true}) -> error(already_encrypted);
+    C1 = encrypt_creds(maps:remove(pin, C0)),
+    C1#{pin => PINCrypt};
 encrypt_creds(C0 = #{}) -> C0#{encrypted => true}.
 
 -spec decrypt_creds(encrypted_creds()) -> creds().
-decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt, tgts := TgtsCrypt, tokens := ToksCrypt})->
+decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt})->
     Pid = term_to_binary(self()),
     Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
+    C1 = decrypt_creds(maps:remove(password, C0)),
+    C1#{password => Pw};
+decrypt_creds(C0 = #{encrypted := true, username := U, tgts := TgtsCrypt}) ->
+    Pid = term_to_binary(self()),
     Tgts = binary_to_term(decrypt(TgtsCrypt, <<Pid/binary, U/binary>>)),
+    C1 = decrypt_creds(maps:remove(tgts, C0)),
+    C1#{tgts => Tgts};
+decrypt_creds(C0 = #{encrypted := true, username := U, tokens := ToksCrypt}) ->
+    Pid = term_to_binary(self()),
     Toks = binary_to_term(decrypt(ToksCrypt, <<Pid/binary, U/binary>>)),
-    maps:remove(encrypted, C0#{password => Pw, tgts => Tgts, tokens => Toks});
-decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt, tgts := TgtsCrypt}) ->
+    C1 = decrypt_creds(maps:remove(tokens, C0)),
+    C1#{tokens => Toks};
+decrypt_creds(C0 = #{encrypted := true, slot_id := SlotId, card_id := CardId, pin := PINCrypt}) ->
     Pid = term_to_binary(self()),
-    Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
-    Tgts = binary_to_term(decrypt(TgtsCrypt, <<Pid/binary, U/binary>>)),
-    maps:remove(encrypted, C0#{password => Pw, tgts => Tgts});
-decrypt_creds(C0 = #{encrypted := true, username := U, password := PwCrypt}) ->
-    Pid = term_to_binary(self()),
-    Pw = decrypt(PwCrypt, <<Pid/binary, U/binary>>),
-    maps:remove(encrypted, C0#{password => Pw});
-decrypt_creds(C0 = #{encrypted := true, slot := Slot, pin := PINCrypt}) ->
-    Pid = term_to_binary(self()),
-    SlotBin = term_to_binary(Slot),
+    SlotBin = term_to_binary({CardId, SlotId}),
     PIN = decrypt(PINCrypt, <<Pid/binary, SlotBin/binary>>),
-    maps:remove(encrypted, C0#{pin => PIN});
-decrypt_creds(C0 = #{encrypted := true}) -> C0;
+    C1 = decrypt_creds(maps:remove(pin, C0)),
+    C1#{pin => PIN};
+decrypt_creds(C0 = #{encrypted := true}) -> maps:remove(encrypted, C0);
 decrypt_creds(_) -> error(not_encrypted).

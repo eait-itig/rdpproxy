@@ -371,6 +371,12 @@
             %{cn_upn_policy_id, {1,3,6,1,4,1,...}},
 
             %%
+            %% Slots to enumerate on cards
+            %%
+            %{enum_slots, [piv_card_auth, piv_auth, piv_key_mgmt]},
+            %{enum_slots, [piv_card_auth, piv_auth, piv_key_mgmt, {retired, 1}]},
+
+            %%
             %% Smartcard auth always accepts a certificate with a specific
             %% UPN authenticating as that UPN exactly. The smartcard + PIN is
             %% considered "MFA-equivalent" at auth time and MFA is skipped.
