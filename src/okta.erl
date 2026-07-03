@@ -223,6 +223,7 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
     answer => binary(), methods => [atom()]}.
 -type email_info() :: #{email => binary(), methods => [atom()]}.
 -type phone_info() :: #{number => binary(), methods => [atom()]}.
+-type tac_info() :: #{methods => [atom()]}.
 
 -type auth_common_info() :: #{methods => [atom()], remediations => [remtype()],
     name => binary()}.
@@ -234,7 +235,8 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
     {security_question, auth_common_info(), [secq_info()]} |
     {email, auth_common_info(), [email_info()]} |
     {phone, auth_common_info(), [phone_info()]} |
-    {webauthn, auth_common_info(), [webauthn_info()]}.
+    {webauthn, auth_common_info(), [webauthn_info()]} |
+    {tac, auth_common_info(), [tac_info()]}.
 
 -type reminfo() :: #{properties => remprops(), authenticator => authinfo(),
     refresh => integer(), name => binary()}.
@@ -281,6 +283,8 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
 
 -record(password_enroll, {
     }).
+
+-record(tac_enroll, {}).
 
 -record(app_enroll, {
     device_name :: binary(),
@@ -362,7 +366,7 @@ proceed(P, Rem, Args) when is_atom(Rem) and is_map(Args) ->
 -type authenticator() :: #authenticator{}.
 -type enrollment() :: #webauthn_enroll{} | #password_enroll{} | #app_enroll{} |
     #device_loopback_enroll{} | #device_uri_enroll{} | #email_enroll{} |
-    #phone_enroll{} | #secq_enroll{}.
+    #phone_enroll{} | #secq_enroll{} | #tac_enroll{}.
 -type field() :: #simple_field{} | #object_field{} | #options_field{}.
 -type remediation() :: #remediation{}.
 -type option() :: #object_option{} | #string_option{}.
@@ -636,6 +640,9 @@ parse_methods([#{<<"type">> := Bin} | Rest]) ->
 
 parse_enrollment(#{<<"type">> := <<"password">>}, _D) ->
     #password_enroll{};
+
+parse_enrollment(#{<<"type">> := <<"tac">>}, _D) ->
+    #tac_enroll{};
 
 parse_enrollment(E = #{<<"type">> := <<"email">>}, _D) ->
     #{<<"profile">> := #{<<"email">> := Email}} = E,
@@ -1205,6 +1212,8 @@ map_defined(M0) ->
 
 enrollment_to_map(#password_enroll{}, _S0) ->
     {password, #{}};
+enrollment_to_map(#tac_enroll{}, _S0) ->
+    {tac, #{}};
 enrollment_to_map(E = #device_loopback_enroll{}, _S0) ->
     #device_loopback_enroll{challenge = Chal, domain = Domain, ports = Ports,
                             timeout = Timeout} = E,

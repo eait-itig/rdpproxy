@@ -130,7 +130,7 @@ start_link(Frontend, L, Inst, {W, H}) ->
 -type duo_choice() :: duo_choice_push() | duo_choice_call() |
     duo_choice_otp().
 
--type okta_authenticator() :: #{type => webauthn | totp | push | password,
+-type okta_authenticator() :: #{type => webauthn | totp | push | password | tac,
     name => binary()}.
 -type okta_creds() :: #{remember_me => boolean(),
     authenticators_used => [okta_authenticator()],
@@ -1882,6 +1882,26 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
             {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
                 short_clicked, {select, MethodBtn, Payload}),
             [MethodBtnEvt | Acc0];
+
+        (#{authenticator := {tac, #{methods := [tac]}, _}, label := Label}, Acc0) ->
+            DevFlex = make_group(Flex, 16#f7cd, S0),
+
+            {ok, TypeLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(TypeLbl, [Label]),
+            ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
+
+            {ok, Row} = lv_obj:create(Inst, DevFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, MethodBtn} = lv_btn:create(Row),
+            {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+            ok = lv_label:set_text(MethodBtnLbl, <<"Enter code">>),
+
+            Payload = #{authenticator => Label},
+            {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                short_clicked, {select, MethodBtn, Payload}),
+            [MethodBtnEvt | Acc0];
+
         (_, Acc0) ->
             Acc0
     end, [], Options),
