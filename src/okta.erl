@@ -674,8 +674,8 @@ parse_enrollment(E = #{<<"type">> := <<"security_question">>}, _D) ->
     #secq_enroll{question = Q, answer = Ans};
 
 parse_enrollment(E = #{<<"type">> := <<"app">>,
-                       <<"contextualData">> := CD}, _D) ->
-    #{<<"correctAnswer">> := PushCode} = CD,
+                       <<"contextualData">> :=
+                        #{<<"correctAnswer">> := PushCode}}, _D) ->
     Profile = maps:get(<<"profile">>, E, #{}),
     DevName = maps:get(<<"deviceName">>, Profile, undefined),
     #app_enroll{device_name = DevName, push_code = PushCode};
