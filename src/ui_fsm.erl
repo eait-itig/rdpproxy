@@ -1796,8 +1796,8 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
                     [MethodBtnEvt | Acc0]
             end;
 
-        (#{authenticator := {app, Com, EIs}, label := Label, properties := Props}, Acc0) ->
-            #{method_type := {choice, _, MethodOpts}} = Props,
+        (#{authenticator := {app, Com, EIs}, label := Label,
+                properties := #{method_type := {choice, _, MethodOpts}}}, Acc0) ->
             MethodChoices = lists:foldl(fun (#{label := L, value := V}, MCAcc) ->
                 Method = binary_to_atom(V, utf8),
                 MCAcc#{Method => L}
@@ -1838,6 +1838,31 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
                         [MethodBtnEvt | Acc000]
                     end, Acc00, Methods)
             end, Acc0, MethodGroups);
+
+        (#{authenticator := {app, _Com, EIs}, label := Label,
+                properties := Props}, Acc0) when map_size(Props) == 0 ->
+            DevNames = lists:uniq([D || #{device_name := D} <- EIs]),
+            DevName0 = iolist_to_binary(lists:join(<<"\n">>, DevNames)),
+
+            DevFlex = make_group(Flex, 16#f10b, S0),
+
+            {ok, TypeLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(TypeLbl, [Label]),
+            ok = lv_obj:add_style(TypeLbl, ItemTitleStyle),
+            {ok, DevLbl} = lv_label:create(DevFlex),
+            ok = lv_label:set_text(DevLbl, [DevName0]),
+
+            {ok, Row} = lv_obj:create(Inst, DevFlex),
+            ok = lv_obj:add_style(Row, RowStyle),
+
+            {ok, MethodBtn} = lv_btn:create(Row),
+            {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
+            ok = lv_label:set_text(MethodBtnLbl, <<"Enter a code">>),
+
+            Payload = #{authenticator => Label},
+            {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
+                short_clicked, {select, MethodBtn, Payload}),
+            [MethodBtnEvt | Acc0];
 
         (#{authenticator := {email, #{methods := [email]}, [EI]}, label := Label}, Acc0) ->
             #{email := Email} = EI,
@@ -1895,7 +1920,7 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
 
             {ok, MethodBtn} = lv_btn:create(Row),
             {ok, MethodBtnLbl} = lv_label:create(MethodBtn),
-            ok = lv_label:set_text(MethodBtnLbl, <<"Enter code">>),
+            ok = lv_label:set_text(MethodBtnLbl, <<"Enter a code">>),
 
             Payload = #{authenticator => Label},
             {ok, MethodBtnEvt, _} = lv_event:setup(MethodBtn,
