@@ -1140,7 +1140,7 @@ check_mfa(enter, _PrevState, S0 = #?MODULE{mfa_bypass = undefined}) ->
     Screen = make_waiting_screen("Checking MFA...", S0),
     do_ping_annotate(S0),
     Methods = rdpproxy:config([mfa, methods], [duo]),
-    {keep_state, S0#?MODULE{screen = Screen, mfa = Methods},
+    {keep_state, S0#?MODULE{screen = Screen, mfa = Methods, errmsg = undefined},
      [{state_timeout, 100, check_bypass}]};
 check_mfa(state_timeout, check_bypass, S0 = #?MODULE{duoid = DuoId, creds = Creds}) ->
     #{username := Username} = Creds,
@@ -1702,10 +1702,18 @@ okta_next(#{challenge_authenticator := #{authenticator := {password,_,_}}},
             {next_state, login, S1}
     end;
 
-okta_next(#{challenge_authenticator := #{authenticator := {webauthn, _, _}}},
-          S0 = #?MODULE{}) ->
-    lager:debug("ready for webauthn"),
-    {next_state, okta_webauthn, S0};
+okta_next(#{challenge_authenticator := #{authenticator := {webauthn, _, _}}} = Steps,
+          S0 = #?MODULE{srv = Srv}) ->
+    case rdp_server:get_dvchan_pid(Srv, rdpewa_fsm) of
+        {ok, Ewa} when is_pid(Ewa) ->
+            lager:debug("ready for webauthn"),
+            {next_state, okta_webauthn, S0};
+        _ ->
+            Msg = iolist_to_binary([<<"Could not complete Okta MFA:\n">>,
+                <<"WebAuthN redirection is not enabled">>]),
+            S1 = S0#?MODULE{errmsg = Msg},
+            okta_next(maps:remove(challenge_authenticator, Steps), S1)
+    end;
 
 okta_next(#{challenge_authenticator := #{properties := Props}}, S0 = #?MODULE{}) ->
     [credentials] = maps:keys(Props),
@@ -1720,7 +1728,18 @@ okta_next(#{challenge_poll := _}, S0 = #?MODULE{}) ->
 
 okta_next(#{select_authenticator := _}, S0 = #?MODULE{}) ->
     lager:debug("ready to select authenticator"),
-    {next_state, okta_select, S0}.
+    {next_state, okta_select, S0};
+
+okta_next(Steps, S0 = #?MODULE{errmsg = undefined}) ->
+    lager:debug("okta no valid remediations: ~p", [Steps]),
+    Msg = iolist_to_binary([<<"Could not complete Okta MFA:\n">>,
+        <<"No known remediations available.">>]),
+    S1 = S0#?MODULE{errmsg = Msg},
+    {next_state, check_mfa, S1};
+
+okta_next(Steps, S0 = #?MODULE{errmsg = _}) ->
+    lager:debug("okta no valid remediations: ~p", [Steps]),
+    {next_state, check_mfa, S0}.
 
 okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
                                              inst = Inst, srv = Srv}) ->
