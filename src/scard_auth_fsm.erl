@@ -315,10 +315,12 @@ check_readers_for_cards([Reader | Rest], SC0) ->
             {ok, SC2} = rdpdr_scard:disconnect(leave, SC1),
 
             case R of
-                {ok, Card} ->
+                {ok, Card = #card{}} ->
                     {ok, RestCards, SC3} = check_readers_for_cards(Rest, SC2),
                     {ok, [Card | RestCards], SC3};
                 _ ->
+                    lager:debug("card in reader ~p failed to enum as PIV: ~p",
+                        [Reader, R]),
                     check_readers_for_cards(Rest, SC2)
             end;
         _ ->
