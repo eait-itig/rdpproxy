@@ -3413,62 +3413,44 @@ manual_host(state_timeout, check, S0 = #?MODULE{hostname = HostText0}) ->
     HostText1 = unicode:characters_to_list(HostText0, utf8),
     HostText2 = string:strip(HostText1, both),
     HostText = unicode:characters_to_binary(HostText2, utf8),
-    case inet:parse_address(HostText2) of
-        {ok, IpInet} ->
+    R = maybe
+        not_valid ?= parse_as_ip(HostText),
+        not_found ?= find_in_dns(HostText),
+        {ok, AllHosts} ?= session_ra:get_all_hosts(),
+        not_found ?= find_exact_host_match(HostText, AllHosts),
+        find_prefix_host_match(HostText, AllHosts)
+    end,
+    case R of
+        {check_host, H0 = #{ip := IP}} ->
             case session_ra:get_host(HostText) of
-                {ok, #{hostname := HN}} ->
-                    Dev = #{ip => HostText, hostname => HN},
-                    nms_choice(info, {a, {select_host, Dev}}, S0);
+                {ok, H} ->
+                    H1 = maps:merge(H, H0),
+                    nms_choice(info, {a, {select_host, H1}}, S0);
                 _ ->
+
+                    {ok, IpInet} = inet:parse_address(binary_to_list(IP)),
                     case http_api:rev_lookup(IpInet) of
                         {ok, RevLookupHN} ->
-                            Dev = #{ip => HostText,
-                                    hostname => iolist_to_binary([RevLookupHN])},
+                            Dev = maps:merge(H0,
+                                #{hostname => iolist_to_binary([RevLookupHN])}),
                             nms_choice(info, {a, {select_host, Dev}}, S0);
                         _ ->
-                            Dev = #{ip => HostText, hostname => HostText},
+                            Dev = maps:merge(#{hostname => HostText}, H0),
                             nms_choice(info, {a, {select_host, Dev}}, S0)
                     end
             end;
-        _ ->
-            {ok, AllHosts} = session_ra:get_all_hosts(),
-            ExactHosts = lists:filter(fun (H) ->
-                case H of
-                    #{hostname := HostText} -> true;
-                    _ -> false
-                end
-            end, AllHosts),
-            PrefixHosts = lists:filter(fun (H) ->
-                #{hostname := HN} = H,
-                case binary:match(HN, [HostText]) of
-                    {0, _} -> true;
-                    _ -> false
-                end
-            end, AllHosts),
-            case {ExactHosts, PrefixHosts} of
-                {[Dev], _} ->
-                    nms_choice(info, {a, {select_host, Dev}}, S0);
-                {[], [Dev]} ->
-                    nms_choice(info, {a, {select_host, Dev}}, S0);
-                _ ->
-                    case inet_res:gethostbyname(HostText2) of
-                        {ok, #hostent{h_name = RealName, h_addr_list = [Addr]}} ->
-                            AddrBin = iolist_to_binary([inet:ntoa(Addr)]),
-                            RealNameBin = iolist_to_binary([RealName]),
-                            Dev = #{ip => AddrBin, hostname => RealNameBin},
-                            nms_choice(info, {a, {select_host, Dev}}, S0);
-                        Err ->
-                            #?MODULE{widgets = #{err_group := ErrGrp,
-                                                 err_label := ErrLbl}} = S0,
-                            ok = lv_label:set_text(ErrLbl,
-                                io_lib:format("Error while looking up '~s':\n~p",
-                                    [HostText, Err])),
-                            ok = lv_obj:clear_flag(ErrGrp, [hidden]),
-                            lager:debug("failed to lookup ~p: ~p", [
-                                HostText, Err]),
-                            {keep_state_and_data, [{state_timeout, 1000, check}]}
-                    end
-            end
+        {ok, H} ->
+            nms_choice(info, {a, {select_host, H}}, S0);
+        Err ->
+            #?MODULE{widgets = #{err_group := ErrGrp,
+                                 err_label := ErrLbl}} = S0,
+            ok = lv_label:set_text(ErrLbl,
+                io_lib:format("Error while looking up '~s':\n~p",
+                    [HostText, Err])),
+            ok = lv_obj:clear_flag(ErrGrp, [hidden]),
+            lager:debug("failed to lookup ~p: ~p", [
+                HostText, Err]),
+            {keep_state_and_data, [{state_timeout, 1000, check}]}
     end;
 manual_host(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
@@ -3482,6 +3464,48 @@ manual_host(info, {_, cancel}, S0 = #?MODULE{srv = Srv, rstate = check_shell}) -
     {next_state, dead, S0};
 manual_host(info, {_, cancel}, S0 = #?MODULE{rstate = RState}) ->
     {next_state, RState, S0}.
+
+parse_as_ip(Bin) ->
+    String = unicode:characters_to_list(Bin, utf8),
+    case inet:parse_address(String) of
+        {ok, _IpInet} -> {check_host, #{ip => Bin}};
+        _ -> not_valid
+    end.
+find_in_dns(Bin) ->
+    String = unicode:characters_to_list(Bin, utf8),
+    case inet_res:gethostbyname(String) of
+        {ok, #hostent{h_name = RealName, h_addr_list = [Addr]}} ->
+            AddrBin = iolist_to_binary([inet:ntoa(Addr)]),
+            RealNameBin = iolist_to_binary([RealName]),
+            {check_host, #{ip => AddrBin, hostname => RealNameBin}};
+        Err ->
+            lager:debug("failed to lookup ~s: ~p", [String, Err]),
+            not_found
+    end.
+find_exact_host_match(Bin, AllHosts) ->
+    Matches = lists:filter(fun (H) ->
+        case H of
+            #{hostname := Bin} -> true;
+            _ -> false
+        end
+    end, AllHosts),
+    case Matches of
+        [Host] -> {ok, Host};
+        _ -> not_found
+    end.
+find_prefix_host_match(Bin, AllHosts) ->
+    Matches = lists:filter(fun (H) ->
+        #{hostname := HN} = H,
+        case binary:match(HN, [Bin]) of
+            {0, _} -> true;
+            _ -> false
+        end
+    end, AllHosts),
+    case Matches of
+        [Host] -> {ok, Host};
+        _ -> not_found
+    end.
+
 
 uinfo(#?MODULE{creds = Creds, uinfo = UInfo0, peer = ClientIP, scard = SCard}) ->
     % Always include the client IP as well as the basic user info from KRB5
