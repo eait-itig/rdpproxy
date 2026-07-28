@@ -22,7 +22,9 @@
                   prometheus,
                   cowboy,
                   apdu,
-                  inets
+                  inets,
+                  jose,
+                  ejsonpath
                  ]},
   {mod, { rdpproxy, []}},
   {env, [
