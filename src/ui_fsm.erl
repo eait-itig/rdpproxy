@@ -544,7 +544,7 @@ loading(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
 loading(info, {_, disconnect}, S0 = #?MODULE{srv = Srv}) ->
     rdp_server:close(Srv),
     {next_state, dead, S0};
-loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
+loading(state_timeout, check, S0 = #?MODULE{srv = Srv}) ->
     {FPid, _} = Srv,
     {PeerIp, _PeerPort} = rdp_server:get_peer(Srv),
     PeerIpBin = list_to_binary(inet:ntoa(PeerIp)),
@@ -600,13 +600,9 @@ loading(state_timeout, check, S0 = #?MODULE{srv = Srv, listener = L}) ->
             S2
     end,
 
-    Mode = rdpproxy:config([frontend, L, mode], pool),
-    S4 = case Mode of
-        nms_choice ->
-            {ok, Nms} = nms:start_link(),
-            S3#?MODULE{nms = Nms};
-        _ ->
-            S3
+    S4 = case rdpproxy:config([nms_api, api_host], undefined) of
+        undefined -> S3;
+        _ -> {ok, Nms} = nms:start_link(), S3#?MODULE{nms = Nms}
     end,
 
     {_Autologon, U, _D, P} = rdp_server:get_autologon(Srv),
@@ -3643,7 +3639,19 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     {ok, Pools} = session_ra:get_pools_for(uinfo(S0)),
 
     ShowAdmin = (process_acl([ui, admin_acl], S0) =:= allow),
-    ShowNMSPool = ShowAdmin orelse (process_acl([ui, pool_nms_acl], S0) =:= allow),
+
+    HasNMSHosts = case S0 of
+        #?MODULE{nms = undefined} -> false;
+        #?MODULE{nms = Nms, creds = Creds} ->
+            #{username := U} = Creds,
+            case nms:get_user_hosts(Nms, U) of
+                {ok, D} when is_list(D) and length(D) > 0 -> true;
+                {ok, []} -> false;
+                _ -> false
+            end
+    end,
+    ShowNMSPool = ShowAdmin orelse HasNMSHosts orelse
+        (process_acl([ui, pool_nms_acl], S0) =:= allow),
 
     case Pools of
         [#{id := ID}] when (not ShowNMSPool) ->
