@@ -49,7 +49,7 @@ start() ->
         ]}
     ]),
     cowboy:start_clear(http, [{port, Port}],
-        #{env => #{dispatch => Dispatch}}).
+        #{protocols => [http], env => #{dispatch => Dispatch}}).
 
 rev_lookup(Ip) ->
     case inet_res:gethostbyaddr(Ip) of

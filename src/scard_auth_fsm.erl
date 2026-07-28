@@ -743,6 +743,7 @@ ready({call, From}, {transaction, CardId, Actions}, S0 = #?MODULE{}) ->
         {ok, Card} ?= find_card(CardId, S0),
         #card{piv = Piv} = Card,
         ok ?= apdu_transform:begin_transaction(Piv),
+        {ok, [{ok, _}]} ?= apdu_transform:command(Piv, select),
         RR = do_card_actions(Card, S0, Actions),
         apdu_transform:end_transaction(Piv),
         RR
