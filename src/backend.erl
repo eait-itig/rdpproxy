@@ -71,7 +71,7 @@ register_metrics() ->
 
 eait_hostname_check_fun(HostInfo) ->
     hostname_match_regex_capture_fun(
-        "^[a-z]+[0-9]+[a-z]?-([0-9]+[.](labs[.])?eait[.]uq[.]edu[.]au)$",
+        "^[a-z]+[0-9]*[a-z]?-([0-9]+)[.](((labs|things)[.])?eait[.]uq[.]edu[.]au)$",
         HostInfo).
 
 hostname_match_regex_capture_fun(Regex, HostInfo) ->
@@ -87,16 +87,20 @@ hostname_match_regex_capture_fun(Regex, HostInfo) ->
             end,
             LID0 = string:lowercase(ID0),
             LID1 = string:lowercase(ID1),
-            case {re:run(LID0, MP), re:run(LID1, MP)} of
+            case {re:run(LID0, MP, [{capture,all,list}]), re:run(LID1, MP, [{capture,all,list}])} of
                 {nomatch, _} ->
                     default;
                 {_, nomatch} ->
                     default;
-                {{match, [_, {Prefix0, _} | _]}, {match, [_, {Prefix1, _} | _]}} ->
-                    Tail0 = lists:nthtail(Prefix0, LID0),
-                    Tail1 = lists:nthtail(Prefix1, LID1),
+                {{match, [_, Asset0, Suffix0 | _]}, {match, [_, Asset1, Suffix1 | _]}} ->
                     if
-                        (Tail0 =:= Tail1) -> true;
+                        not (Asset0 =:= Asset1) -> default;
+                        length(Asset0) < 4 -> default;
+                        length(Asset0) > 6 -> default;
+                        (Suffix0 =:= Suffix1) -> true;
+                        % allow staff domain PCs to roam onto things/labs but not the other way
+                        (Suffix1 =:= "eait.uq.edu.au") andalso (Suffix0 =:= "things.eait.uq.edu.au") -> true;
+                        (Suffix1 =:= "eait.uq.edu.au") andalso (Suffix0 =:= "labs.eait.uq.edu.au") -> true;
                         true -> default
                     end
             end;
