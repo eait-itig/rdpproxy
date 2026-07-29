@@ -1772,6 +1772,10 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
         _ -> false
     end,
 
+    Caps = rdp_server:get_caps(Srv),
+    GeneralCap = lists:keyfind(ts_cap_general, 1, Caps),
+    [OSType, _OSSubType] = GeneralCap#ts_cap_general.os,
+
     {ok, #{properties := #{authenticator := {choice, _, Options}}}} =
         okta:rinfo(Okta, select_authenticator),
 
@@ -1801,6 +1805,14 @@ okta_select(enter, _PrevState, S0 = #?MODULE{okta = Okta, sty = Sty,
                     {ok, HelpLbl} = lv_label:create(DevFlex),
                     ok = lv_label:set_text(HelpLbl, [
                         "Enable WebAuthN redirection to use ", Label]),
+                    #{role := RoleStyle} = Sty,
+                    ok = lv_obj:add_style(HelpLbl, RoleStyle),
+                    Acc0;
+                true when (OSType =:= osx) ->
+                    ok = lv_obj:add_state(MethodBtn, disabled),
+                    {ok, HelpLbl} = lv_label:create(DevFlex),
+                    ok = lv_label:set_text(HelpLbl, [
+                        "Windows App for macOS does not support ", Label]),
                     #{role := RoleStyle} = Sty,
                     ok = lv_obj:add_style(HelpLbl, RoleStyle),
                     Acc0;
