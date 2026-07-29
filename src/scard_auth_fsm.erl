@@ -553,8 +553,11 @@ validate_certs(state_timeout, next_slot, S0 = #?MODULE{slots_todo = [Key | Rest]
     #'OTPTBSCertificate'{extensions = Exts,
                          subject = {rdnSequence, Subj},
                          serialNumber = Serial} = TBS,
-    SANExts = [E || E = #'Extension'{extnID = ID} <- Exts,
-               ID =:= ?'id-ce-subjectAltName'],
+    SANExts = case Exts of
+        asn1_NOVALUE -> [];
+        [_|_] -> [E || E = #'Extension'{extnID = ID} <- Exts,
+               ID =:= ?'id-ce-subjectAltName']
+    end,
     SI1 = case SANExts of
         [#'Extension'{extnValue = SANs}] ->
             Ders = [V || {otherName, {'INSTANCE OF', ?'szOID_NT_PRINCIPAL_NAME', V}} <- SANs],
