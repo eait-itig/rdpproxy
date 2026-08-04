@@ -32,7 +32,7 @@
 
 -export([init/2]).
 -export([allowed_methods/2, forbidden/2, content_types_provided/2, resource_exists/2,
-         content_types_accepted/2]).
+         content_types_accepted/2, service_available/2]).
 -export([from_json/2, to_json/2]).
 
 -record(state, {opts, ip, meta, peer}).
@@ -40,6 +40,17 @@
 init(Req, Opts) ->
     IpBin = cowboy_req:binding(ip, Req),
     {cowboy_rest, Req, #state{opts = Opts, ip = IpBin}}.
+
+service_available(Req, S = #state{}) ->
+    case whereis(session_ra) of
+        undefined ->
+            {false, Req, S};
+        _ ->
+            case ra:ping({session_ra, node()}, 50) of
+                {pong, _} -> {true, Req, S};
+                _ -> {false, Req, S}
+            end
+    end.
 
 allowed_methods(Req, S = #state{ip = undefined}) ->
     {[<<"GET">>, <<"HEAD">>, <<"OPTIONS">>], Req, S};
