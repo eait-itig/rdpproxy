@@ -573,8 +573,11 @@ validate_certs(state_timeout, next_slot, S0 = #?MODULE{slots_todo = [Key | Rest]
         {_Type, CN} -> SI2#{cn => CN};
         CN -> SI2#{cn => CN}
     end,
-    PolExts = [E || E  = #'Extension'{extnID = ID} <- Exts,
-                    ID =:= ?'id-ce-certificatePolicies'],
+    PolExts = case Exts of
+        asn1_NOVALUE -> [];
+        [_|_] -> [E || E  = #'Extension'{extnID = ID} <- Exts,
+                    ID =:= ?'id-ce-certificatePolicies']
+    end,
     SI4 = case PolExts of
         [#'Extension'{extnValue = PolInfos}] ->
             Pols = [Oid || #'PolicyInformation'{policyIdentifier = Oid} <- PolInfos],
