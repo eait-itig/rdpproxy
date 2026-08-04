@@ -986,7 +986,12 @@ parse_response(D = #{<<"successWithInteractionCode">> := NewRem},
         {ok, Claims} ?= do_verify_token(TokInfo0, S2),
         TokInfo1 = tokinfo_to_map(TokInfo0, Claims),
         {ok, {ok, finished, TokInfo1}, S2}
-    end.
+    end;
+
+parse_response(#{<<"failure">> := #{}}, S0 = #?MODULE{}) ->
+    S1 = S0#?MODULE{rems = #{}, authns = #{}, enrolls = #{}, eauthn = #{},
+                    curauth = undefined},
+    {ok, {ok, next_steps, #{}}, S1}.
 
 unalias_remediation(<<"challenge-webauthn-autofillui-authenticator">>) -> challenge_webauthn_autofill;
 unalias_remediation(<<"select-authenticator-authenticate">>) -> select_authenticator;
