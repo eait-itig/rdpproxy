@@ -3653,13 +3653,21 @@ pool_choice(state_timeout, check, S0 = #?MODULE{sty = Sty, inst = Inst}) ->
     ShowAdmin = (process_acl([ui, admin_acl], S0) =:= allow),
 
     HasNMSHosts = case S0 of
-        #?MODULE{nms = undefined} -> false;
+        #?MODULE{nms = undefined} ->
+            lager:debug("no nms client, not checking for user hosts"),
+            false;
         #?MODULE{nms = Nms, creds = Creds} ->
             #{username := U} = Creds,
             case nms:get_user_hosts(Nms, U) of
-                {ok, D} when is_list(D) and length(D) > 0 -> true;
-                {ok, []} -> false;
-                _ -> false
+                {ok, D} when is_list(D) and (length(D) > 0) ->
+                    lager:debug("nms says ~s has hosts, show them the option",
+                        [U]),
+                    true;
+                {ok, []} ->
+                    false;
+                Else ->
+                    lager:debug("nms check else: ~p", [Else]),
+                    false
             end
     end,
     ShowNMSPool = ShowAdmin orelse HasNMSHosts orelse
