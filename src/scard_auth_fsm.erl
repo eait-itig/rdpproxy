@@ -622,9 +622,18 @@ validate_certs(state_timeout, next_slot, S0 = #?MODULE{slots_todo = [Key | Rest]
         _ ->
             Card0
     end,
+    Slot2 = case {SlotId, Slot1, Card1} of
+        {piv_key_mgmt, #slot{info = KMKI0 = #{valid := false}}, #card{cak_valid = true}} ->
+            lager:debug("overriding validity of cert in ~s slot ~p (is a "
+                "KMK and has a valid CAK)",
+                [binary:encode_hex(CardId), SlotId]),
+            Slot1#slot{info = KMKI0#{valid => true}};
+        _ ->
+            Slot1
+    end,
 
     S1 = S0#?MODULE{slots_todo = Rest,
-                    slots = SL0#{Key => Slot1},
+                    slots = SL0#{Key => Slot2},
                     cards = C0#{CardId => Card1},
                     crl_cache = CRL1},
 

@@ -2513,7 +2513,7 @@ okta_webauthn(enter, _PrevState, S0 = #?MODULE{sty = Sty, inst = Inst, okta = Ok
     do_ping_annotate(S1),
 
     {keep_state, S1#?MODULE{screen = Screen, events = Evts},
-        [{state_timeout, 0, auth}]};
+        [{state_timeout, 100, auth}]};
 
 okta_webauthn(info, {'DOWN', MRef, process, _, _}, S0 = #?MODULE{mref = MRef}) ->
     {stop, normal, S0};
